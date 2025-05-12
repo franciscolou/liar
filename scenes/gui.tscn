@@ -1,0 +1,32 @@
+[gd_scene load_steps=3 format=3 uid="uid://4a238t8vknj2"]
+
+[ext_resource type="Script" uid="uid://b5g2x1qqcyqb0" path="res://scripts/buttons/actionbutton.gd" id="1_efmwq"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_efmwq"]
+
+[node name="GUI" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 734.0
+offset_top = 518.0
+offset_right = -220.0
+offset_bottom = -38.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ActionSelection" type="OptionButton" parent="."]
+layout_mode = 0
+offset_right = 32.0
+offset_bottom = 20.0
+theme_override_styles/focus = SubResource("StyleBoxEmpty_efmwq")
+selected = 0
+fit_to_longest_item = false
+item_count = 1
+popup/item_0/text = "Action"
+popup/item_0/id = 0
+script = ExtResource("1_efmwq")
+
+[connection signal="button_down" from="ActionSelection" to="ActionSelection" method="_on_button_down"]
+[connection signal="item_selected" from="ActionSelection" to="ActionSelection" method="_on_item_selected"]

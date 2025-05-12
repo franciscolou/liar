@@ -1,0 +1,28 @@
+[gd_scene load_steps=4 format=3 uid="uid://d0kbx5yj4iuxs"]
+
+[ext_resource type="Script" uid="uid://co7xpc2gjenbv" path="res://scripts/managers/gamemanager.gd" id="1_i04cf"]
+[ext_resource type="PackedScene" uid="uid://djg4w4qliftmm" path="res://scenes/managers/deck_manager.tscn" id="2_r76ct"]
+[ext_resource type="PackedScene" uid="uid://4a238t8vknj2" path="res://scenes/gui.tscn" id="3_cax2t"]
+
+[node name="GameManager" type="Node" node_paths=PackedStringArray("deck_manager")]
+script = ExtResource("1_i04cf")
+deck_manager = NodePath("DeckManager")
+
+[node name="DeckManager" parent="." instance=ExtResource("2_r76ct")]
+
+[node name="GUI" parent="." instance=ExtResource("3_cax2t")]
+
+[node name="HelperLabel" type="Label" parent="."]
+offset_left = 16.0
+offset_top = 4.0
+offset_right = 285.0
+offset_bottom = 53.0
+theme_override_font_sizes/font_size = 29
+text = "Welcome to Carcaj!"
+
+[node name="ActionLogger" type="Label" parent="HelperLabel"]
+layout_mode = 0
+offset_left = -5.0
+offset_top = 47.0
+offset_right = 97.0
+offset_bottom = 70.0

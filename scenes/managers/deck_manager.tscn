@@ -1,0 +1,16 @@
+[gd_scene load_steps=5 format=3 uid="uid://djg4w4qliftmm"]
+
+[ext_resource type="Script" uid="uid://c0by2yit5tryn" path="res://scripts/managers/deckmanager.gd" id="1_vwbi5"]
+[ext_resource type="PackedScene" uid="uid://e1wuu04jbjf4" path="res://scenes/cards/heir.tscn" id="2_fvm2f"]
+[ext_resource type="PackedScene" uid="uid://cgeki8cms68o7" path="res://scenes/cards/assassin.tscn" id="3_e8qf6"]
+[ext_resource type="PackedScene" uid="uid://djadhl1datiow" path="res://scenes/cards/spy.tscn" id="4_xf7cx"]
+
+[node name="DeckManager" type="Node"]
+script = ExtResource("1_vwbi5")
+metadata/_custom_type_script = "uid://c0by2yit5tryn"
+
+[node name="Heir" parent="." instance=ExtResource("2_fvm2f")]
+
+[node name="Assassin" parent="." instance=ExtResource("3_e8qf6")]
+
+[node name="Spy" parent="." instance=ExtResource("4_xf7cx")]

@@ -1,0 +1,31 @@
+[gd_scene load_steps=5 format=3 uid="uid://dagqkgf6eteb5"]
+
+[ext_resource type="Script" uid="uid://dkhd4bu6ntfih" path="res://scripts/item.gd" id="1_i4m1s"]
+[ext_resource type="Texture2D" uid="uid://cw5m173h3nwi5" path="res://assets/items/potion.png" id="2_rjwop"]
+[ext_resource type="PackedScene" uid="uid://kpaq7ld3tvaa" path="res://scenes/item_back.tscn" id="2_wlg47"]
+[ext_resource type="Script" uid="uid://bctg46rsrswk6" path="res://scripts/skills/potion.gd" id="4_rjwop"]
+
+[node name="Potion" type="Node2D" node_paths=PackedStringArray("action")]
+script = ExtResource("1_i4m1s")
+iname = "Potion"
+description = "Use it to heal 1 health point (recover 1 card)."
+price = 10
+action = NodePath("Action")
+metadata/_custom_type_script = "uid://dkhd4bu6ntfih"
+
+[node name="ItemBack" parent="." instance=ExtResource("2_wlg47")]
+visible = false
+z_index = 1
+
+[node name="TextureButton" type="TextureButton" parent="."]
+visible = false
+offset_right = 40.0
+offset_bottom = 40.0
+texture_normal = ExtResource("2_rjwop")
+stretch_mode = 0
+
+[node name="Action" type="Node" parent="."]
+script = ExtResource("4_rjwop")
+sname = "Potion"
+description = "Use it to heal 1 health point (recover 1 card)."
+metadata/_custom_type_script = "uid://bjk50em6fmw53"

@@ -1,0 +1,31 @@
+[gd_scene load_steps=5 format=3 uid="uid://grlm4k7x5e3b"]
+
+[ext_resource type="Texture2D" uid="uid://cl8cogsm1st1f" path="res://assets/items/shield.png" id="1_6ovhi"]
+[ext_resource type="Script" uid="uid://dkhd4bu6ntfih" path="res://scripts/item.gd" id="1_vwavk"]
+[ext_resource type="PackedScene" uid="uid://kpaq7ld3tvaa" path="res://scenes/item_back.tscn" id="2_e3gxf"]
+[ext_resource type="Script" uid="uid://blnygf5ebcgh2" path="res://scripts/skills/shield.gd" id="4_e3gxf"]
+
+[node name="Shield" type="Node2D" node_paths=PackedStringArray("action")]
+script = ExtResource("1_vwavk")
+iname = "Shield"
+description = "Use it to become immune to the next damage you would take."
+price = 5
+action = NodePath("Action")
+metadata/_custom_type_script = "uid://dkhd4bu6ntfih"
+
+[node name="ItemBack" parent="." instance=ExtResource("2_e3gxf")]
+visible = false
+z_index = 1
+
+[node name="TextureButton" type="TextureButton" parent="."]
+visible = false
+offset_right = 40.0
+offset_bottom = 40.0
+texture_normal = ExtResource("1_6ovhi")
+stretch_mode = 0
+
+[node name="Action" type="Node" parent="."]
+script = ExtResource("4_e3gxf")
+sname = "Shield"
+description = "Use it to become immune to the next damage you would take."
+metadata/_custom_type_script = "uid://bjk50em6fmw53"

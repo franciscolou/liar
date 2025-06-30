@@ -1,0 +1,67 @@
+[gd_scene load_steps=9 format=3 uid="uid://d0kbx5yj4iuxs"]
+
+[ext_resource type="Script" uid="uid://co7xpc2gjenbv" path="res://scripts/managers/gamemanager.gd" id="1_i04cf"]
+[ext_resource type="PackedScene" uid="uid://djg4w4qliftmm" path="res://scenes/managers/deck_manager.tscn" id="2_r76ct"]
+[ext_resource type="PackedScene" uid="uid://4a238t8vknj2" path="res://scenes/gui.tscn" id="3_cax2t"]
+[ext_resource type="PackedScene" uid="uid://sfdvjb6gbgq6" path="res://scenes/managers/shop_manager.tscn" id="4_6t86j"]
+[ext_resource type="Script" uid="uid://dkhd4bu6ntfih" path="res://scripts/item.gd" id="5_3yu1d"]
+[ext_resource type="Texture2D" uid="uid://cqqv4cuq5d848" path="res://assets/shop_back.png" id="5_fagfu"]
+[ext_resource type="PackedScene" uid="uid://3ar1pg73mf42" path="res://scenes/buy_options.tscn" id="6_c2g8d"]
+[ext_resource type="PackedScene" uid="uid://c08c4i6ki3oo7" path="res://scenes/end.tscn" id="8_psj4q"]
+
+[node name="GameManager" type="Node" node_paths=PackedStringArray("deck_manager", "shop_manager")]
+script = ExtResource("1_i04cf")
+deck_manager = NodePath("DeckManager")
+shop_manager = NodePath("ShopManager")
+
+[node name="DeckManager" parent="." instance=ExtResource("2_r76ct")]
+
+[node name="ActionGUI" parent="." instance=ExtResource("3_cax2t")]
+offset_left = 958.0
+offset_top = 521.0
+offset_right = 4.0
+offset_bottom = -35.0
+
+[node name="HelperLabel" type="Label" parent="."]
+offset_left = 16.0
+offset_top = 4.0
+offset_right = 285.0
+offset_bottom = 53.0
+theme_override_font_sizes/font_size = 29
+text = "Welcome to Carcaj!"
+
+[node name="ActionLogger" type="Label" parent="HelperLabel"]
+layout_mode = 0
+offset_left = -5.0
+offset_top = 47.0
+offset_right = 97.0
+offset_bottom = 70.0
+
+[node name="ShopManager" parent="." instance=ExtResource("4_6t86j")]
+
+[node name="ShopGUI" type="TextureRect" parent="."]
+offset_left = 389.0
+offset_top = 296.0
+offset_right = 751.0
+offset_bottom = 408.0
+texture = ExtResource("5_fagfu")
+
+[node name="Item1" type="Node2D" parent="ShopGUI"]
+position = Vector2(77, 11)
+script = ExtResource("5_3yu1d")
+metadata/_custom_type_script = "uid://dkhd4bu6ntfih"
+
+[node name="BuyOptions" parent="ShopGUI/Item1" instance=ExtResource("6_c2g8d")]
+z_index = 1
+position = Vector2(-12, -69)
+
+[node name="Item2" type="Node2D" parent="ShopGUI"]
+position = Vector2(217, 7)
+script = ExtResource("5_3yu1d")
+metadata/_custom_type_script = "uid://dkhd4bu6ntfih"
+
+[node name="BuyOptions" parent="ShopGUI/Item2" instance=ExtResource("6_c2g8d")]
+z_index = 1
+position = Vector2(-14, -71)
+
+[node name="End" parent="." instance=ExtResource("8_psj4q")]

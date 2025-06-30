@@ -1,0 +1,50 @@
+[gd_scene load_steps=5 format=3 uid="uid://c08c4i6ki3oo7"]
+
+[ext_resource type="Script" uid="uid://b3xyy1ol105xb" path="res://scripts/buttons/end_buttons.gd" id="1_mwn6m"]
+[ext_resource type="Texture2D" uid="uid://cyxobxmfgwma2" path="res://assets/end.png" id="2_3d26k"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_3d26k"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_p7m4f"]
+
+[node name="Control" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_mwn6m")
+
+[node name="TextureRect" type="TextureRect" parent="."]
+layout_mode = 0
+offset_right = 1152.0
+offset_bottom = 648.0
+texture = ExtResource("2_3d26k")
+expand_mode = 2
+
+[node name="Label" type="Label" parent="."]
+layout_mode = 0
+offset_left = 135.0
+offset_top = 139.0
+offset_right = 542.0
+offset_bottom = 351.0
+theme_override_font_sizes/font_size = 29
+text = "
+"
+
+[node name="Again" type="Button" parent="."]
+layout_mode = 0
+offset_left = 686.0
+offset_top = 460.0
+offset_right = 1015.0
+offset_bottom = 521.0
+theme_override_styles/focus = SubResource("StyleBoxEmpty_3d26k")
+
+[node name="Back" type="Button" parent="."]
+layout_mode = 0
+offset_left = 683.0
+offset_top = 542.0
+offset_right = 1017.0
+offset_bottom = 598.0
+theme_override_styles/focus = SubResource("StyleBoxEmpty_p7m4f")

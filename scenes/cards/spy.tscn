@@ -1,0 +1,38 @@
+[gd_scene load_steps=6 format=3 uid="uid://djadhl1datiow"]
+
+[ext_resource type="Script" uid="uid://c2pvtdgg4vihl" path="res://scripts/card.gd" id="1_06x52"]
+[ext_resource type="Script" uid="uid://xf1bd8efr5gt" path="res://scripts/skills/spy/spy_1.gd" id="2_od432"]
+[ext_resource type="Script" uid="uid://cyi0rwsknjm6e" path="res://scripts/skills/spy/spy_2.gd" id="3_gs2sn"]
+[ext_resource type="Texture2D" uid="uid://bjykq27sd0eyg" path="res://assets/cards/Spy.png" id="4_gs2sn"]
+[ext_resource type="PackedScene" uid="uid://dk8ln2wksk57y" path="res://scenes/card_back.tscn" id="4_svj0w"]
+
+[node name="Spy" type="Node2D" node_paths=PackedStringArray("skill1", "skill2")]
+script = ExtResource("1_06x52")
+cname = "Spy"
+description = "Spy desc"
+skill1 = NodePath("SkillSpy1")
+skill2 = NodePath("SkillSpy2")
+metadata/_custom_type_script = "uid://c2pvtdgg4vihl"
+
+[node name="SkillSpy1" type="Node" parent="."]
+script = ExtResource("2_od432")
+sname = "Sneak Peek"
+description = "See a random card from a chosen player."
+target_needed = true
+ends_turn = true
+metadata/_custom_type_script = "uid://bjk50em6fmw53"
+
+[node name="SkillSpy2" type="Node" parent="."]
+script = ExtResource("3_gs2sn")
+sname = "Low Profile"
+description = "Hide the items bought this turn."
+metadata/_custom_type_script = "uid://bjk50em6fmw53"
+
+[node name="CardBack" parent="." instance=ExtResource("4_svj0w")]
+visible = false
+
+[node name="TextureButton" type="TextureButton" parent="."]
+visible = false
+offset_right = 55.0
+offset_bottom = 100.0
+texture_normal = ExtResource("4_gs2sn")

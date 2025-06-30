@@ -1,0 +1,38 @@
+[gd_scene load_steps=6 format=3 uid="uid://e1wuu04jbjf4"]
+
+[ext_resource type="Script" uid="uid://c2pvtdgg4vihl" path="res://scripts/card.gd" id="1_vo1p7"]
+[ext_resource type="Script" uid="uid://wujnp4a4js3h" path="res://scripts/skills/heir/heir_1.gd" id="2_5dler"]
+[ext_resource type="Script" uid="uid://c6tffrdf7toos" path="res://scripts/skills/heir/heir_2.gd" id="3_2kdca"]
+[ext_resource type="PackedScene" uid="uid://dk8ln2wksk57y" path="res://scenes/card_back.tscn" id="4_22j7o"]
+[ext_resource type="Texture2D" uid="uid://du5x85mkb0mtp" path="res://assets/cards/Heir.png" id="4_uh0an"]
+
+[node name="Heir" type="Node2D" node_paths=PackedStringArray("skill1", "skill2")]
+script = ExtResource("1_vo1p7")
+cname = "Heir"
+description = "Heir desc"
+skill1 = NodePath("SkillHeir1")
+skill2 = NodePath("SkillHeir2")
+metadata/_custom_type_script = "uid://c2pvtdgg4vihl"
+
+[node name="SkillHeir1" type="Node" parent="."]
+script = ExtResource("2_5dler")
+sname = "Fickle"
+description = "You may swap this card for a random one. If you do, gain 5 coins."
+ends_turn = true
+metadata/_custom_type_script = "uid://bjk50em6fmw53"
+
+[node name="SkillHeir2" type="Node" parent="."]
+script = ExtResource("3_2kdca")
+sname = "Sold Out"
+description = "Spend your turn for extra 2 coins."
+ends_turn = true
+metadata/_custom_type_script = "uid://bjk50em6fmw53"
+
+[node name="CardBack" parent="." instance=ExtResource("4_22j7o")]
+visible = false
+
+[node name="TextureButton" type="TextureButton" parent="."]
+visible = false
+offset_right = 55.0
+offset_bottom = 100.0
+texture_normal = ExtResource("4_uh0an")

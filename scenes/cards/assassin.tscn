@@ -1,0 +1,40 @@
+[gd_scene load_steps=6 format=3 uid="uid://cgeki8cms68o7"]
+
+[ext_resource type="Script" uid="uid://c2pvtdgg4vihl" path="res://scripts/card.gd" id="1_lrc5w"]
+[ext_resource type="Script" uid="uid://brcsy5v25wg6" path="res://scripts/skills/asssassin/assassin_1.gd" id="2_qvanr"]
+[ext_resource type="Script" uid="uid://dly6mkb2y5jtr" path="res://scripts/skills/asssassin/assassin_2.gd" id="3_qtnoj"]
+[ext_resource type="PackedScene" uid="uid://dk8ln2wksk57y" path="res://scenes/card_back.tscn" id="4_33qe1"]
+[ext_resource type="Texture2D" uid="uid://cxdiol115yc1q" path="res://assets/cards/Assassin.png" id="4_qtnoj"]
+
+[node name="Assassin" type="Node2D" node_paths=PackedStringArray("skill1", "skill2")]
+script = ExtResource("1_lrc5w")
+cname = "Assassin"
+description = "Assassin desc"
+skill1 = NodePath("SkillAssassin1")
+skill2 = NodePath("SkillAssassin2")
+metadata/_custom_type_script = "uid://c2pvtdgg4vihl"
+
+[node name="SkillAssassin1" type="Node" parent="."]
+script = ExtResource("2_qvanr")
+sname = "Blood Count"
+description = "Spend 4 coins to deal damage to a player."
+target_needed = true
+ends_turn = true
+metadata/_custom_type_script = "uid://bjk50em6fmw53"
+
+[node name="SkillAssassin2" type="Node" parent="."]
+script = ExtResource("3_qtnoj")
+sname = "Streak Thirst"
+description = "After killing a player, you can spend 4 more coins to deal damage to another."
+target_needed = true
+ends_turn = true
+metadata/_custom_type_script = "uid://bjk50em6fmw53"
+
+[node name="CardBack" parent="." instance=ExtResource("4_33qe1")]
+visible = false
+
+[node name="TextureButton" type="TextureButton" parent="."]
+visible = false
+offset_right = 55.0
+offset_bottom = 100.0
+texture_normal = ExtResource("4_qtnoj")

@@ -1,0 +1,13 @@
+[gd_scene load_steps=3 format=3 uid="uid://btxure00lctek"]
+
+[ext_resource type="Script" uid="uid://caxxv5bdyp0td" path="res://scripts/main.gd" id="1_0wfyh"]
+[ext_resource type="PackedScene" uid="uid://d0kbx5yj4iuxs" path="res://scenes/managers/game_manager.tscn" id="3_sugp2"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_0wfyh")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+
+[node name="GameManager" parent="." instance=ExtResource("3_sugp2")]
+turn = null
+state = null

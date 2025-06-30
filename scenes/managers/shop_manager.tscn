@@ -1,0 +1,16 @@
+[gd_scene load_steps=5 format=3 uid="uid://sfdvjb6gbgq6"]
+
+[ext_resource type="Script" uid="uid://c75l6j3yfiy63" path="res://scripts/managers/shopmanager.gd" id="1_62vqe"]
+[ext_resource type="PackedScene" uid="uid://dprccbqkcauru" path="res://scenes/items/death.tscn" id="2_vyor2"]
+[ext_resource type="PackedScene" uid="uid://dagqkgf6eteb5" path="res://scenes/items/potion.tscn" id="3_507jh"]
+[ext_resource type="PackedScene" uid="uid://grlm4k7x5e3b" path="res://scenes/items/shield.tscn" id="4_dypes"]
+
+[node name="ShopManager" type="Node"]
+script = ExtResource("1_62vqe")
+metadata/_custom_type_script = "uid://c75l6j3yfiy63"
+
+[node name="Death" parent="." instance=ExtResource("2_vyor2")]
+
+[node name="Item" parent="." instance=ExtResource("3_507jh")]
+
+[node name="Shield" parent="." instance=ExtResource("4_dypes")]

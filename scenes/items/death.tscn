@@ -1,0 +1,32 @@
+[gd_scene load_steps=5 format=3 uid="uid://dprccbqkcauru"]
+
+[ext_resource type="Script" uid="uid://dkhd4bu6ntfih" path="res://scripts/item.gd" id="1_inwwr"]
+[ext_resource type="Texture2D" uid="uid://6q60mrgjn763" path="res://assets/items/death.png" id="2_dqk4y"]
+[ext_resource type="PackedScene" uid="uid://kpaq7ld3tvaa" path="res://scenes/item_back.tscn" id="2_vihuc"]
+[ext_resource type="Script" uid="uid://cqhw3bwgd00b3" path="res://scripts/skills/death.gd" id="3_inwwr"]
+
+[node name="Death" type="Node2D" node_paths=PackedStringArray("action")]
+script = ExtResource("1_inwwr")
+iname = "Death"
+description = "Use it to deal damage to another player."
+price = 7
+action = NodePath("Action")
+metadata/_custom_type_script = "uid://dkhd4bu6ntfih"
+
+[node name="ItemBack" parent="." instance=ExtResource("2_vihuc")]
+visible = false
+z_index = 1
+
+[node name="TextureButton" type="TextureButton" parent="."]
+visible = false
+offset_right = 61.0
+offset_bottom = 64.0
+texture_normal = ExtResource("2_dqk4y")
+stretch_mode = 0
+
+[node name="Action" type="Node" parent="."]
+script = ExtResource("3_inwwr")
+sname = "Death"
+description = "Use it to deal damage to another player."
+target_needed = true
+metadata/_custom_type_script = "uid://bjk50em6fmw53"

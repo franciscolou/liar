@@ -637,6 +637,7 @@ func _resolve(play: Play) -> void:
 		return
 	if play.target != null and not play.target.alive:
 		return
+	await fire(&"play_effect", {"play": play})
 	await play.source.resolve(play)
 
 

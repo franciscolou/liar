@@ -26,6 +26,8 @@ extends RefCounted
 ##   doubt_failed {play, doubter, defender} / doubt_succeeded {play, doubter, liar}
 ##   lie_succeeded {play, player}               private to the liar
 ##   targeted {play, target, blocked, reflected}
+##   play_effect {play}                         the play goes through: nothing stopped
+##     it and its resolve() comes next. For the screen; nothing reacts to it.
 ##   before_morale_loss {target, source, amount, cause, play}  cancellable
 ##   morale_lost {target, source, amount, cause, play} / morale_gained {player, amount}
 ##     (source is null when the Morale was staked on a wrong LIAR! call)

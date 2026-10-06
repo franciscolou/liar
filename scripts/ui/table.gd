@@ -38,7 +38,9 @@ const SHOP_HEIGHT := 106.0
 const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck
 const SHOP_DECK_WIDTH := 62.0
 const LOG_SIZE := Vector2(232, 136)
-const LOG_HEADER := 20.0  # the strip with the fold button; all that shows while folded
+const LOG_HEADER := 18.0  # the strip with the fold button
+const LOG_FOLDED := Vector2(24, 24)  # just the button
+const LOG_FOLD_TIME := 0.16
 
 var engine: GameEngine
 var viewer: PlayerState  # whose hand is on screen; null while spectating
@@ -76,10 +78,13 @@ var _log_panel: Control
 var _log_box: PanelContainer
 var _log_toggle: Button
 var _log_folded := false
+var _log_fold := 0.0  # 0 = open, 1 = folded; tweened in between
+var _log_tween: Tween
 var _log_bottom := 470.0  # the log hangs from here, folded or not
 var _turn_label: Label
 var _sfx: Dictionary = {}
 var _music: AudioStreamPlayer
+var _play_fx: PlayFx
 var _pause: Control
 
 
@@ -218,6 +223,8 @@ func _build() -> void:
 
 	_arrows = _layer()
 	_fx = _layer()
+	_play_fx = PlayFx.new(self)
+	_fx.add_child(_play_fx)
 	_overlay = _layer()
 	_popup = _layer()
 	_modal = _layer()
@@ -414,9 +421,6 @@ func _build_log() -> void:
 	_log.add_theme_font_size_override("bold_font_size", 14)
 	_log.custom_minimum_size = Vector2(LOG_SIZE.x - 16, LOG_SIZE.y - LOG_HEADER - 10)
 	_log_box.add_child(_log)
-	var title := UI.label("Log", 12, UI.MUTED)
-	title.position = Vector2(8, 2)
-	_log_panel.add_child(title)
 	# Discreet on purpose: no frame, and nothing changes under the mouse.
 	_log_toggle = Button.new()
 	_log_toggle.focus_mode = Control.FOCUS_NONE
@@ -426,22 +430,32 @@ func _build_log() -> void:
 		_log_toggle.add_theme_stylebox_override(state, StyleBoxEmpty.new())
 	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 		_log_toggle.add_theme_color_override(state, UI.MUTED)
+	_log_toggle.text = "-"
 	_log_toggle.size = Vector2(20, LOG_HEADER)
-	_log_toggle.position = Vector2(LOG_SIZE.x - 22, 0)
-	_log_toggle.pressed.connect(func():
-		_log_folded = not _log_folded
-		_place_log())
+	_log_toggle.pressed.connect(_toggle_log)
 	_log_panel.add_child(_log_toggle)
-	_place_log()
+	_place_log(_log_fold)
 
 
-func _place_log() -> void:
-	var height := LOG_HEADER + 2.0 if _log_folded else LOG_SIZE.y
-	_log.visible = not _log_folded
-	_log_toggle.text = "+" if _log_folded else "-"
-	_log_panel.position = Vector2(8, _log_bottom - height)
-	_log_panel.size = Vector2(LOG_SIZE.x, height)
-	_log_box.size = _log_panel.size
+func _toggle_log() -> void:
+	_log_folded = not _log_folded
+	if _log_tween != null:
+		_log_tween.kill()
+	_log_tween = create_tween()
+	_log_tween.tween_method(_place_log, _log_fold, 1.0 if _log_folded else 0.0, LOG_FOLD_TIME) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+## The panel shrinks into its bottom left corner. The text only shows fully
+## open: it would hold the panel at its full size.
+func _place_log(fold: float) -> void:
+	_log_fold = fold
+	var box := LOG_SIZE.lerp(LOG_FOLDED, fold)
+	_log.visible = fold <= 0.0
+	_log_panel.position = Vector2(8, _log_bottom - box.y)
+	_log_panel.size = box
+	_log_box.size = box
+	_log_toggle.position = Vector2(box.x - 22, 0)
 
 
 func _layout_seats() -> void:
@@ -461,7 +475,7 @@ func _layout_seats() -> void:
 	var spread := minf(150.0, 45.0 * (others.size() - 1))
 	var full_circle := viewer == null
 	_log_bottom = 642.0 if full_circle else 470.0
-	_place_log()
+	_place_log(_log_fold)
 	_shop.position = Vector2(1144 - _shop_width, (642 if full_circle else 470) - SHOP_HEIGHT)
 	for i in others.size():
 		var p: PlayerState = others[i]
@@ -1310,6 +1324,10 @@ func present(e: GameEvent) -> void:
 			_play_sfx("item_get")
 			_float("+ %s" % (Loc.t("ITEM") if d.item.hidden and d.player != viewer else d.item.def.display_name.to_upper()), _anchor(d.player), UI.BLUE)
 			await _wait(0.35)
+		&"targeted":
+			_play_fx.last_attacker = d.play.actor
+		&"play_effect":
+			await _play_fx.play_effect(d.play)
 		&"item_used":
 			await _anim_item_used(d)
 			if held_line:
@@ -1443,6 +1461,11 @@ func _anim_claim(play: Play) -> void:
 
 func _anim_item_used(d: Dictionary) -> void:
 	var play: Play = d.play
+	if _play_fx.has_effect(play):
+		# Its own effect, sound included, comes when it takes effect (play_effect).
+		_push_stage({"play": play, "arrow": null, "transient": true})
+		await _wait(0.55)
+		return
 	_play_sfx("item_%s" % play.source.id, "item_use")
 	if play.source.id == ROULETTE:
 		await _anim_roulette(play)
@@ -1758,6 +1781,7 @@ func _anim_item_bought(d: Dictionary) -> void:
 
 func _anim_item_broken(d: Dictionary) -> void:
 	_play_sfx("item_%s" % d.item.def.id, "breaking")
+	_play_fx.item_broken(d.player, d.item.def)
 	var at := _anchor(d.player)
 	var icon := _sprite(UI.tex(d.item.def.texture_path), at, Vector2(70, 73))
 	var tween := icon.create_tween()

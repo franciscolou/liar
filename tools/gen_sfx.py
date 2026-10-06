@@ -276,12 +276,16 @@ def item_shield():
 
 
 def item_death():
-    """A low toll."""
-    out = silence(1.3)
-    partials = ((1.0, 1.0), (2.0, 0.6), (2.4, 0.45), (3.0, 0.3), (4.5, 0.15))
-    mix(out, bell(98.0, 1.25, 1.1, partials), 0.0, 0.9)
-    mix(out, lowpass(noise(0.05, 0.001, 0.02, 25), 1500), 0.0, 0.5)
-    return out
+    """A pistol fired once, close: crack, punch and a short room."""
+    out = silence(0.8)
+    mix(out, noise(0.05, 0.0002, 0.016, 25), 0.0, 1.7)
+    mix(out, highpass(noise(0.012, 0.0001, 0.004, 26), 3000), 0.0, 1.2)
+    mix(out, tone(160, 0.3, 0.0005, 0.13, glide=0.25), 0.0, 2.0)
+    mix(out, lowpass(noise(0.25, 0.0005, 0.08, 27), 500), 0.0, 1.4)
+    tail = lowpass(noise(0.75, 0.003, 0.28, 28), lambda t: 300 + 4500 * math.exp(-t * 9.0))
+    mix(out, tail, 0.01, 0.7)
+    mix(out, lowpass(noise(0.15, 0.002, 0.06, 29), 2000), 0.1, 0.3)
+    return drive(out[:int(0.8 * RATE)], 4.5)
 
 
 def steel_click(weight=1.0, seed=27):
@@ -375,6 +379,181 @@ def item_soul_swap():
     return out
 
 
+# --- abilities ----------------------------------------------------------------
+
+def pluck(freq, seconds=0.5, decay=0.3):
+    """A gut string plucked: bright at the start, mellow as it dies."""
+    out = silence(seconds)
+    for n in range(1, 8):
+        mix(out, tone(freq * n, seconds, 0.002, decay / n ** 0.8), 0.0, 1.0 / n ** 1.1)
+    mix(out, highpass(noise(0.01, 0.0005, 0.004, int(freq)), 2000), 0.0, 0.3)
+    return out
+
+
+def wood_knock(seed=61):
+    """A gavel on its block."""
+    out = silence(0.3)
+    mix(out, lowpass(noise(0.05, 0.0004, 0.014, seed), 1800), 0.0, 1.0)
+    for freq, gain, decay in ((175, 0.9, 0.06), (410, 0.6, 0.04), (720, 0.35, 0.025)):
+        mix(out, tone(freq, 0.2, 0.0005, decay), 0.0, gain)
+    mix(out, lowpass(noise(0.25, 0.01, 0.1, seed + 1), 700), 0.02, 0.12)
+    return out
+
+
+def small_shot(seed=71):
+    """One round of a burst: all crack, little room."""
+    out = silence(0.3)
+    mix(out, noise(0.04, 0.0002, 0.012, seed), 0.0, 1.5)
+    mix(out, tone(130, 0.12, 0.0005, 0.06, glide=0.35), 0.0, 1.6)
+    mix(out, lowpass(noise(0.25, 0.002, 0.09, seed + 1), 1500), 0.0, 0.4)
+    return out
+
+
+def fx_blade():
+    """Steel out of the sheath, then the cut."""
+    out = silence(0.75)
+    draw = bandpass(noise(0.22, 0.05, 0.1, 63), lambda t: 1800 + 22000 * t, lambda t: 5000 + 30000 * t)
+    mix(out, draw, 0.0, 0.7)
+    for freq, gain in ((4150, 0.3), (6300, 0.22), (7900, 0.15)):
+        mix(out, tone(freq, 0.45, 0.08, 0.2), 0.02, gain)
+    mix(out, lowpass(noise(0.08, 0.001, 0.03, 65), 900), 0.26, 1.1)
+    mix(out, tone(95, 0.15, 0.001, 0.07, glide=0.6), 0.26, 0.9)
+    mix(out, highpass(noise(0.05, 0.001, 0.02, 67), 3000), 0.26, 0.35)
+    return out
+
+
+def fx_lute():
+    """A sly little run on the lute."""
+    out = silence(1.0)
+    for i, freq in enumerate((293.7, 349.2, 440.0, 523.3, 587.3)):  # D4 F4 A4 C5 D5
+        mix(out, pluck(freq, 0.6, 0.32), i * 0.075, 0.7)
+    mix(out, pluck(146.8, 0.8, 0.5), 0.0, 0.5)
+    return out
+
+
+def fx_lute_flourish():
+    """A quick turn and a bright chord: nothing sticks to him."""
+    out = silence(0.8)
+    for i, freq in enumerate((587.3, 523.3, 587.3)):
+        mix(out, pluck(freq, 0.3, 0.15), i * 0.06, 0.6)
+    for freq in (293.7, 370.0, 440.0, 587.3):  # D major
+        mix(out, pluck(freq, 0.55, 0.36), 0.2, 0.5)
+    return out
+
+
+def fx_cash():
+    """A cash register: the bell, the drawer, the change."""
+    out = silence(0.9)
+    mix(out, bell(2093.0, 0.6, 0.45), 0.0, 0.6)
+    mix(out, bell(2637.0, 0.5, 0.35), 0.0, 0.3)
+    mix(out, steel_click(1.8, 73), 0.09, 0.8)
+    mix(out, lowpass(noise(0.12, 0.01, 0.05, 75), 900), 0.1, 0.5)
+    for i, at in enumerate((0.2, 0.27, 0.36)):
+        mix(out, coin(((0.0, 1.0), (0.01, 0.4)), 0.95 + 0.05 * i, 77 + i), at, 0.35)
+    return out
+
+
+def fx_gavel():
+    """Order: two knocks."""
+    out = silence(0.75)
+    mix(out, wood_knock(61), 0.0, 0.9)
+    mix(out, wood_knock(64), 0.24, 1.0)
+    return drive(out, 2.0)
+
+
+def fx_poof():
+    """A rising whistle, a puff of smoke and the sparkle after it."""
+    out = silence(1.05)
+    mix(out, tone(420, 0.3, 0.05, 0.3, glide=3.6), 0.0, 0.35)
+    mix(out, lowpass(noise(0.4, 0.004, 0.14, 81), lambda t: 500 + 5000 * math.exp(-t * 14.0)), 0.3, 1.0)
+    mix(out, tone(110, 0.15, 0.002, 0.07, glide=0.5), 0.3, 0.6)
+    for i, freq in enumerate((1568.0, 1975.5, 2349.3, 3136.0)):
+        mix(out, bell(freq, 0.4, 0.3), 0.5 + i * 0.055, 0.22)
+    return out
+
+
+def fx_shimmer():
+    """One thing becoming two."""
+    out = silence(0.8)
+    for i, freq in enumerate((1318.5, 1975.5, 2637.0)):
+        swell = tone(freq, 0.45, 0.28, 0.08, vibrato=0.004)
+        mix(out, swell, i * 0.03, 0.4)
+        mix(out, tone(freq * 1.006, 0.5, 0.004, 0.3), 0.33, 0.3)
+    return out
+
+
+def fx_burst_fire():
+    """Three rounds, fast."""
+    out = silence(0.7)
+    for i in range(3):
+        mix(out, small_shot(71 + 3 * i), i * 0.09, 1.0)
+    return drive(out, 3.5)
+
+
+def fx_vault():
+    """The handle thrown, the wheel spun, the door groaning open."""
+    out = silence(1.2)
+    mix(out, steel_click(3.0, 85), 0.0, 1.2)
+    at, gap = 0.14, 0.035
+    for i in range(7):
+        mix(out, steel_click(1.6, 87 + i), at, 0.45)
+        at += gap
+        gap *= 1.15
+    groan = lowpass(tone(lambda t: 62 - 14 * t, 0.6, 0.15, 0.3, "saw", vibrato=0.02), 320)
+    mix(out, groan, 0.5, 0.9)
+    mix(out, steel_click(2.6, 95), 0.5, 0.8)
+    return out
+
+
+def fx_shutter():
+    """A camera: the shutter and the film advancing."""
+    out = silence(0.35)
+    mix(out, steel_click(0.7, 97), 0.0, 1.0)
+    mix(out, steel_click(0.8, 98), 0.06, 0.8)
+    mix(out, bandpass(noise(0.12, 0.01, 0.06, 99), 2000, 5000), 0.1, 0.25)
+    return out
+
+
+def fx_hush():
+    """Something slipping out of sight."""
+    body = noise(0.45, 0.12, 0.18, 103)
+    return mix(silence(0.5), bandpass(body, 500, lambda t: 6000 * math.exp(-t * 5.0) + 700), 0.0, 1.0)
+
+
+def fx_tin():
+    """Loose change shaken out of a tin cup."""
+    out = silence(0.7)
+    for i, at in enumerate((0.0, 0.07, 0.13, 0.22, 0.28)):
+        mix(out, coin(((0.0, 1.0), (0.012, 0.4)), 0.5 + 0.03 * i, 105 + i), at, 0.6)
+        mix(out, tone(1150, 0.08, 0.001, 0.03), at, 0.25)
+    return out
+
+
+def fx_scribble():
+    """A debt written down and stamped."""
+    out = silence(0.75)
+    at = 0.0
+    for i in range(5):
+        stroke = bandpass(noise(0.07, 0.015, 0.035, 111 + i), 1800, 6500)
+        mix(out, stroke, at, 0.5 + 0.1 * (i % 2))
+        at += 0.075
+    mix(out, wood_knock(117), 0.45, 0.9)
+    return out
+
+
+def fx_hex():
+    """A drone that should not be in the room, and the needle going in."""
+    out = silence(1.45)
+    for freq, gain in ((82.4, 1.0), (87.3, 0.8), (116.5, 0.6), (233.1, 0.2)):  # E, F against it, the tritone
+        mix(out, tone(freq, 1.4, 0.45, 0.6, "tri", vibrato=0.012), 0.0, gain)
+    whisper = bandpass(noise(1.3, 0.5, 0.5, 121), 1500, 4000)
+    mix(out, [x * (0.6 + 0.4 * math.sin(TAU * 7.0 * i / RATE)) for i, x in enumerate(whisper)], 0.0, 0.25)
+    mix(out, highpass(noise(0.012, 0.0003, 0.004, 123), 3500), 0.6, 0.9)
+    mix(out, lowpass(noise(0.1, 0.002, 0.04, 125), 700), 0.6, 0.9)
+    mix(out, tone(1900, 0.35, 0.002, 0.16, glide=0.45), 0.6, 0.3)
+    return lowpass(out, 5000)
+
+
 SOUNDS = {
     "card_draw": card_draw,
     "truth": truth,
@@ -384,6 +563,20 @@ SOUNDS = {
     "coin_1": lambda: coin(((0.0, 1.0), (0.011, 0.45)), 1.0, 51),
     "coin_2": lambda: coin(((0.0, 0.8), (0.016, 0.6), (0.027, 0.3)), 1.035, 53),
     "coin_3": lambda: coin(((0.0, 1.0), (0.008, 0.35)), 0.97, 55),
+    "fx_blade": fx_blade,
+    "fx_lute": fx_lute,
+    "fx_lute_flourish": fx_lute_flourish,
+    "fx_cash": fx_cash,
+    "fx_gavel": fx_gavel,
+    "fx_poof": fx_poof,
+    "fx_shimmer": fx_shimmer,
+    "fx_burst_fire": fx_burst_fire,
+    "fx_vault": fx_vault,
+    "fx_shutter": fx_shutter,
+    "fx_hush": fx_hush,
+    "fx_tin": fx_tin,
+    "fx_scribble": fx_scribble,
+    "fx_hex": fx_hex,
     "item_get": item_get,
     "item_use": item_use,
     "item_silencer": item_silencer,
@@ -402,6 +595,9 @@ PEAK = 0.7
 # Sounds that sit lower in the mix than the rest.
 PEAKS = {
     "truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38, "item_roulette": 0.5,
+    "fx_hush": 0.4, "fx_shutter": 0.5, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5, "fx_lute": 0.55,
+    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "fx_burst_fire": 0.85, "fx_hex": 0.75,
+    "item_death": 0.9,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
 }
 

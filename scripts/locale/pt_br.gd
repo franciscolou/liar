@@ -139,7 +139,6 @@ const MESSAGES := {
 	"heal": "se curar",
 
 	# --- log ------------------------------------------------------------------
-	"Log": "Registro",
 	"— %s's turn —": "— Vez de %s —",
 	"%s buys %s.": "%s compra %s.",
 	"%s rerolls the shop.": "%s re-rola a loja.",

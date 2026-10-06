@@ -20,6 +20,7 @@ const STEEL := Color("c9d2e0")
 const SPIRIT := Color("7fe0d8")
 ## The potion going down: how many steps, over how long, and what is left
 ## where the liquid was.
+const GAVEL_RAISED := 0.95  # radians the gavel is lifted before a knock
 const DRAIN_FRAMES := 12
 const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
@@ -141,29 +142,61 @@ func _fireworks(who: PlayerState, shells: int) -> void:
 	await _wait(0.4)
 
 
-## Two knocks of the gavel, and the oath closes around the witness.
+## Two knocks of the gavel on the witness, and the oath closes around them.
 func _fx_judge_under_oath(play: Play) -> void:
 	var there := _at(play.target)
-	_snd("fx_gavel")
-	for i in 2:
-		ring(there, UI.GOLD, 110.0, 34.0, 0.24, 11.0)
-		table._shake_screen(6.0)
-		await _wait(0.24)
-	ring(there, Color.WHITE, 34.0, 44.0, 0.4, 3.0)
-	burst(there, UI.GOLD, 10, 120.0, 0.4)
+	await _gavel(play.target, UI.GOLD)
+	ring(there, UI.GOLD, 120.0, 40.0, 0.35, 6.0)
+	ring(there, Color.WHITE, 40.0, 52.0, 0.45, 3.0)
 	await _wait(0.4)
 
 
 func _fx_judge_contempt(play: Play) -> void:
 	var doubter: PlayerState = play.event.data.get("doubter") if play.event != null else null
-	var there := _at(doubter if doubter != null else play.actor)
-	_snd("fx_gavel")
-	for i in 2:
-		ring(there, UI.RED, 100.0, 30.0, 0.24, 11.0)
-		flash(Color(0.6, 0.1, 0.05, 0.16), 0.2)
-		table._shake_screen(7.0)
-		await _wait(0.24)
-	await _wait(0.25)
+	await _gavel(doubter if doubter != null else play.actor, UI.RED)
+	await _wait(0.2)
+
+
+## The gavel comes down twice on the box of `who`, unhurried.
+func _gavel(who: PlayerState, color: Color) -> void:
+	var there := _at(who)
+	var box: Control = table._node_of(who)
+	var speed: float = table._speed
+	var gavel := GavelFx.new()
+	gavel.position = GavelFx.origin_for(there)
+	gavel.rotation = GAVEL_RAISED
+	gavel.modulate.a = 0.0
+	add_child(gavel)
+	gavel.create_tween().tween_property(gavel, "modulate:a", 1.0, 0.12 / speed)
+	await _wait(0.3)
+	for knock in 2:
+		if not is_instance_valid(gavel):
+			return
+		gavel.create_tween().tween_property(gavel, "rotation", 0.0, 0.07 / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		await _wait(0.07)
+		_snd("fx_gavel")
+		burst(there, Color("c9a26a"), 10, 200.0, 0.3, 500.0, 6.0)
+		ring(there, color, 16.0, 96.0, 0.28, 6.0)
+		if color == UI.RED:
+			flash(Color(0.6, 0.1, 0.05, 0.16), 0.2)
+		if box != null:
+			UI.shake(box, 9.0, 0.2)
+		table._shake_screen(6.0)
+		await _wait(0.16)
+		if not is_instance_valid(gavel):
+			return
+		if knock == 0:
+			# Back up, in no hurry, for the second one.
+			gavel.create_tween().tween_property(gavel, "rotation", GAVEL_RAISED, 0.3 / speed) \
+					.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+			await _wait(0.42)
+	await _wait(0.2)
+	if not is_instance_valid(gavel):
+		return
+	var leave := gavel.create_tween()
+	leave.tween_property(gavel, "modulate:a", 0.0, 0.2 / speed)
+	leave.tween_callback(gavel.queue_free)
 
 
 ## A puff of smoke, and something that was not there a second ago.

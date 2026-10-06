@@ -454,11 +454,18 @@ def fx_cash():
 
 
 def fx_gavel():
-    """Order: two knocks."""
-    out = silence(0.75)
-    mix(out, wood_knock(61), 0.0, 0.9)
-    mix(out, wood_knock(64), 0.24, 1.0)
-    return drive(out, 2.0)
+    """One knock of a gavel on its sounding block: hardwood on hardwood, a
+    dry hollow "tock" with hardly any hiss in it."""
+    out = silence(0.4)
+    # The contact: a short, dull click.
+    mix(out, lowpass(noise(0.012, 0.0003, 0.004, 61), 2600), 0.0, 0.7)
+    # The block: the modes of a bar of wood, the low ones ringing longest.
+    for freq, gain, decay in ((235, 1.0, 0.075), (545, 0.8, 0.05), (905, 0.5, 0.034), (1380, 0.28, 0.022), (1990, 0.12, 0.014)):
+        mix(out, tone(freq, 0.3, 0.0006, decay), 0.0, gain)
+    # The bench under it.
+    mix(out, tone(118, 0.2, 0.001, 0.07, glide=0.8), 0.0, 0.7)
+    mix(out, lowpass(noise(0.2, 0.006, 0.06, 62), 500), 0.01, 0.1)
+    return drive(out, 1.6)
 
 
 def fx_poof():

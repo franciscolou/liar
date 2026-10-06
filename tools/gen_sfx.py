@@ -284,20 +284,79 @@ def item_death():
     return out
 
 
-def item_roulette():
-    """The cylinder spins and slows down."""
-    out = silence(0.95)
-    at = 0.0
-    gap = 0.035
-    i = 0
-    while at < 0.8:
-        click = highpass(noise(0.015, 0.0005, 0.006, 27 + i), 1800)
-        mix(out, click, at, 0.8)
-        mix(out, tone(1500, 0.02, 0.0005, 0.01), at, 0.35)
-        at += gap
-        gap *= 1.17
-        i += 1
+def steel_click(weight=1.0, seed=27):
+    """A steel part of a gun catching on another; the higher `weight`, the
+    bigger and lower the part."""
+    out = silence(0.16)
+    mix(out, bandpass(noise(0.03, 0.0004, 0.009, seed), 900 / weight, 5500 / weight), 0.0, 1.0)
+    for freq, gain, decay in ((1250, 0.6, 0.02), (2100, 0.5, 0.016), (3400, 0.3, 0.011)):
+        mix(out, tone(freq / weight, 0.1, 0.0004, decay * weight), 0.0, gain)
+    # The mass behind it: the knock carried by the frame of the gun.
+    mix(out, lowpass(noise(0.06, 0.0006, 0.02 * weight, seed + 1), 700), 0.0, 0.9 * weight)
+    mix(out, tone(260 / weight, 0.12, 0.001, 0.035 * weight, glide=0.65), 0.0, 0.7 * weight)
     return out
+
+
+def drive(samples, amount):
+    """Soft saturation: thickens a sound and brings its quiet parts up."""
+    peak = max(abs(s) for s in samples) or 1.0
+    return [math.tanh(amount * s / peak) for s in samples]
+
+
+def gunshot(seconds=1.9, seed=101):
+    """A revolver fired in a closed room, too close: the crack, the blast in
+    the chest, the walls throwing it back and the ears left ringing."""
+    out = silence(seconds)
+    # The crack.
+    mix(out, noise(0.07, 0.0002, 0.022, seed), 0.0, 1.8)
+    mix(out, highpass(noise(0.015, 0.0001, 0.005, seed + 1), 3000), 0.0, 1.3)
+    # The blast: a boom falling into the floor, and the air it moves.
+    mix(out, tone(150, 0.7, 0.0005, 0.32, glide=0.2), 0.0, 2.4)
+    mix(out, tone(46, 0.9, 0.004, 0.5), 0.0, 1.6)
+    mix(out, lowpass(noise(0.5, 0.0005, 0.16, seed + 2), 450), 0.0, 1.8)
+    # The room: the blast darkening as it dies, slapping back off the walls.
+    tail = lowpass(noise(seconds, 0.003, 0.75, seed + 3), lambda t: 260 + 5200 * math.exp(-t * 5.0))
+    mix(out, tail, 0.01, 0.9)
+    for k, (delay, gain) in enumerate(((0.09, 0.5), (0.21, 0.32), (0.38, 0.2), (0.6, 0.11))):
+        echo = lowpass(noise(0.22, 0.002, 0.09, seed + 4 + k), 2200 - 400 * k)
+        mix(out, echo, delay, gain)
+        mix(out, tone(90 - 10 * k, 0.2, 0.002, 0.09, glide=0.6), delay, gain)
+    out = drive(out[:int(seconds * RATE)], 5.0)
+    # The ears: a thin whine left behind, added after the saturation.
+    for freq, gain in ((3420, 0.035), (3466, 0.025)):
+        mix(out, tone(freq, seconds - 0.1, 0.12, 1.3), 0.05, gain)
+    return out[:int(seconds * RATE)]
+
+
+def item_roulette():
+    """Under the spin of the cylinder: a low, uneasy drone that swells until
+    the cylinder stops."""
+    seconds = 1.9
+    out = silence(seconds)
+    for freq, gain in ((49.0, 1.0), (51.2, 0.8), (73.4, 0.45), (98.6, 0.25)):
+        mix(out, tone(freq, seconds, 1.5, 0.25, "tri"), 0.0, gain)
+    air = lowpass(noise(seconds, 1.5, 0.25, 93), 320)
+    mix(out, air, 0.0, 0.6)
+    return lowpass(out, 500)
+
+
+def item_roulette_tick():
+    """One chamber of the cylinder going past the ratchet."""
+    return steel_click(1.25, 27)
+
+
+def item_roulette_cock():
+    """The hammer hauled back: the sear, then the full cock."""
+    out = silence(0.34)
+    mix(out, steel_click(1.5, 97), 0.0, 0.6)
+    mix(out, steel_click(2.3, 99), 0.085, 1.0)
+    mix(out, tone(110, 0.16, 0.002, 0.07, glide=0.7), 0.085, 0.7)
+    mix(out, tone(2300, 0.12, 0.001, 0.05), 0.09, 0.06)
+    return drive(out, 2.2)
+
+
+def item_roulette_shot():
+    return gunshot()
 
 
 def item_cloak():
@@ -333,12 +392,18 @@ SOUNDS = {
     "item_shield": item_shield,
     "item_death": item_death,
     "item_roulette": item_roulette,
+    "item_roulette_tick": item_roulette_tick,
+    "item_roulette_cock": item_roulette_cock,
+    "item_roulette_shot": item_roulette_shot,
     "item_cloak": item_cloak,
     "item_soul_swap": item_soul_swap,
 }
 PEAK = 0.7
 # Sounds that sit lower in the mix than the rest.
-PEAKS = {"truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38}
+PEAKS = {
+    "truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38, "item_roulette": 0.5,
+    "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
+}
 
 
 def write(name, samples):

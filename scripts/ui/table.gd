@@ -21,6 +21,13 @@ const MAX_COINS_SHOWN := 12
 ## apart for each clink to be heard on its own.
 const COIN_FLIGHT := 0.42
 const COIN_STAGGER := 0.11
+## The item whose use is staged as a spin of the cylinder (_anim_roulette).
+const ROULETTE := &"roulette"
+const ROULETTE_CENTRE := Vector2(576, 388)
+## Seconds the cylinder spins, and the fewest players the sight passes over.
+const ROULETTE_SPIN := 1.7
+const ROULETTE_MIN_HOPS := 12
+const SIGHT_ICON := "res://assets/target.png"
 const COIN_ICON := "res://assets/ui/coin.png"
 const HEART_ICON := "res://assets/ui/heart.png"
 const PICK_SCALE := 1.9
@@ -30,6 +37,8 @@ const SHOWN_CENTRE := Vector2(576, 236)
 const SHOP_HEIGHT := 106.0
 const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck
 const SHOP_DECK_WIDTH := 62.0
+const LOG_SIZE := Vector2(232, 136)
+const LOG_HEADER := 20.0  # the strip with the fold button; all that shows while folded
 
 var engine: GameEngine
 var viewer: PlayerState  # whose hand is on screen; null while spectating
@@ -42,6 +51,7 @@ var _handoff: Dictionary = {}  # a picked card waiting for its animation: {veil,
 var _seats: Dictionary = {}  # player id -> SeatView
 var _hero: HeroPanel
 var _table: Control
+var _arrows: Control  # under whatever the mouse is on (see _lift_hovered)
 var _fx: Control
 var _overlay: Control
 var _shop: Control
@@ -63,6 +73,10 @@ var _popup: Control
 var _modal: Control
 var _log: RichTextLabel
 var _log_panel: Control
+var _log_box: PanelContainer
+var _log_toggle: Button
+var _log_folded := false
+var _log_bottom := 470.0  # the log hangs from here, folded or not
 var _turn_label: Label
 var _sfx: Dictionary = {}
 var _music: AudioStreamPlayer
@@ -133,12 +147,23 @@ func _retranslate() -> void:
 
 
 func _process(_delta: float) -> void:
+	_lift_hovered()
 	# A shop opened by hovering folds again once the mouse leaves it, unless
 	# it was pinned or one of its menus is still up.
 	if not _shop_open or _shop_pinned or _popup.get_child_count() > 0:
 		return
 	if not _shop.get_global_rect().grow(8.0).has_point(get_global_mouse_position()):
 		_set_shop_open(false)
+
+
+## The arrow of a play runs across the table, over whatever is in its way.
+## What the mouse is on comes in front of it for as long as it stays there.
+func _lift_hovered() -> void:
+	var mouse := get_global_mouse_position()
+	var boxes: Array = [_prompt, _stage, _log_panel, _shop]
+	boxes.append_array(_seats.values())
+	for box: Control in boxes:
+		box.z_index = 1 if box.is_visible_in_tree() and box.get_global_rect().has_point(mouse) else 0
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -191,10 +216,14 @@ func _build() -> void:
 	_prompt.visible = false
 	add_child(_prompt)
 
+	_arrows = _layer()
 	_fx = _layer()
 	_overlay = _layer()
 	_popup = _layer()
 	_modal = _layer()
+	# Above anything _lift_hovered brings forward.
+	for layer: Control in [_fx, _overlay, _popup, _modal]:
+		layer.z_index = 2
 	add_child(TipLayer.new())
 
 	_music = AudioStreamPlayer.new()
@@ -370,19 +399,49 @@ func _build_stage() -> void:
 
 
 func _build_log() -> void:
-	var panel := PanelContainer.new()
-	_log_panel = panel
-	panel.position = Vector2(8, 334)
-	panel.size = Vector2(232, 136)
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.72), UI.BORDER.darkened(0.3), 2, 4, 6))
-	_table.add_child(panel)
+	_log_panel = Control.new()
+	_log_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_table.add_child(_log_panel)
+	var style := UI.box(Color(UI.INK, 0.72), UI.BORDER.darkened(0.3), 2, 4, 6)
+	style.content_margin_top = LOG_HEADER
+	_log_box = PanelContainer.new()
+	_log_box.add_theme_stylebox_override("panel", style)
+	_log_panel.add_child(_log_box)
 	_log = RichTextLabel.new()
 	_log.bbcode_enabled = true
 	_log.scroll_following = true
 	_log.add_theme_font_size_override("normal_font_size", 14)
 	_log.add_theme_font_size_override("bold_font_size", 14)
-	_log.custom_minimum_size = Vector2(216, 120)
-	panel.add_child(_log)
+	_log.custom_minimum_size = Vector2(LOG_SIZE.x - 16, LOG_SIZE.y - LOG_HEADER - 10)
+	_log_box.add_child(_log)
+	var title := UI.label("Log", 12, UI.MUTED)
+	title.position = Vector2(8, 2)
+	_log_panel.add_child(title)
+	# Discreet on purpose: no frame, and nothing changes under the mouse.
+	_log_toggle = Button.new()
+	_log_toggle.focus_mode = Control.FOCUS_NONE
+	_log_toggle.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_log_toggle.add_theme_font_size_override("font_size", roundi(16 * UI.FONT_SCALE))
+	for state: String in ["normal", "hover", "pressed", "focus"]:
+		_log_toggle.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		_log_toggle.add_theme_color_override(state, UI.MUTED)
+	_log_toggle.size = Vector2(20, LOG_HEADER)
+	_log_toggle.position = Vector2(LOG_SIZE.x - 22, 0)
+	_log_toggle.pressed.connect(func():
+		_log_folded = not _log_folded
+		_place_log())
+	_log_panel.add_child(_log_toggle)
+	_place_log()
+
+
+func _place_log() -> void:
+	var height := LOG_HEADER + 2.0 if _log_folded else LOG_SIZE.y
+	_log.visible = not _log_folded
+	_log_toggle.text = "+" if _log_folded else "-"
+	_log_panel.position = Vector2(8, _log_bottom - height)
+	_log_panel.size = Vector2(LOG_SIZE.x, height)
+	_log_box.size = _log_panel.size
 
 
 func _layout_seats() -> void:
@@ -401,7 +460,8 @@ func _layout_seats() -> void:
 	# spectator sees everyone spread around the whole of it.
 	var spread := minf(150.0, 45.0 * (others.size() - 1))
 	var full_circle := viewer == null
-	_log_panel.position = Vector2(8, 506) if full_circle else Vector2(8, 334)
+	_log_bottom = 642.0 if full_circle else 470.0
+	_place_log()
 	_shop.position = Vector2(1144 - _shop_width, (642 if full_circle else 470) - SHOP_HEIGHT)
 	for i in others.size():
 		var p: PlayerState = others[i]
@@ -1204,15 +1264,21 @@ func _toggle_pause() -> void:
 
 func present(e: GameEvent) -> void:
 	var line := EventText.describe(e)
-	if line != "":
-		_log_line(line, e.type)
 	var d := e.data
+	# The roulette names its victim only once the cylinder has stopped.
+	var held_line: bool = e.type == &"item_used" and d.play.source.id == ROULETTE
+	if line != "" and not held_line:
+		_log_line(line, e.type)
 	match e.type:
 		&"game_started":
 			_sync()
 			await _banner("WELCOME TO CARCAJ", "The last one standing takes the crown", UI.GOLD, 1.4)
 		&"turn_started":
 			_drop_transient_stage()
+			for q: PlayerState in engine.players:
+				var bar := _stat_bar(q)
+				if bar != null:
+					bar.coin_bias = 0
 			_set_active(d.player)
 			_show_turn()
 			if d.player == viewer:
@@ -1246,6 +1312,8 @@ func present(e: GameEvent) -> void:
 			await _wait(0.35)
 		&"item_used":
 			await _anim_item_used(d)
+			if held_line:
+				_log_line(line, e.type)
 		&"item_broken":
 			await _anim_item_broken(d)
 		&"shop_restocked":
@@ -1376,25 +1444,130 @@ func _anim_claim(play: Play) -> void:
 func _anim_item_used(d: Dictionary) -> void:
 	var play: Play = d.play
 	_play_sfx("item_%s" % play.source.id, "item_use")
+	if play.source.id == ROULETTE:
+		await _anim_roulette(play)
+		return
 	_push_stage({"play": play, "arrow": null, "transient": true})
 	await _wait(0.9)
 
 
+## Russian roulette: the cylinder is spun while a sight hops from player to
+## player, slower and slower, until it stops on the one the engine drew. Then
+## the hammer, a held breath and the shot. Who gets it stays off the stage
+## until the cylinder stops.
+func _anim_roulette(play: Play) -> void:
+	var entry := {"play": play, "arrow": null, "transient": true, "concealed": true}
+	_push_stage(entry)
+	var players: Array = play.source.target_candidates(play)
+	if not players.has(play.target):
+		players.append(play.target)
+	var at := maxi(players.find(play.actor), 0)
+	var hops := posmod(players.find(play.target) - at, players.size())
+	while hops < ROULETTE_MIN_HOPS:
+		hops += players.size()
+
+	var cylinder := CylinderFx.new()
+	cylinder.position = ROULETTE_CENTRE - cylinder.size / 2.0
+	# One chamber goes by per hop: the round ends up under the hammer.
+	cylinder.loaded = posmod(-hops, CylinderFx.CHAMBERS)
+	cylinder.modulate.a = 0.0
+	_fx.add_child(cylinder)
+	var sight := _sprite(UI.tex(SIGHT_ICON), _anchor(players[at]), Vector2(84, 84))
+	sight.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	sight.modulate.a = 0.0
+	var enter := cylinder.create_tween().set_parallel()
+	enter.tween_property(cylinder, "modulate:a", 1.0, 0.2 / _speed)
+	enter.tween_property(sight, "modulate:a", 1.0, 0.2 / _speed)
+	UI.pop(cylinder, 1.4, 0.25)
+	await _wait(0.2)
+
+	# The spin: each hop takes a little longer than the one before.
+	var growth := 1.18 if hops <= 14 else 1.12
+	var interval := ROULETTE_SPIN * (growth - 1.0) / (pow(growth, hops) - 1.0)
+	for i in hops:
+		if not is_instance_valid(cylinder):
+			return
+		at = (at + 1) % players.size()
+		sight.position = _anchor(players[at]) - sight.size / 2.0
+		UI.pop(sight, 1.3, 0.1)
+		_play_sfx("item_roulette_tick")
+		cylinder.create_tween().tween_property(cylinder, "turn", float(i + 1), minf(interval, 0.12) / _speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		await _wait(interval)
+		interval *= growth
+	if not is_instance_valid(cylinder):
+		return
+
+	# It stopped: now the table knows who.
+	entry.concealed = false
+	if _stage_stack.has(entry):
+		entry.arrow = _stage_arrow(play)
+		_render_stage()
+	UI.pop(sight, 1.8, 0.3)
+	await _wait(0.25)
+	_play_sfx("item_roulette_cock")
+	UI.shake(cylinder, 4.0, 0.15)
+	await _wait(0.45)
+	# The held breath: the sight closes in.
+	sight.create_tween().tween_property(sight, "scale", Vector2.ONE * 0.7, 0.35 / _speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await _wait(0.4)
+	if not is_instance_valid(cylinder):
+		return
+
+	# The shot.
+	_play_sfx("item_roulette_shot")
+	var blast := ColorRect.new()
+	blast.color = Color(1.0, 0.96, 0.85, 0.9)
+	blast.set_anchors_preset(Control.PRESET_FULL_RECT)
+	blast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay.add_child(blast)
+	var fade := blast.create_tween()
+	fade.tween_property(blast, "color", Color(0.55, 0.05, 0.03, 0.45), 0.1 / _speed)
+	fade.tween_property(blast, "color:a", 0.0, 0.5 / _speed)
+	fade.tween_callback(blast.queue_free)
+	cylinder.flash = 1.0
+	var recoil := cylinder.create_tween()
+	recoil.tween_property(cylinder, "position:y", cylinder.position.y - 22.0, 0.05 / _speed)
+	recoil.parallel().tween_property(cylinder, "rotation", -0.22, 0.05 / _speed)
+	recoil.tween_property(cylinder, "position:y", cylinder.position.y, 0.3 / _speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	recoil.parallel().tween_property(cylinder, "rotation", 0.0, 0.3 / _speed)
+	recoil.parallel().tween_property(cylinder, "flash", 0.0, 0.22 / _speed)
+	UI.pop(sight, 2.2, 0.35)
+	UI.shake(_table, 24.0, 0.5)
+	await _wait(0.55)
+	if not is_instance_valid(cylinder):
+		return
+	var leave := cylinder.create_tween().set_parallel()
+	leave.tween_property(cylinder, "modulate:a", 0.0, 0.25 / _speed)
+	leave.tween_property(sight, "modulate:a", 0.0, 0.25 / _speed)
+	leave.chain().tween_callback(cylinder.queue_free)
+	leave.tween_callback(sight.queue_free)
+
+
 func _push_stage(entry: Dictionary) -> void:
 	_drop_transient_stage()
-	var play: Play = entry.play
-	if play.target != null and play.target != play.actor:
-		var arrow := ArrowFx.new()
-		arrow.set_anchors_preset(Control.PRESET_FULL_RECT)
-		arrow.from = _anchor(play.actor)
-		arrow.to = _anchor(play.target)
-		arrow.color = UI.RED if play.source.tags.has(&"damage") or play.source.tags.has(&"steal") else UI.GOLD
-		_fx.add_child(arrow)
-		arrow.create_tween().tween_property(arrow, "progress", 1.0, 0.3 / _speed)
-		entry.arrow = arrow
+	# A concealed entry keeps its target to itself for now (see _anim_roulette).
+	if not entry.get("concealed", false):
+		entry.arrow = _stage_arrow(entry.play)
 	_stage_stack.append(entry)
 	_render_stage()
 	UI.pop(_stage, 1.12, 0.22)
+
+
+## The arrow from the actor of `play` to its target, null if there is none to draw.
+func _stage_arrow(play: Play) -> ArrowFx:
+	if play.target == null or play.target == play.actor:
+		return null
+	var arrow := ArrowFx.new()
+	arrow.set_anchors_preset(Control.PRESET_FULL_RECT)
+	arrow.from = _anchor(play.actor)
+	arrow.to = _anchor(play.target)
+	arrow.color = UI.RED if play.source.tags.has(&"damage") or play.source.tags.has(&"steal") else UI.GOLD
+	_arrows.add_child(arrow)
+	arrow.create_tween().tween_property(arrow, "progress", 1.0, 0.3 / _speed)
+	return arrow
 
 
 func _pop_stage(play: Play) -> void:
@@ -1458,7 +1631,7 @@ func _render_stage() -> void:
 	if play.is_claim():
 		var cost := "  (%s)" % (Loc.t("%d coins") % play.cost) if play.cost > 0 else ""
 		text.add_child(UI.label(play.source.display_name + _on_target(play) + cost, 17, UI.CREAM, true))
-	elif play.target != null:
+	elif play.target != null and not _stage_stack.back().get("concealed", false):
 		text.add_child(UI.label(_on_target(play).strip_edges().capitalize(), 17, UI.CREAM, true))
 	var description := UI.label(play.source.description, 12, UI.MUTED)
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1506,20 +1679,58 @@ func _anim_coins(d: Dictionary) -> void:
 	var delta: int = d.delta
 	var here := _coin_anchor(p)
 	var there := _coin_anchor(d.other) if d.other != null else _bank()
+	var bar := _stat_bar(p)
+	var other_bar := _stat_bar(d.other)
 	if d.reason == &"steal":
-		# The coins already flew out of the victim's pile.
+		# The coins already flew out of the victim's pile, and were counted
+		# in as they landed.
+		if bar != null:
+			bar.coin_bias = 0
 		_float("+%d" % delta, here + Vector2(0, -18), UI.GOLD, 22)
 		await _wait(0.25)
 		return
-	var coins := clampi(absi(delta), 1, MAX_COINS_SHOWN)
+	# The engine already moved the coins: each pile catches up one flying
+	# coin at a time, as it leaves or lands.
+	if bar != null:
+		bar.hold_coins(p)
+	var total := absi(delta)
+	var coins := clampi(total, 1, MAX_COINS_SHOWN)
+	# Coins the other pile is showing ahead of time (a thief yet to be paid).
+	var ahead := maxi(other_bar.coin_bias, 0) if other_bar != null else 0
 	for i in coins:
 		var from := there if delta > 0 else here
 		var to := here if delta > 0 else there
-		_fly(UI.tex("res://assets/ui/coin.png"), from, to, Vector2(20, 20), COIN_FLIGHT, i * COIN_STAGGER)
+		var leaves := i * COIN_STAGGER
+		var lands := COIN_FLIGHT + leaves
+		# More coins than sprites: each sprite stands for its share of them.
+		var share := total * (i + 1) / coins - total * i / coins
+		_fly(UI.tex("res://assets/ui/coin.png"), from, to, Vector2(20, 20), COIN_FLIGHT, leaves)
 		# One clink per coin, as it lands.
-		_play_sfx_later("coin_%d" % (i % COIN_SOUNDS + 1), COIN_FLIGHT + i * COIN_STAGGER)
+		_play_sfx_later("coin_%d" % (i % COIN_SOUNDS + 1), lands)
+		if delta > 0:
+			_count_coins(bar, share, lands)
+			var taken := mini(share, ahead)
+			ahead -= taken
+			_count_coins(other_bar, -taken, leaves)
+		else:
+			_count_coins(bar, -share, leaves)
+			# A thief's pile grows now; the engine pays them right after.
+			if d.reason == &"stolen":
+				_count_coins(other_bar, share, lands)
 	await _wait(COIN_FLIGHT + coins * COIN_STAGGER)
+	if bar != null:
+		bar.coin_bias = 0
 	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
+
+
+## Moves the coins shown on `bar` by `amount`, `delay` seconds from now.
+func _count_coins(bar: StatBar, amount: int, delay: float) -> void:
+	if bar == null or amount == 0:
+		return
+	if delay <= 0.0:
+		bar.add_coins(amount)
+	else:
+		get_tree().create_timer(delay / _speed).timeout.connect(bar.add_coins.bind(amount))
 
 
 func _anim_damage(target: PlayerState, amount: int) -> void:
@@ -2020,6 +2231,15 @@ func _anchor(p: PlayerState) -> Vector2:
 		return _hero.hand_center()
 	var seat: SeatView = _seats.get(p.id)
 	return seat.anchor() if seat != null else _bank()
+
+
+func _stat_bar(p: PlayerState) -> StatBar:
+	if p == null:
+		return null
+	if p == viewer:
+		return _hero.stat_bar()
+	var seat: SeatView = _seats.get(p.id)
+	return seat.stat_bar() if seat != null else null
 
 
 func _coin_anchor(p: PlayerState) -> Vector2:

@@ -140,6 +140,10 @@ func coin_anchor() -> Vector2:
 	return _stats.coin_center()
 
 
+func stat_bar() -> StatBar:
+	return _stats
+
+
 func card_center(index: int) -> Vector2:
 	if index >= 0 and index < _cards.size():
 		return _cards[index].center()

@@ -23,7 +23,13 @@ class StreetBargain extends Ability:
 		cost = 6
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		return event.type == &"before_morale_loss" and event.data.target == player
+		if event.type != &"before_morale_loss" or event.data.target != player:
+			return false
+		# Caught claiming the Vagabond: the table has just seen it was a lie,
+		# so that Morale can't be bargained away with the same claim.
+		var lie: Play = event.data.get("play")
+		return not (event.data.cause == &"lie" and lie != null and lie.actor == player
+				and lie.is_claim() and lie.ability().character_id == &"vagabond")
 
 	func resolve(play: Play) -> void:
 		play.event.data.amount -= 1

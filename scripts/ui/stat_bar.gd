@@ -6,6 +6,9 @@ var _hearts: HBoxContainer
 var _coin_icon: TextureRect
 var _coins: Label
 var _counters: HBoxContainer
+## Coins shown on top of what the player really has, while an animation is
+## still carrying them in or out (see add_coins).
+var coin_bias := 0
 var _shown_coins := -9999
 var _shown_morale := -1
 var _shown_counters := ""
@@ -37,13 +40,8 @@ func sync(player: PlayerState, max_morale: int, owner_view := false) -> void:
 		UI.clear(_hearts)
 		for i in max_morale:
 			_hearts.add_child(_icon("res://assets/ui/heart.png" if i < player.morale else "res://assets/ui/heart_empty.png"))
-	if player.coins != _shown_coins:
-		var first := _shown_coins == -9999
-		_shown_coins = player.coins
-		_coins.text = str(player.coins)
-		_coins.add_theme_color_override("font_color", UI.RED if player.coins < 0 else UI.GOLD)
-		if not first:
-			UI.pop(_coins, 1.5)
+	if player.coins + coin_bias != _shown_coins:
+		_show_coins(player.coins + coin_bias, _shown_coins != -9999)
 	var signature := str(player.counters)
 	if signature != _shown_counters:
 		_shown_counters = signature
@@ -58,6 +56,29 @@ func sync(player: PlayerState, max_morale: int, owner_view := false) -> void:
 			_counters.add_child(icon)
 			_counters.add_child(UI.label(str(player.counters[counter_id]), _coins.get_theme_font_size("font_size"), UI.BLUE, true))
 		UI.pop(_counters, 1.3)
+
+
+## Keeps showing the current number although `player` already has another:
+## the difference is then counted in with add_coins, coin by coin.
+func hold_coins(player: PlayerState) -> void:
+	if _shown_coins != -9999:
+		coin_bias = _shown_coins - player.coins
+
+
+## Moves the number shown by `amount` without waiting for the next sync.
+func add_coins(amount: int) -> void:
+	if amount == 0 or _shown_coins == -9999:
+		return
+	coin_bias += amount
+	_show_coins(_shown_coins + amount, true)
+
+
+func _show_coins(value: int, pop: bool) -> void:
+	_shown_coins = value
+	_coins.text = str(value)
+	_coins.add_theme_color_override("font_color", UI.RED if value < 0 else UI.GOLD)
+	if pop:
+		UI.pop(_coins, 1.5)
 
 
 func _notification(what: int) -> void:

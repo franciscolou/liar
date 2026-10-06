@@ -131,6 +131,7 @@ func _notification(what: int) -> void:
 
 func bind(hero: PlayerState) -> void:
 	player = hero
+	_stats.coin_bias = 0
 	_hand_shown = []
 	_strip_shown = null
 	_items_shown = ""
@@ -197,6 +198,10 @@ func hand_center() -> Vector2:
 
 func coin_anchor() -> Vector2:
 	return _stats.coin_center()
+
+
+func stat_bar() -> StatBar:
+	return _stats
 
 
 func card_center(index: int) -> Vector2:

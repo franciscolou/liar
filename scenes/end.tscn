@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=3 uid="uid://c08c4i6ki3oo7"]
 
-[ext_resource type="Script" uid="uid://b3xyy1ol105xb" path="res://scripts/buttons/end_buttons.gd" id="1_mwn6m"]
+[ext_resource type="Script" path="res://scripts/ui/end_screen.gd" id="1_mwn6m"]
 [ext_resource type="Texture2D" uid="uid://cyxobxmfgwma2" path="res://assets/end.png" id="2_3d26k"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_3d26k"]

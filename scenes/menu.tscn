@@ -1,13 +1,13 @@
-[gd_scene load_steps=5 format=3 uid="uid://cqyrcvtip5mmd"]
+[gd_scene format=3 uid="uid://cqyrcvtip5mmd"]
 
-[ext_resource type="Script" uid="uid://cbdgn3b1f0ynx" path="res://scripts/buttons/menu_buttons.gd" id="1_vjb58"]
+[ext_resource type="Script" uid="uid://cgo5gf51676n7" path="res://scripts/ui/menu.gd" id="1_vjb58"]
 [ext_resource type="Texture2D" uid="uid://xpv7sp1smlah" path="res://assets/menu.png" id="1_yqeox"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_vjb58"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_con2f"]
 
-[node name="Control" type="Control"]
+[node name="Control" type="Control" unique_id=1365599125]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -16,23 +16,23 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_vjb58")
 
-[node name="TextureRect" type="TextureRect" parent="."]
+[node name="TextureRect" type="TextureRect" parent="." unique_id=1606779945]
 layout_mode = 0
 offset_right = 1152.0
 offset_bottom = 648.0
 texture = ExtResource("1_yqeox")
 expand_mode = 2
 
-[node name="Play" type="Button" parent="."]
-layout_mode = 2
+[node name="Play" type="Button" parent="." unique_id=1702086742]
+layout_mode = 0
 offset_left = 368.0
 offset_top = 386.0
 offset_right = 756.0
 offset_bottom = 473.0
 theme_override_styles/focus = SubResource("StyleBoxEmpty_vjb58")
 
-[node name="Quit" type="Button" parent="."]
-layout_mode = 2
+[node name="Quit" type="Button" parent="." unique_id=139595089]
+layout_mode = 0
 offset_left = 374.0
 offset_top = 500.0
 offset_right = 749.0

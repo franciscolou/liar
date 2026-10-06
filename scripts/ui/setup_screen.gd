@@ -1,0 +1,343 @@
+extends Control
+## Pre-game screen: who sits at the table, which characters and items are
+## in the match, and the house rules. Produces a GameConfig and starts.
+
+const MENU_SCENE := "res://scenes/menu.tscn"
+const GAME_SCENE := "res://scenes/main.tscn"
+const MAX_SEATS := 6
+const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent"]
+const ANIM_SPEEDS := [50, 75, 100, 150, 200, 250, 300]  # percent
+
+var _config: GameConfig
+var _seat_count := 4
+var _seat_rows: Array = []  # {row, name, bot}
+var _random := true
+var _picked: Array = []
+var _items_on: Dictionary = {}
+var _cards: Dictionary = {}  # character id -> CardView
+var _item_views: Dictionary = {}
+var _refreshers: Array = []  # Callables that redraw a stepper value
+var _mode_random: Button
+var _mode_picked: Button
+var _count_row: Control
+var _summary: Label
+var _start: Button
+var _problem: Label
+
+
+func _ready() -> void:
+	Settings.ensure_loaded()
+	theme = UI.theme()
+	Content.ensure_loaded()
+	_config = GameConfig.current if GameConfig.current != null else GameConfig.default_config()
+	_seat_count = clampi(_config.seats.size(), 2, MAX_SEATS)
+	_random = _config.character_ids.is_empty()
+	_picked = _config.character_ids.duplicate()
+	for def: ItemDef in Content.item_list():
+		if not def.fixed:
+			_items_on[def.id] = _config.item_ids.is_empty() or _config.item_ids.has(def.id)
+
+	var bg := TextureRect.new()
+	bg.texture = UI.tex("res://assets/menu.png")
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.modulate = Color(0.35, 0.3, 0.3)
+	add_child(bg)
+	add_child(TipLayer.new())
+
+	var title := UI.label("SET THE TABLE", 36, UI.GOLD, true)
+	title.position = Vector2(26, 10)
+	add_child(title)
+
+	_build_players(_panel(Rect2(24, 62, 372, 508)))
+	_build_match(_panel(Rect2(408, 62, 720, 508)))
+
+	var back := UI.button("BACK", UI.BORDER, 20)
+	back.position = Vector2(24, 584)
+	back.size = Vector2(150, 48)
+	back.pressed.connect(func(): get_tree().change_scene_to_file(MENU_SCENE))
+	add_child(back)
+	_start = UI.button("DEAL THE CARDS", UI.GOLD, 22)
+	_start.position = Vector2(868, 584)
+	_start.size = Vector2(260, 48)
+	_start.pressed.connect(_on_start)
+	add_child(_start)
+	_problem = UI.label("", 14, UI.RED)
+	_problem.position = Vector2(190, 598)
+	_problem.size = Vector2(664, 20)
+	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	add_child(_problem)
+	_refresh()
+
+
+func _panel(rect: Rect2) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.position = rect.position
+	panel.size = rect.size
+	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.88), UI.BORDER, 2, 6, 14))
+	add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	panel.add_child(box)
+	return box
+
+
+func _build_players(box: VBoxContainer) -> void:
+	box.add_child(_stepper("PLAYERS", "", func(): return _seat_count, func(v): _seat_count = v, 2, MAX_SEATS, true))
+	for i in MAX_SEATS:
+		var seat: Dictionary = _config.seats[i] if i < _config.seats.size() else {}
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var number := UI.label(str(i + 1), 16, UI.MUTED, true)
+		number.custom_minimum_size = Vector2(16, 0)
+		row.add_child(number)
+		var name_edit := LineEdit.new()
+		name_edit.text = seat.get("name", "Player 1" if i == 0 else BOT_NAMES[i % BOT_NAMES.size()])
+		name_edit.max_length = 12
+		name_edit.custom_minimum_size = Vector2(170, 28)
+		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_edit)
+		var bot := UI.button("", UI.BORDER, 14)
+		bot.toggle_mode = true
+		bot.button_pressed = seat.get("bot", i > 0)
+		bot.custom_minimum_size = Vector2(96, 28)
+		bot.toggled.connect(func(_on): _refresh())
+		TipLayer.attach(bot, "Humans share this screen and pass the device around. Bots play by themselves.")
+		row.add_child(bot)
+		box.add_child(row)
+		_seat_rows.append({"row": row, "name": name_edit, "bot": bot})
+
+	var rules := UI.label("HOUSE RULES", 16, UI.GOLD, true)
+	box.add_child(HSeparator.new())
+	box.add_child(rules)
+	box.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
+			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
+	box.add_child(_stepper("Starting coins", "",
+			func(): return _config.start_coins, func(v): _config.start_coins = v, 0, 10))
+	box.add_child(_stepper("Income per turn", "",
+			func(): return _config.income, func(v): _config.income = v, 0, 5))
+	box.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
+			func(): return _config.doubt_cost, func(v): _config.doubt_cost = v, 0, 6))
+	box.add_child(_stepper("Shop slots", "",
+			func(): return _config.shop_slots, func(v): _config.shop_slots = v, 1, 4))
+	box.add_child(_stepper("Animation speed", "",
+			_anim_speed_index, func(v): _config.anim_speed = ANIM_SPEEDS[v] / 100.0,
+			0, ANIM_SPEEDS.size() - 1, false, 1, "%d%%", ANIM_SPEEDS))
+
+
+func _build_match(box: VBoxContainer) -> void:
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	var title := UI.label("CHARACTERS", 20, UI.GOLD, true)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(title)
+	_mode_random = UI.button("Random", UI.BORDER, 15)
+	_mode_random.custom_minimum_size = Vector2(110, 32)
+	_mode_random.pressed.connect(_set_random.bind(true))
+	TipLayer.attach(_mode_random, "Draw the characters of the match at random.")
+	head.add_child(_mode_random)
+	_mode_picked = UI.button("Hand-picked", UI.BORDER, 15)
+	_mode_picked.custom_minimum_size = Vector2(130, 32)
+	_mode_picked.pressed.connect(_set_random.bind(false))
+	TipLayer.attach(_mode_picked, "Choose exactly which characters are in the match.")
+	head.add_child(_mode_picked)
+	box.add_child(head)
+
+	_count_row = _stepper("How many characters", "", func(): return _config.character_count,
+			func(v): _config.character_count = v, 3, Content.characters.size())
+	box.add_child(_count_row)
+
+	var grid := Control.new()
+	grid.custom_minimum_size = Vector2(690, 142)
+	box.add_child(grid)
+	var defs := Content.character_list()
+	var step := 690.0 / defs.size()
+	for i in defs.size():
+		var def: CharacterDef = defs[i]
+		var card := CardView.new(1.15)
+		card.position = Vector2(i * step + (step - card.size.x) / 2.0, 6)
+		card.set_card(def.id, true)
+		card.clicked.connect(_toggle_character.bind(def.id))
+		grid.add_child(card)
+		_cards[def.id] = card
+		var caption := UI.label(def.display_name, 11, UI.MUTED)
+		caption.position = Vector2(i * step, 124)
+		caption.size = Vector2(step, 16)
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		caption.clip_text = true
+		grid.add_child(caption)
+
+	box.add_child(_stepper("Copies of each character", "More copies make every claim more believable.",
+			func(): return maxi(_config.copies_per_character, _min_copies()),
+			func(v): _config.copies_per_character = v, 2, 6))
+	_summary = UI.label("", 13, UI.MUTED)
+	box.add_child(_summary)
+
+	box.add_child(HSeparator.new())
+	box.add_child(UI.label("ITEMS IN THE SHOP", 20, UI.GOLD, true))
+	var items := HBoxContainer.new()
+	items.add_theme_constant_override("separation", 12)
+	box.add_child(items)
+	for def: ItemDef in Content.item_list():
+		var view := ItemView.new(0.95)
+		view.set_item(def)
+		if def.fixed:
+			# Part of every match: on sale outside the slots, nothing to toggle.
+			view.note = "Always on sale, outside the shop slots. Can't be banned."
+			view.clicked.connect(_refuse.bind(view))
+			items.add_child(view)
+			continue
+		view.note = "Click to allow or ban it."
+		view.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		view.clicked.connect(func():
+			_items_on[def.id] = not _items_on[def.id]
+			_refresh())
+		items.add_child(view)
+		_item_views[def.id] = view
+
+
+## A "no" wobble for something that can't be toggled. It rotates instead of
+## moving so the container layout is left alone.
+func _refuse(view: Control) -> void:
+	var tween := view.create_tween()
+	for angle: float in [0.22, -0.2, 0.14, -0.1, 0.05]:
+		tween.tween_property(view, "rotation", angle, 0.045)
+	tween.tween_property(view, "rotation", 0.0, 0.045)
+
+
+## Position in ANIM_SPEEDS of the speed closest to the configured one.
+func _anim_speed_index() -> int:
+	var percent := _config.anim_speed * 100.0
+	var best := 0
+	for i in ANIM_SPEEDS.size():
+		if absf(ANIM_SPEEDS[i] - percent) < absf(ANIM_SPEEDS[best] - percent):
+			best = i
+	return best
+
+
+## A labelled "- value +" row bound to a getter and a setter. With `shown`,
+## the value is an index into it and the entry is what gets displayed.
+func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low: int, high: int, big := false, step := 1, format := "%d", shown: Array = []) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var l := UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(l)
+	if tip != "":
+		l.mouse_filter = Control.MOUSE_FILTER_PASS
+		TipLayer.attach(l, tip)
+	var minus := UI.button("-", UI.BORDER, 15)
+	minus.custom_minimum_size = Vector2(34, 26)
+	var value := UI.label("", 16, UI.GOLD, true)
+	value.custom_minimum_size = Vector2(52, 0)
+	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var plus := UI.button("+", UI.BORDER, 15)
+	plus.custom_minimum_size = Vector2(34, 26)
+	row.add_child(minus)
+	row.add_child(value)
+	row.add_child(plus)
+	var change := func(delta: int):
+		setter.call(clampi(getter.call() + delta, low, high))
+		UI.pop(value, 1.4, 0.2)
+		_refresh()
+	minus.pressed.connect(change.bind(-step))
+	plus.pressed.connect(change.bind(step))
+	_refreshers.append(func():
+		var current: int = getter.call()
+		value.text = format % (current if shown.is_empty() else shown[current])
+		minus.disabled = current <= low
+		plus.disabled = current >= high)
+	return row
+
+
+func _set_random(value: bool) -> void:
+	_random = value
+	if not _random and _picked.is_empty():
+		for def: CharacterDef in Content.character_list().slice(0, _config.character_count):
+			_picked.append(def.id)
+	_refresh()
+
+
+func _toggle_character(character_id: StringName) -> void:
+	if _random:
+		_set_random(false)
+		return
+	if _picked.has(character_id):
+		_picked.erase(character_id)
+	else:
+		_picked.append(character_id)
+	UI.pop(_cards[character_id], 1.15, 0.2)
+	_refresh()
+
+
+func _character_count() -> int:
+	return _config.character_count if _random else _picked.size()
+
+
+func _min_copies() -> int:
+	var probe := GameConfig.new()
+	probe.seats.resize(_seat_count)
+	return probe.min_copies(_character_count())
+
+
+func _refresh() -> void:
+	for refresher: Callable in _refreshers:
+		refresher.call()
+	for i in _seat_rows.size():
+		var seat: Dictionary = _seat_rows[i]
+		seat.row.visible = i < _seat_count
+		seat.bot.text = "BOT" if seat.bot.button_pressed else "HUMAN"
+	_style_toggle(_mode_random, _random)
+	_style_toggle(_mode_picked, not _random)
+	_count_row.visible = _random
+	for character_id: StringName in _cards:
+		var card: CardView = _cards[character_id]
+		var chosen: bool = not _random and _picked.has(character_id)
+		card.highlight(UI.GOLD if chosen else null)
+		card.modulate = Color.WHITE if chosen or _random else Color(0.4, 0.38, 0.38)
+		card.note = "" if _random else ("In the match. Click to remove." if chosen else "Click to add to the match.")
+	for item_id: StringName in _item_views:
+		_item_views[item_id].modulate = Color.WHITE if _items_on[item_id] else Color(0.3, 0.28, 0.28)
+
+	var count := _character_count()
+	var copies := maxi(_config.copies_per_character, _min_copies())
+	_summary.text = Loc.t("%s  ·  deck of %d cards (%d characters x %d copies), %d dealt.") % [
+		Loc.t("%d drawn at random") % count if _random else Loc.t("%d hand-picked") % count,
+		count * copies, count, copies, _seat_count * mini(_config.hand_size, _config.start_morale)]
+	var problem := ""
+	if count < 3:
+		problem = "Pick at least 3 characters."
+	_problem.text = problem
+	_start.disabled = problem != ""
+
+
+func _style_toggle(b: Button, on: bool) -> void:
+	var accent := UI.GOLD if on else UI.BORDER.darkened(0.3)
+	b.add_theme_stylebox_override("normal", UI.box(accent.darkened(0.6) if on else UI.PANEL, accent, 2, 4, 6))
+	b.add_theme_color_override("font_color", UI.GOLD if on else UI.MUTED)
+
+
+func _on_start() -> void:
+	_config.seats = []
+	for i in _seat_count:
+		var seat: Dictionary = _seat_rows[i]
+		var seat_name: String = seat.name.text.strip_edges()
+		_config.seats.append({
+			"name": seat_name if seat_name != "" else "Player %d" % (i + 1),
+			"bot": seat.bot.button_pressed,
+		})
+	_config.character_ids = [] if _random else _picked.duplicate()
+	_config.item_ids = []
+	if _items_on.values().has(false):
+		for item_id: StringName in _items_on:
+			if _items_on[item_id]:
+				_config.item_ids.append(item_id)
+		if _config.item_ids.is_empty():
+			_config.item_ids = [&"none"]
+	GameConfig.current = _config
+	get_tree().change_scene_to_file(GAME_SCENE)
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	UI.handle_fullscreen_key(event, get_window())

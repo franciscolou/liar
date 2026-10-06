@@ -75,9 +75,20 @@ func center() -> Vector2:
 	return global_position + size / 2.0
 
 
+## Drops the hover pose and stops reacting to the mouse.
+func settle() -> void:
+	interactive = false
+	if _tween != null:
+		_tween.kill()
+	z_index = 0
+	_tween = create_tween().set_parallel()
+	_tween.tween_property(_inner, "position:y", 0.0, 0.1)
+	_tween.tween_property(_inner, "scale", Vector2.ONE, 0.1)
+
+
 func _apply() -> void:
 	var def := Content.character(card_id) if face_up else null
-	_art.texture = UI.tex(def.texture_path) if def != null else UI.tex(UI.CARD_BACK)
+	_art.texture = UI.card_face(def.texture_path) if def != null else UI.tex(UI.CARD_BACK)
 
 
 func _tip() -> String:

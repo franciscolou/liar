@@ -8,7 +8,11 @@ extends RefCounted
 ##             extras, options.reroll (null when there is nothing to restock),
 ##             or {kind = &"end"}
 ##   TARGET -> PlayerState from `options`, or null to cancel
-##   DOUBT  -> bool (context.play is the claim being judged)
+##   DOUBT  -> one of the stakes in `options` (GameEngine.doubt_stakes) to
+##             call LIAR!, or false to let it pass (context.play is the claim;
+##             context.shared: other humans are being asked at the same time)
+##             or one of context.reactions (humans only): let it pass and
+##             answer the claim's reaction window with that option right away
 ##   REACT  -> one of the option dictionaries, or null to pass
 ##   PICK   -> index into `options` ([{label, description, card, item}]), -1 to cancel
 

@@ -19,6 +19,10 @@ signal finished(winner: PlayerState)
 ## Reactions to reactions to reactions... stop being offered at this depth.
 const MAX_REACTION_DEPTH := 4
 const MAX_TURN_STEPS := 40
+## What a doubter loses for a wrong call (see doubt_stakes).
+const STAKE_COINS := &"coins"
+const STAKE_DEBT := &"debt"
+const STAKE_MORALE := &"morale"
 
 var config: GameConfig
 var rng := RandomNumberGenerator.new()
@@ -143,8 +147,12 @@ func _reaction_window(event: GameEvent) -> void:
 		if options.is_empty():
 			continue
 		var choice: Variant
+		var early := _early_reactions(event)
 		if event.data.get("auto") == p:
 			choice = options[0]
+		elif early.has(p.id):
+			# Already answered in the doubt window (null: let it through).
+			choice = _same_option(options, early[p.id])
 		else:
 			var d := Decision.new(Decision.Kind.REACT, p)
 			d.options = options
@@ -158,6 +166,30 @@ func _reaction_window(event: GameEvent) -> void:
 		else:
 			await use_item(p, choice.item, event)
 		_reaction_depth -= 1
+
+
+## Answers given ahead of time, in the doubt window, to the reaction window
+## of `event`: {player id: option, or null to pass}.
+func _early_reactions(event: GameEvent) -> Dictionary:
+	var cause: Play = event.data.get("play")
+	if event.type != &"claim_resolving" or cause == null:
+		return {}
+	return _early_of(cause)
+
+
+func _early_of(play: Play) -> Dictionary:
+	if not play.params.has("early_reactions"):
+		play.params["early_reactions"] = {}
+	return play.params["early_reactions"]
+
+
+## The entry of `options` that plays the same thing as `wanted`, or null.
+func _same_option(options: Array, wanted: Variant) -> Variant:
+	if wanted is Dictionary:
+		for option: Dictionary in options:
+			if option.kind == wanted.get("kind") and option.get("ability") == wanted.get("ability") and option.get("item") == wanted.get("item"):
+				return option
+	return null
 
 
 ## What `player` could play in response to `event`.
@@ -352,13 +384,19 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 	actor.turn["busy"] = true
 
 	await fire(&"claim_declared", {"play": play})
-	var doubter := await _doubt_window(play)
+	var doubt := await _doubt_window(play)
+	var doubter: PlayerState = doubt.get("player")
 	var proven := false
 	if doubter != null:
-		if await challenge(doubter, play):
+		if await challenge(doubter, play, doubt.stake):
 			await fire(&"claim_resolved", {"play": play})
 			return play
 		proven = true
+		# The claim was proven: whoever let it pass may think again.
+		var early := _early_of(play)
+		for id: int in early.keys():
+			if early[id] == null:
+				early.erase(id)
 	# The ability itself may send the card away (Fickle, Swindle...).
 	var copies := actor.cards.count(ability.character_id)
 
@@ -383,14 +421,19 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 ## `doubter` calls LIAR! on `play`, whose `truthful` must be up to date.
 ## Returns true if it was a lie. Also used for claims that stay open to doubt
 ## after they resolved (see voodooist.gd). When it was the truth, the caller
-## owes the actor a renew_proven_card().
-func challenge(doubter: PlayerState, play: Play) -> bool:
+## owes the actor a renew_proven_card(). `stake` is one of doubt_stakes():
+## what the doubter loses for a wrong call.
+func challenge(doubter: PlayerState, play: Play, stake: StringName = STAKE_COINS) -> bool:
 	var actor := play.actor
 	play.doubter = doubter
-	await fire(&"doubt_declared", {"play": play, "doubter": doubter})
+	await fire(&"doubt_declared", {"play": play, "doubter": doubter, "stake": stake})
 	await fire(&"doubt_revealed", {"play": play, "doubter": doubter, "truthful": play.truthful})
 	if play.truthful:
-		await pay(doubter, config.doubt_cost, &"doubt")
+		if stake == STAKE_MORALE:
+			# A bet lost, not an attack: nobody gets credit for it.
+			await lose_morale(doubter, 1, null, &"doubt", play)
+		else:
+			await pay(doubter, config.doubt_cost, &"doubt")
 		await fire(&"doubt_failed", {"play": play, "doubter": doubter, "defender": actor})
 		return false
 	play.failed = true
@@ -492,32 +535,89 @@ func _choose_target(play: Play) -> bool:
 	return play.target != null
 
 
-## Whether `player` could cover the fine for a wrong call, on credit if need be.
-func can_doubt(player: PlayerState) -> bool:
-	return player.alive and can_pay(player, config.doubt_cost)
+## What `player` may put up for a LIAR! call, lost if the claim was true.
+## With the coins for the fine there is nothing to choose. Without them it is
+## a debt (only if something lets them go that far into the red) or 1 Morale.
+func doubt_stakes(player: PlayerState) -> Array[StringName]:
+	var out: Array[StringName] = []
+	if not player.alive:
+		return out
+	if player.coins >= config.doubt_cost or config.doubt_cost <= 0:
+		out.append(STAKE_COINS)
+		return out
+	if can_pay(player, config.doubt_cost):
+		out.append(STAKE_DEBT)
+	out.append(STAKE_MORALE)
+	return out
 
 
-func _doubt_window(play: Play) -> PlayerState:
-	var voters := []
+## Who calls LIAR! on `play` and with what: {player, stake}, or {} if nobody.
+## The whole table is asked at once and the first call closes the window.
+## Bots hold their tongue until every human has let the claim pass.
+func _doubt_window(play: Play) -> Dictionary:
+	var humans := []
+	var bots := []
 	for p in seat_order(play.actor):
-		if p != play.actor and can_doubt(p):
-			voters.append(p)
-	# Humans answer first so that a bot's call never spoils theirs.
-	var ordered := voters.filter(func(p): return not p.is_bot) + voters.filter(func(p): return p.is_bot)
-	var doubters := []
-	for p: PlayerState in ordered:
+		if p != play.actor and p.alive:
+			(bots if p.is_bot else humans).append(p)
+	if not humans.is_empty():
+		var poll := DoubtPoll.new()
+		poll.open = humans.size()
+		var asked := []
+		for p: PlayerState in humans:
+			var d := Decision.new(Decision.Kind.DOUBT, p)
+			d.options = doubt_stakes(p)
+			d.context = {
+				"play": play, "shared": humans.size() > 1,
+				# Blocking the claim is the third way out of this window.
+				"reactions": reaction_options(p, GameEvent.new(&"claim_resolving", {"play": play})),
+			}
+			asked.append(d)
+		for d: Decision in asked:
+			_poll_doubt(d, poll)
+		if not poll.done:
+			await poll.settled
+		for d: Decision in asked:
+			if not d.context.get("answered", false):
+				controllers[d.player.id].withdraw(d)
+		if over or not poll.result.is_empty():
+			return {} if over else poll.result
+	var willing := []
+	for p: PlayerState in bots:
 		if over:
-			return null
+			return {}
 		var d := Decision.new(Decision.Kind.DOUBT, p)
+		d.options = doubt_stakes(p)
 		d.context = {"play": play}
-		if await ask(d):
-			if not p.is_bot:
-				return p
-			doubters.append(p)
-	for p in voters:
-		if doubters.has(p):
-			return p
-	return null
+		var answer: Variant = await ask(d)
+		if answer is StringName and d.options.has(answer):
+			willing.append({"player": p, "stake": answer})
+	# Whoever of them shouts first.
+	return {} if willing.is_empty() else willing[rng.randi_range(0, willing.size() - 1)]
+
+
+## Waits for one human's answer in a doubt window that others are in too.
+func _poll_doubt(d: Decision, poll: DoubtPoll) -> void:
+	var answer: Variant = await ask(d)
+	d.context["answered"] = true
+	if poll.done:
+		return
+	if not d.context.reactions.is_empty():
+		_early_of(d.context.play)[d.player.id] = _same_option(d.context.reactions, answer)
+	poll.open -= 1
+	if answer is StringName and d.options.has(answer):
+		poll.result = {"player": d.player, "stake": answer}
+	if poll.open <= 0 or not poll.result.is_empty():
+		poll.done = true
+		poll.settled.emit()
+
+
+## Tally of a doubt window, shared by the coroutines asking each human.
+class DoubtPoll extends RefCounted:
+	signal settled
+	var open := 0
+	var done := false
+	var result := {}
 
 
 func _resolve(play: Play) -> void:
@@ -614,7 +714,8 @@ func deal_damage(source: PlayerState, target: PlayerState, play: Play = null) ->
 	return true
 
 
-## Any loss of Morale. `cause` is &"damage" or &"lie" (caught bluffing).
+## Any loss of Morale. `cause` is &"damage", &"lie" (caught bluffing) or
+## &"doubt" (Morale staked on a wrong call, with no `source`).
 func lose_morale(target: PlayerState, amount: int, source: PlayerState, cause: StringName, play: Play = null) -> bool:
 	if not target.alive:
 		return false
@@ -675,16 +776,7 @@ func _fit_hand(player: PlayerState) -> void:
 		return
 	var limit := hand_limit(player)
 	while player.cards.size() > limit and not over:
-		var index := 0
-		if player.cards.size() > 1:
-			var d := Decision.new(Decision.Kind.PICK, player)
-			d.prompt = Loc.t("%s, you lost Morale: give up a card") % player.name
-			d.options = player.cards.map(func(card): return {
-				"label": Content.character(card).display_name, "card": card,
-			})
-			index = await ask(d)
-			if index < 0 or index >= player.cards.size():
-				index = random_card_index(player)
+		var index := await pick_own_card(player, Loc.t("%s, you lost Morale: give up a card") % player.name)
 		if not player.alive or index < 0:
 			return
 		var card: StringName = player.cards.pop_at(index)
@@ -731,6 +823,22 @@ func peek_card(viewer: PlayerState, owner: PlayerState) -> void:
 	await fire(&"card_peeked", {
 		"viewer": viewer, "owner": owner, "index": index, "card": owner.cards[index],
 	})
+
+
+## Lets `player` choose one of the cards in their hand: its index, a random
+## one if they don't answer, -1 with an empty hand.
+func pick_own_card(player: PlayerState, prompt: String) -> int:
+	if player.cards.size() <= 1:
+		return player.cards.size() - 1
+	var d := Decision.new(Decision.Kind.PICK, player)
+	d.prompt = prompt
+	d.options = player.cards.map(func(card): return {
+		"label": Content.character(card).display_name, "card": card,
+	})
+	var index: int = await ask(d)
+	if index < 0 or index >= player.cards.size():
+		index = random_card_index(player)
+	return index
 
 
 func random_card_index(player: PlayerState) -> int:

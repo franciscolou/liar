@@ -20,11 +20,16 @@ const FONT_SCALE := 1.15
 const FONT_PATH := "res://assets/fonts/Jersey15-Regular.ttf"
 const CARD_BACK := "res://assets/Card.png"
 const ITEM_BACK := "res://assets/Item.png"
+const CARD_FRAME := "res://assets/ui/card_frame.png"
+## Transparent pixels at each end of the first rows of a card: the rounded
+## corners of the card back.
+const CARD_CORNER := [3, 2, 1]
 
 static var _theme: Theme
 static var _font: Font
 static var _bold: Font
 static var _textures: Dictionary = {}
+static var _faces: Dictionary = {}
 
 
 static func font() -> Font:
@@ -55,6 +60,36 @@ static func tex(path: String) -> Texture2D:
 	if not _textures.has(path):
 		_textures[path] = load(path) if ResourceLoader.exists(path) else null
 	return _textures[path]
+
+
+## The face of a card: its art under the card frame, with the corners rounded
+## like the card back. The plain art if the frame does not fit it.
+static func card_face(path: String) -> Texture2D:
+	if not _faces.has(path):
+		_faces[path] = _frame_card(tex(path), tex(CARD_FRAME))
+	return _faces[path]
+
+
+static func _frame_card(art: Texture2D, frame: Texture2D) -> Texture2D:
+	if art == null or frame == null or art.get_size() != frame.get_size():
+		return art
+	var image := art.get_image()
+	var overlay := frame.get_image()
+	if image == null or overlay == null:
+		return art
+	for layer: Image in [image, overlay]:
+		if layer.is_compressed():
+			layer.decompress()
+		layer.convert(Image.FORMAT_RGBA8)
+	var width := image.get_width()
+	var height := image.get_height()
+	image.blend_rect(overlay, Rect2i(0, 0, width, height), Vector2i.ZERO)
+	for row in CARD_CORNER.size():
+		for i: int in CARD_CORNER[row]:
+			for x: int in [i, width - 1 - i]:
+				for y: int in [row, height - 1 - row]:
+					image.set_pixel(x, y, Color(0, 0, 0, 0))
+	return ImageTexture.create_from_image(image)
 
 
 static func box(bg: Color, border: Color = BORDER, width := 2, radius := 4, margin := 8) -> StyleBoxFlat:

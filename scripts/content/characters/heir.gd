@@ -23,7 +23,8 @@ class Fickle extends Ability:
 		var engine := play.engine
 		var index := play.actor.cards.find(character_id)
 		if index == -1:
-			index = engine.random_card_index(play.actor)
+			# Bluffed: there is no "this card", so the liar says which one goes.
+			index = await engine.pick_own_card(play.actor, Loc.t("%s, you don't hold the %s: choose the card to swap") % [play.actor.name, Content.character(character_id).display_name])
 		await engine.replace_card(play.actor, index, &"fickle")
 		await engine.gain_coins(play.actor, 5, &"fickle")
 

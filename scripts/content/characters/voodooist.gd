@@ -68,25 +68,33 @@ func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 			"run": _break_hex,
 		})
 	var fine := engine.config.doubt_cost
+	var stakes := engine.doubt_stakes(player)
 	for victim: PlayerState in engine.players:
 		var owner := _doubtable_owner(victim, engine)
 		if owner == null or owner == player:
 			continue
-		var reason := ""
-		if player.turn.get(&"doll_doubted", []).has(victim.id):
-			reason = Loc.t("Already doubted this turn")
-		elif not engine.can_doubt(player):
-			reason = Loc.t("You need %d coins to risk a wrong call") % fine
+		var spent: bool = player.turn.get(&"doll_doubted", []).has(victim.id)
 		var whose := Loc.t("you") if victim == player else victim.name
-		out.append({
-			"id": &"voodooist.doubt",
-			"label": Loc.t("LIAR! %s's doll") % owner.name,
-			"description": Loc.t("Doubt the doll %s pinned on %s. If %s doesn't hold the Voodooist right now, they lose 1 Morale and the doll is destroyed. If they do, you pay %d coins.") % [owner.name, whose, owner.name, fine],
-			"enabled": reason == "",
-			"reason": reason,
-			"run": _doubt_doll.bind(victim.id),
-			"ai": _ai_doubt(player, victim, engine),
-		})
+		# One option per way of backing the call; a single greyed one once used.
+		for stake: StringName in (stakes.slice(0, 1) if spent else stakes):
+			var label := Loc.t("LIAR! %s's doll") % owner.name
+			var risk := Loc.t("If they do, you pay %d coins.") % fine
+			match stake:
+				GameEngine.STAKE_DEBT:
+					label = Loc.t("LIAR! %s's doll (on credit)") % owner.name
+					risk = Loc.t("If they do, you go %d coins into debt by claiming Vagabond (On the Cuff).") % fine
+				GameEngine.STAKE_MORALE:
+					label = Loc.t("LIAR! %s's doll (1 Morale)") % owner.name
+					risk = Loc.t("If they do, you lose 1 Morale.")
+			out.append({
+				"id": &"voodooist.doubt",
+				"label": label,
+				"description": Loc.t("Doubt the doll %s pinned on %s. If %s doesn't hold the Voodooist right now, they lose 1 Morale and the doll is destroyed.") % [owner.name, whose, owner.name] + " " + risk,
+				"enabled": not spent,
+				"reason": Loc.t("Already doubted this turn") if spent else "",
+				"run": _doubt_doll.bind(victim.id, stake),
+				"ai": _ai_doubt(player, victim, stake, engine),
+			})
 	return out
 
 
@@ -102,10 +110,12 @@ func _doubtable_owner(victim: PlayerState, engine: GameEngine) -> PlayerState:
 	return owner if owner != null and owner.alive else null
 
 
-func _doubt_doll(player: PlayerState, engine: GameEngine, victim_id: int) -> void:
+func _doubt_doll(player: PlayerState, engine: GameEngine, victim_id: int, stake: StringName) -> void:
 	var victim := engine.player_by_id(victim_id)
 	var owner: PlayerState = _doubtable_owner(victim, engine) if victim != null else null
-	if owner == null or owner == player or not engine.can_doubt(player):
+	if owner == null or owner == player or not engine.doubt_stakes(player).has(stake):
+		return
+	if player.turn.get(&"doll_doubted", []).has(victim_id):
 		return
 	if not player.turn.has(&"doll_doubted"):
 		player.turn[&"doll_doubted"] = []
@@ -119,7 +129,7 @@ func _doubt_doll(player: PlayerState, engine: GameEngine, victim_id: int) -> voi
 	play.truthful = owner.has_character(id)
 	var still_theirs := func() -> bool:
 		return victim.has_status(&"hexed") and victim.statuses[&"hexed"].get("by", -1) == owner.id
-	if await engine.challenge(player, play):
+	if await engine.challenge(player, play, stake):
 		if still_theirs.call():
 			await engine.remove_status(victim, &"hexed")
 		return
@@ -130,16 +140,18 @@ func _doubt_doll(player: PlayerState, engine: GameEngine, victim_id: int) -> voi
 	await engine.renew_proven_card(owner, id)
 
 
-func _ai_doubt(player: PlayerState, victim: PlayerState, engine: GameEngine) -> float:
+func _ai_doubt(player: PlayerState, victim: PlayerState, stake: StringName, engine: GameEngine) -> float:
 	# Holding every copy of the Voodooist proves the doll is a lie.
 	if player.cards.count(id) >= engine.copies_in_play():
 		return 1.0
-	if player.coins < engine.config.doubt_cost and not player.has_character(&"vagabond"):
+	if stake != BotController.doubt_stake(player, [stake]):
 		return 0.0
 	var chance := 0.04 + 0.05 * player.cards.count(id)
 	if victim == player:
 		chance += 0.1
-	if player.coins - engine.config.doubt_cost < 2:
+	if stake == GameEngine.STAKE_MORALE:
+		chance *= 0.4
+	elif player.coins - engine.config.doubt_cost < 2:
 		chance *= 0.5
 	return chance
 

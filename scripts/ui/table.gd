@@ -4,12 +4,29 @@ extends Control
 ## (request: turn a Decision into clickable things and return the answer).
 
 signal answered(value: Variant)
+signal doubt_answered(decision: Decision, value: Variant)
 
 const ARC_CENTER := Vector2(576, 322)
 const ARC_RADIUS := Vector2(450, 240)
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
-const SOUNDS := ["doubt", "damage", "breaking", "shield", "spend"]
+## Loaded up front; the sound of each item ("item_<id>") is loaded on first use.
+const SOUNDS := ["doubt", "damage", "breaking", "spend", "coin_1", "coin_2", "coin_3", "card_draw", "truth", "lie", "cancel", "heal", "item_get", "item_use"]
+const SOUND_DIR := "res://assets/sounds/"
+## Different clinks of a coin, played in turn so a pile does not sound like one note.
+const COIN_SOUNDS := 3
+## Most coins shown (and heard) flying for one change of coins.
+const MAX_COINS_SHOWN := 12
+## Seconds a coin takes to fly, and between one coin and the next: far enough
+## apart for each clink to be heard on its own.
+const COIN_FLIGHT := 0.42
+const COIN_STAGGER := 0.11
+const COIN_ICON := "res://assets/ui/coin.png"
+const HEART_ICON := "res://assets/ui/heart.png"
+const PICK_SCALE := 1.9
+## Where, and how large, a card is shown when the table stops to look at it.
+const SHOWN_SCALE := 2.5
+const SHOWN_CENTRE := Vector2(576, 236)
 const SHOP_HEIGHT := 106.0
 const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck
 const SHOP_DECK_WIDTH := 62.0
@@ -20,6 +37,8 @@ var viewer: PlayerState  # whose hand is on screen; null while spectating
 var _speed := 1.0
 var _humans: Array = []
 var _pending: Decision
+var _open_doubts: Array = []  # Decision: humans asked about the same claim
+var _handoff: Dictionary = {}  # a picked card waiting for its animation: {veil, player, card, lifted}
 var _seats: Dictionary = {}  # player id -> SeatView
 var _hero: HeroPanel
 var _table: Control
@@ -110,6 +129,7 @@ func _retranslate() -> void:
 				_prompt_doubt(_pending)
 			Decision.Kind.REACT:
 				_prompt_react(_pending)
+	_prompt_shared_doubt()
 
 
 func _process(_delta: float) -> void:
@@ -186,11 +206,7 @@ func _build() -> void:
 		_music.stream.loop = true
 	_music.play()
 	for sound: String in SOUNDS:
-		var player := AudioStreamPlayer.new()
-		player.stream = load("res://assets/sounds/%s.mp3" % sound)
-		player.bus = Settings.SFX_BUS
-		add_child(player)
-		_sfx[sound] = player
+		_load_sfx(sound)
 
 
 func _layer() -> Control:
@@ -410,6 +426,8 @@ func _layout_seats() -> void:
 # === decisions ================================================================
 
 func request(d: Decision) -> Variant:
+	if d.kind == Decision.Kind.DOUBT and d.context.get("shared", false):
+		return await _request_shared_doubt(d)
 	if d.player != viewer:
 		await _hand_over(d.player)
 	_pending = d
@@ -432,6 +450,64 @@ func request(d: Decision) -> Variant:
 	_hero.set_turn(null)
 	_sync_shop()
 	return value
+
+
+## The engine gave up on `d`: someone else called LIAR! first.
+func withdraw(d: Decision) -> void:
+	if _open_doubts.has(d):
+		_open_doubts.erase(d)
+		if _open_doubts.is_empty() and _pending == null:
+			_hide_prompt()
+		# Deferred: this runs inside the emission that carried the winning call.
+		doubt_answered.emit.call_deferred(d, false)
+	elif _pending == d:
+		_answer(false)
+
+
+## Several humans share the screen and are asked about a claim at once: one
+## prompt for all of them, and whoever presses LIAR! first takes the call.
+func _request_shared_doubt(d: Decision) -> Variant:
+	_open_doubts.append(d)
+	if _open_doubts.size() == 1:
+		_prompt_shared_doubt.call_deferred()
+	var value: Variant = false
+	while true:
+		var reply: Array = await doubt_answered
+		if reply[0] == d:
+			value = reply[1]
+			break
+	_open_doubts.erase(d)
+	if _open_doubts.is_empty() and _pending == null:
+		_hide_prompt()
+		if TipLayer.current != null:
+			TipLayer.current.hide_all()
+	elif value is Dictionary:
+		# This player reacted instead; the others are still being asked.
+		_prompt_shared_doubt()
+	return false if engine.aborted else value
+
+
+func _prompt_shared_doubt() -> void:
+	if _open_doubts.is_empty():
+		return
+	var play: Play = _open_doubts[0].context.play
+	var text := _claim_line(play) + "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("The first to call LIAR! takes it.")]
+	var buttons := []
+	for d: Decision in _open_doubts:
+		for spec: Dictionary in _doubt_buttons(d):
+			spec.text = "%s: %s" % [d.player.name, Loc.t(spec.text)]
+			spec.action = doubt_answered.emit.bind(d, spec.stake)
+			buttons.append(spec)
+		for option: Dictionary in d.context.get("reactions", []):
+			# Nothing here may tell the others what this player holds.
+			var spec := _reaction_button(option, false)
+			spec.text = "%s: %s" % [d.player.name, spec.text]
+			spec.action = doubt_answered.emit.bind(d, option)
+			buttons.append(spec)
+	buttons.append({"text": "Nobody", "action": func():
+		for d: Decision in _open_doubts.duplicate():
+			doubt_answered.emit(d, false)})
+	_show_prompt(text, buttons)
 
 
 func _answer(value: Variant) -> void:
@@ -586,48 +662,96 @@ func _prompt_target(d: Decision) -> void:
 func _prompt_doubt(d: Decision) -> void:
 	var play: Play = d.context.play
 	var def := Content.character(play.ability().character_id)
+	var text := _claim_line(play, "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
+		Loc.t("You hold %d of the %d %s cards. Is it a lie?") % [d.player.cards.count(def.id), engine.copies_in_play(), def.display_name]])
+	if not d.options.has(GameEngine.STAKE_COINS):
+		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You don't have the %d coins a wrong call costs: pick what you put on the line.") % engine.config.doubt_cost]
+	var buttons := _doubt_buttons(d)
+	for option: Dictionary in d.context.get("reactions", []):
+		buttons.append(_reaction_button(option, true))
+	buttons.append({"text": "Let it pass", "action": _answer.bind(false)})
+	_show_prompt(text, buttons)
+
+
+## What is being claimed, as the first lines of a doubt prompt. `private` goes
+## right under the claim (what only the player being asked may read).
+func _claim_line(play: Play, private := "") -> String:
+	var def := Content.character(play.ability().character_id)
 	var text := Loc.t("[b]%s[/b] claims [b][color=%s]%s[/color][/b]: %s%s.") % [
 		play.actor.name, UI.hex(UI.GOLD), def.display_name.to_upper(), play.source.display_name, _on_target(play)]
-	var held := d.player.cards.count(def.id)
-	text += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
-		Loc.t("You hold %d of the %d %s cards. Is it a lie?") % [held, engine.copies_in_play(), def.display_name]]
+	text += private
 	if play.actor.has_status(&"truth_bound"):
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.GOLD), Loc.t("%s is Under Oath and can't lie.") % play.actor.name]
+	return text
+
+
+## One LIAR! button per stake `d.player` may put up: {text, stake, action...}.
+func _doubt_buttons(d: Decision) -> Array:
+	var play: Play = d.context.play
 	var cost := engine.config.doubt_cost
-	if d.player.coins < cost:
-		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford to be wrong: if it was true, you will also claim Vagabond (On the Cuff).")]
-	_show_prompt(text, [
-		{
-			"text": "LIAR!", "accent": UI.RED, "action": _answer.bind(true),
-			"tip": Loc.t("Call the bluff.\nIf %s lied, they lose 1 Morale and the ability fails.\nIf it was true, you pay %d coins.") % [play.actor.name, cost],
-		},
-		{"text": "Let it pass", "action": _answer.bind(false)},
-	])
+	var stakes: Array = d.options
+	var bluff := Loc.t("Call the bluff.\nIf %s lied, they lose 1 Morale and the ability fails.") % play.actor.name
+	var buttons := []
+	for stake: StringName in stakes:
+		var spec := {"text": "LIAR!", "stake": stake, "accent": UI.RED, "action": _answer.bind(stake)}
+		match stake:
+			GameEngine.STAKE_COINS:
+				spec["price"] = {"icon": COIN_ICON, "amount": str(cost), "color": UI.GOLD}
+				spec["tip"] = bluff + "\n" + Loc.t("If it was true, you pay %d coins.") % cost
+			GameEngine.STAKE_DEBT:
+				# The fine goes on a tab, and the tab is a claim of its own.
+				var vagabond := Content.character(&"vagabond").display_name
+				var holds := d.player.has_character(&"vagabond")
+				spec["text"] = "LIAR! on credit"
+				spec["price"] = {"icon": COIN_ICON, "amount": str(cost), "color": UI.RED.lightened(0.15)}
+				spec["tip"] = (bluff + "\n" + Loc.t("If it was true, you claim %s (On the Cuff) to go %d coins into debt, down to %d.") % [vagabond, cost, d.player.coins - cost]
+						+ "\n[color=%s]%s[/color]" % [UI.hex(UI.GREEN if holds else UI.RED),
+						Loc.t("You hold %s: this is the truth." if holds else "You don't hold %s: that claim is a bluff too, and anyone may call LIAR! on it.") % vagabond])
+				if holds:
+					spec["accent"] = UI.BLUE
+				else:
+					spec["shady"] = true
+			GameEngine.STAKE_MORALE:
+				spec["price"] = {"icon": HEART_ICON, "amount": "1", "color": UI.CREAM}
+				spec["tip"] = bluff + "\n" + Loc.t("If it was true, you lose 1 Morale.")
+				if d.player.morale <= 1:
+					spec["tip"] += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), Loc.t("It is your last Morale: a wrong call eliminates you.")]
+		buttons.append(spec)
+	return buttons
+
+
+## The button that answers a decision with reaction `option`. `private`: only
+## the player being asked is looking, so it may say whether it is a bluff.
+func _reaction_button(option: Dictionary, private: bool) -> Dictionary:
+	if option.kind != &"ability":
+		var item: ItemDef = option.item.def
+		return {
+			"text": Loc.t("Use %s") % item.display_name, "tip": UI.item_tip(item),
+			"accent": UI.BLUE, "action": _answer.bind(option),
+		}
+	var ability: Ability = option.ability
+	var def := Content.character(ability.character_id)
+	var cost := "  ·  %d" % ability.cost if ability.cost > 0 else ""
+	var tip := UI.ability_tip(ability)
+	var accent := UI.GOLD
+	if private:
+		tip += Loc.t("You hold %s: this is the truth." if option.legit else "You don't hold %s: this is a bluff.") % def.display_name
+		accent = UI.GREEN if option.legit else UI.RED
+		if option.credit:
+			tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
+	return {
+		"text": "%s: %s%s" % [def.display_name, ability.display_name, cost], "tip": tip,
+		"accent": accent, "action": _answer.bind(option),
+	}
 
 
 func _prompt_react(d: Decision) -> void:
 	var triggers := []
 	var buttons := []
 	for option: Dictionary in d.options:
-		if option.kind == &"ability":
-			var ability: Ability = option.ability
-			var def := Content.character(ability.character_id)
-			if not triggers.has(ability.trigger_text):
-				triggers.append(ability.trigger_text)
-			var cost := "  ·  %d" % ability.cost if ability.cost > 0 else ""
-			var tip := UI.ability_tip(ability) + Loc.t("You hold %s: this is the truth." if option.legit else "You don't hold %s: this is a bluff.") % def.display_name
-			if option.credit:
-				tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
-			buttons.append({
-				"text": "%s: %s%s" % [def.display_name, ability.display_name, cost], "tip": tip,
-				"accent": UI.GREEN if option.legit else UI.RED, "action": _answer.bind(option),
-			})
-		else:
-			var item: ItemDef = option.item.def
-			buttons.append({
-				"text": Loc.t("Use %s") % item.display_name, "tip": UI.item_tip(item),
-				"accent": UI.BLUE, "action": _answer.bind(option),
-			})
+		if option.kind == &"ability" and not triggers.has(option.ability.trigger_text):
+			triggers.append(option.ability.trigger_text)
+		buttons.append(_reaction_button(option, true))
 	buttons.append({"text": "Pass", "action": _answer.bind(null)})
 	var why := ". ".join(triggers)
 	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [
@@ -636,6 +760,9 @@ func _prompt_react(d: Decision) -> void:
 
 
 func _open_pick(d: Decision) -> void:
+	if d.options.all(func(option: Dictionary): return option.has("card")):
+		_open_card_pick(d)
+		return
 	var panel := _open_modal(d.prompt)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -666,6 +793,175 @@ func _open_pick(d: Decision) -> void:
 		cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		cancel.pressed.connect(_answer.bind(-1))
 		panel.add_child(cancel)
+
+
+## Choosing among cards: no window, the table sinks into a dark red and the
+## cards glide to the middle (out of the hand, when they are the viewer's own)
+## and hover there until one is clicked.
+func _open_card_pick(d: Decision) -> void:
+	UI.clear(_modal)
+	var veil := ColorRect.new()
+	veil.color = Color(0.13, 0.015, 0.02, 0.0)
+	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_modal.add_child(veil)
+	create_tween().bind_node(veil).tween_property(veil, "color:a", 0.88, 0.35 / _speed)
+
+	var heading := UI.label(d.prompt, 22, UI.CREAM, true)
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.position = Vector2(0, 118)
+	heading.size = Vector2(1152, 30)
+	heading.modulate.a = 0.0
+	veil.add_child(heading)
+	var late := [heading]
+
+	var card_size := CardView.BASE * PICK_SCALE
+	var count: int = d.options.size()
+	var gap := 44.0
+	var left := 576.0 - (count * card_size.x + (count - 1) * gap) / 2.0
+	var lifted := []
+	var cards := []
+	for i in count:
+		var option: Dictionary = d.options[i]
+		var card := CardView.new(PICK_SCALE)
+		card.set_card(option.card, true)
+		card.lift = 14.0
+		var rest := Vector2(left + i * (card_size.x + gap), 214)
+		var origin: CardView = _hero.card(i) if d.player == viewer else null
+		if origin != null and origin.card_id == option.card and origin.face_up:
+			card.position = origin.global_position
+			card.scale = origin.size / card_size
+			card.set_meta(&"origin", origin)
+			origin.modulate.a = 0.0
+			lifted.append(origin)
+		else:
+			card.position = rest + Vector2(0, 60)
+			card.modulate.a = 0.0
+		veil.add_child(card)
+		cards.append(card)
+		var name_tag := UI.label(option.get("label", ""), 16, UI.GOLD, true)
+		name_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_tag.position = Vector2(-40, card_size.y + 12)
+		name_tag.size = Vector2(card_size.x + 80, 22)
+		name_tag.modulate.a = 0.0
+		card.add_child(name_tag)
+		late.append(name_tag)
+		card.clicked.connect(_close_card_pick.bind(veil, cards, i))
+		var glide := card.create_tween().set_parallel()
+		card.set_meta(&"glide", glide)
+		glide.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		var time := (0.55 + 0.07 * i) / _speed
+		glide.tween_property(card, "position", rest, time)
+		glide.tween_property(card, "scale", Vector2.ONE, time)
+		glide.tween_property(card, "modulate:a", 1.0, time * 0.6)
+		# Then a slow bob, each card a little out of step with its neighbour.
+		glide.chain().tween_callback(func():
+			if veil.has_meta(&"closing"):
+				return
+			var bob := card.create_tween().set_loops()
+			card.set_meta(&"bob", bob)
+			bob.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			bob.tween_property(card, "position:y", rest.y - 7.0, 1.3 + 0.17 * i)
+			bob.tween_property(card, "position:y", rest.y + 3.0, 1.3 + 0.17 * i))
+	# Whatever closes the pick, the hand gets its cards back.
+	veil.tree_exiting.connect(func():
+		if veil.has_meta(&"handed"):
+			return
+		for origin: CardView in lifted:
+			if is_instance_valid(origin):
+				origin.modulate.a = 1.0)
+
+	if d.cancellable:
+		var cancel := UI.button("Cancel", UI.BORDER, 14)
+		cancel.position = Vector2(526, 470)
+		cancel.custom_minimum_size = Vector2(100, 32)
+		cancel.modulate.a = 0.0
+		cancel.pressed.connect(_close_card_pick.bind(veil, cards, -1))
+		veil.add_child(cancel)
+		late.append(cancel)
+	veil.set_meta(&"late", late)
+	var reveal := create_tween().bind_node(veil).set_parallel()
+	for node: Control in late:
+		reveal.tween_property(node, "modulate:a", 1.0, 0.3 / _speed).set_delay(0.3 / _speed)
+
+
+## Closes a card pick. The cards left alone glide back to the hand; the chosen
+## one moves on to the middle of the table, where the animation of whatever
+## happens to it (traded, lost...) picks it up without a cut.
+func _close_card_pick(veil: ColorRect, cards: Array, choice: int) -> void:
+	if veil.has_meta(&"closing") or _pending == null:
+		return
+	veil.set_meta(&"closing", true)
+	var d := _pending
+	for card: CardView in cards:
+		card.settle()
+		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for key: StringName in [&"glide", &"bob"]:
+			var moving: Tween = card.get_meta(key, null)
+			if moving != null:
+				moving.kill()
+		card.modulate.a = 1.0
+	var out := create_tween().bind_node(veil).set_parallel()
+	if choice < 0:
+		out.tween_property(veil, "modulate:a", 0.0, 0.28 / _speed)
+		await out.finished
+		if _pending == d:
+			_answer(choice)
+		return
+	out.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	for node: Control in veil.get_meta(&"late"):
+		out.tween_property(node, "modulate:a", 0.0, 0.2 / _speed)
+	for i in cards.size():
+		var card: CardView = cards[i]
+		var origin: CardView = card.get_meta(&"origin", null)
+		if i == choice:
+			var grow := SHOWN_SCALE / PICK_SCALE
+			out.tween_property(card, "position", SHOWN_CENTRE - card.size * grow / 2.0, 0.45 / _speed)
+			out.tween_property(card, "scale", Vector2.ONE * grow, 0.45 / _speed)
+		elif origin != null and is_instance_valid(origin):
+			out.tween_property(card, "position", origin.global_position, 0.4 / _speed)
+			out.tween_property(card, "scale", origin.size / card.size, 0.4 / _speed)
+		else:
+			out.tween_property(card, "modulate:a", 0.0, 0.2 / _speed)
+	await out.finished
+	if _pending != d:
+		return
+	var lifted := []
+	for i in cards.size():
+		var origin: CardView = cards[i].get_meta(&"origin", null)
+		if origin == null or not is_instance_valid(origin):
+			continue
+		if i == choice:
+			lifted.append(origin)
+		else:
+			origin.modulate.a = 1.0
+			cards[i].visible = false
+	# Out of the modal layer, which the answer wipes, to wait for that animation.
+	veil.set_meta(&"handed", true)
+	veil.reparent(_overlay)
+	_handoff = {"veil": veil, "player": d.player, "card": d.options[choice].card, "lifted": lifted}
+	_answer(choice)
+	await _wait(0.6)
+	if _handoff.get("veil") == veil:
+		_take_pick_handoff(null, &"")
+
+
+## Whether `card_id` of `p` is already in the middle of the table, left there
+## by the card pick that just closed. Either way that pick's veil goes away.
+func _take_pick_handoff(p: PlayerState, card_id: StringName) -> bool:
+	if _handoff.is_empty():
+		return false
+	var handoff := _handoff
+	_handoff = {}
+	for origin: Variant in handoff.lifted:
+		if is_instance_valid(origin):
+			origin.modulate.a = 1.0
+	var veil: ColorRect = handoff.veil
+	if not is_instance_valid(veil):
+		return false
+	var fade := veil.create_tween()
+	fade.tween_property(veil, "modulate:a", 0.0, 0.25 / _speed)
+	fade.tween_callback(veil.queue_free)
+	return p != null and handoff.player == p and handoff.card == card_id
 
 
 ## Hot-seat: hide everything until the next human confirms they hold the device.
@@ -719,6 +1015,10 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 	for spec: Dictionary in buttons:
 		var b := UI.button(spec.text, spec.get("accent", UI.BORDER), 16)
 		b.custom_minimum_size = Vector2(96, 40)
+		if spec.get("shady", false):
+			_make_shady(b)
+		if spec.has("price"):
+			_add_price(b, spec.text, spec.price)
 		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		b.pressed.connect(spec.action)
 		if spec.has("tip"):
@@ -730,6 +1030,44 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 	_prompt.reset_size()
 	_prompt.position = Vector2(576 - _prompt.size.x / 2.0, 474 - _prompt.size.y)
 	UI.pop(_prompt, 1.08, 0.18)
+
+
+## Puts "text [icon] amount" inside `b`, for a choice that costs something
+## other than a plain number of coins. price: {icon, amount, color}.
+func _add_price(b: Button, text: String, price: Dictionary) -> void:
+	var ink: Color = b.get_theme_color("font_color") if b.has_theme_color_override("font_color") else UI.CREAM
+	b.text = ""
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 4)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(UI.label(text, 16, ink))
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(4, 0)
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(gap)
+	var icon := TextureRect.new()
+	icon.texture = UI.tex(price.icon)
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = Vector2(16, 16)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(icon)
+	row.add_child(UI.label(price.amount, 16, price.color, true))
+	b.add_child(row)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	b.custom_minimum_size.x = maxf(b.custom_minimum_size.x, row.get_combined_minimum_size().x + 24.0)
+
+
+## A choice the player is allowed to make but shouldn't feel good about.
+func _make_shady(b: Button) -> void:
+	var edge := UI.RED.darkened(0.45)
+	b.add_theme_stylebox_override("normal", UI.box(Color(UI.INK, 0.9), edge, 1, 4, 6))
+	b.add_theme_stylebox_override("hover", UI.box(UI.INK.lightened(0.06), UI.RED.darkened(0.2), 1, 4, 6))
+	b.add_theme_stylebox_override("pressed", UI.box(UI.INK, edge, 1, 4, 6))
+	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(state, UI.MUTED.darkened(0.2))
 
 
 func _hide_prompt() -> void:
@@ -894,7 +1232,7 @@ func present(e: GameEvent) -> void:
 		&"doubt_revealed":
 			await _anim_reveal(d.play, d.truthful)
 		&"claim_cancelled":
-			_play_sfx("shield")
+			_play_sfx("cancel")
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolved":
 			await _pop_stage(d.play)
@@ -903,7 +1241,7 @@ func present(e: GameEvent) -> void:
 		&"item_bought":
 			await _anim_item_bought(d)
 		&"item_gained":
-			_play_sfx("shield")
+			_play_sfx("item_get")
 			_float("+ %s" % (Loc.t("ITEM") if d.item.hidden and d.player != viewer else d.item.def.display_name.to_upper()), _anchor(d.player), UI.BLUE)
 			await _wait(0.35)
 		&"item_used":
@@ -922,7 +1260,7 @@ func present(e: GameEvent) -> void:
 		&"morale_lost":
 			await _anim_damage(d.target, d.amount)
 		&"morale_gained":
-			_play_sfx("shield")
+			_play_sfx("heal")
 			_float(Loc.t("+%d MORALE") % d.amount, _anchor(d.player), UI.GREEN, 22)
 			await _wait(0.4)
 		&"player_eliminated":
@@ -1032,34 +1370,12 @@ func _anim_claim(play: Play) -> void:
 	var card: CardView = _hero.character_card(play.ability().character_id)
 	if card != null and viewer != null:
 		UI.pop(card, 1.25, 0.3)
-	var notice := _no_doubt_notice(play)
-	if notice == "":
-		await _wait(0.8)
-		return
-	# Nobody asks a player who can't cover the fine: say why.
-	_show_prompt("[color=%s]%s[/color]" % [UI.hex(UI.RED), notice], [])
-	await _wait(1.8)
-	if _pending == null:
-		_hide_prompt()
-
-
-## Tells the humans who won't be asked about `play` that they are too poor to
-## call LIAR!. Empty when everyone at the screen can.
-func _no_doubt_notice(play: Play) -> String:
-	var cost := engine.config.doubt_cost
-	var broke := _humans.filter(func(p: PlayerState):
-		return p != play.actor and p.alive and not engine.can_doubt(p))
-	if broke.is_empty():
-		return ""
-	if viewer != null:
-		return Loc.t("You can't call LIAR!: you need %d coins to cover a wrong call.") % cost
-	var names := ", ".join(broke.map(func(p: PlayerState): return p.name))
-	return Loc.t("%s can't call LIAR!: %d coins are needed to cover a wrong call.") % [names, cost]
+	await _wait(0.8)
 
 
 func _anim_item_used(d: Dictionary) -> void:
 	var play: Play = d.play
-	_play_sfx("damage" if play.source.tags.has(&"damage") else "shield")
+	_play_sfx("item_%s" % play.source.id, "item_use")
 	_push_stage({"play": play, "arrow": null, "transient": true})
 	await _wait(0.9)
 
@@ -1173,9 +1489,10 @@ func _anim_reveal(play: Play, truthful: bool) -> void:
 		if shown != null:
 			shown.set_card(character_id, true, true)
 	if truthful:
-		_play_sfx("shield")
+		_play_sfx("truth")
 		await _stamp("TRUTH", UI.GREEN)
 	else:
+		_play_sfx("lie")
 		UI.shake(_stage, 12.0, 0.35)
 		await _stamp("LIE!", UI.RED)
 	if shown != null and is_instance_valid(shown):
@@ -1194,14 +1511,14 @@ func _anim_coins(d: Dictionary) -> void:
 		_float("+%d" % delta, here + Vector2(0, -18), UI.GOLD, 22)
 		await _wait(0.25)
 		return
-	if delta < 0 and (p == viewer or d.reason == &"shop"):
-		_play_sfx("spend")
-	var coins := clampi(absi(delta), 1, 6)
+	var coins := clampi(absi(delta), 1, MAX_COINS_SHOWN)
 	for i in coins:
 		var from := there if delta > 0 else here
 		var to := here if delta > 0 else there
-		_fly(UI.tex("res://assets/ui/coin.png"), from, to, Vector2(20, 20), 0.32, i * 0.045)
-	await _wait(0.3 + coins * 0.045)
+		_fly(UI.tex("res://assets/ui/coin.png"), from, to, Vector2(20, 20), COIN_FLIGHT, i * COIN_STAGGER)
+		# One clink per coin, as it lands.
+		_play_sfx_later("coin_%d" % (i % COIN_SOUNDS + 1), COIN_FLIGHT + i * COIN_STAGGER)
+	await _wait(COIN_FLIGHT + coins * COIN_STAGGER)
 	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
 
 
@@ -1229,7 +1546,7 @@ func _anim_item_bought(d: Dictionary) -> void:
 
 
 func _anim_item_broken(d: Dictionary) -> void:
-	_play_sfx("breaking")
+	_play_sfx("item_%s" % d.item.def.id, "breaking")
 	var at := _anchor(d.player)
 	var icon := _sprite(UI.tex(d.item.def.texture_path), at, Vector2(70, 73))
 	var tween := icon.create_tween()
@@ -1241,14 +1558,19 @@ func _anim_item_broken(d: Dictionary) -> void:
 	await _stamp("%s!" % d.item.def.display_name.to_upper(), UI.BLUE)
 
 
+## A card dealt from the deck: its place in the hand stays empty until it lands.
 func _anim_card_changed(p: PlayerState, index: int) -> void:
 	_float("NEW CARD", _anchor(p) + Vector2(0, -30), UI.CREAM, 16)
-	if p != viewer and _seats.has(p.id):
-		var card: CardView = _seats[p.id].card(index)
-		if card != null:
-			card.flip()
-	_fly(UI.tex(UI.CARD_BACK), _bank(), _card_center(p, index), Vector2(33, 60), 0.3)
-	await _wait(0.4)
+	_play_sfx("card_draw")
+	var card := _card_view(p, index)
+	_set_cards_shown([card], false)
+	var landing := card.size if card != null else Vector2(33, 60)
+	_fly_card(_bank(), _card_center(p, index), Vector2(33, 60), landing, 0.35)
+	await _wait(0.35)
+	_set_cards_shown([card], true)
+	if card != null and is_instance_valid(card):
+		UI.pop(card, 1.15, 0.2)
+	await _wait(0.15)
 
 
 ## A card goes back to the deck and another one comes out, in two clear beats
@@ -1294,11 +1616,16 @@ func _anim_card_traded(d: Dictionary) -> void:
 	var deck_spot := _bank() - card.size / 2.0
 
 	# The old card: out of the hand and up to the centre.
-	var in_hand: CardView = _hero.card(d.index) if mine else null
-	if in_hand != null:
-		in_hand.modulate.a = 0.0
+	var held := _take_pick_handoff(p, d.old)
+	var in_hand := _card_view(p, d.index)
+	_set_cards_shown([in_hand], false)
 	card.position = slot
 	card.scale = small
+	if held:
+		# The player just picked it: it is already there.
+		card.position = centre - card.size / 2.0
+		card.scale = Vector2.ONE
+		dim.modulate.a = 1.0
 	var enter := scene.create_tween().set_parallel()
 	for node: Control in [dim, heading, name_label, caption]:
 		enter.tween_property(node, "modulate:a", 1.0, 0.25 / _speed)
@@ -1323,7 +1650,7 @@ func _anim_card_traded(d: Dictionary) -> void:
 	# The new card: out of the deck, face down.
 	card.set_card(&"", false)
 	caption.text = "A NEW CARD COMES FROM THE DECK"
-	_play_sfx("shield")
+	_play_sfx("card_draw")
 	var draw := scene.create_tween().set_parallel()
 	draw.tween_property(caption, "modulate:a", 1.0, 0.2 / _speed)
 	draw.tween_property(card, "position", centre - card.size / 2.0, 0.45 / _speed) \
@@ -1361,12 +1688,10 @@ func _anim_card_traded(d: Dictionary) -> void:
 	await _wait(0.45)
 	if is_instance_valid(scene):
 		scene.queue_free()
-	if in_hand != null and is_instance_valid(in_hand):
-		in_hand.modulate.a = 1.0
-	if not mine and _seats.has(p.id):
-		var seat_card: CardView = _seats[p.id].card(d.index)
-		if seat_card != null:
-			seat_card.flip()
+	if mine and in_hand != null and is_instance_valid(in_hand) and d.index < p.cards.size():
+		# Already the new card when it shows up again, instead of turning over.
+		in_hand.set_card(p.cards[d.index], true)
+	_set_cards_shown([in_hand], true)
 
 
 ## The card given up gets its moment: the table dims, the card travels from
@@ -1408,21 +1733,28 @@ func _anim_card_lost(d: Dictionary) -> void:
 	var name_label := _reveal_label(scene, def.display_name.to_upper(), 46, UI.GOLD, centre.y + card.size.y / 2.0 + 14)
 	var caption := _reveal_label(scene, Loc.t("%s  ·  shuffled back into the deck") % def.title, 15, UI.CREAM, centre.y + card.size.y / 2.0 + 80)
 
-	# Face down, out of the loser's hand and up to the centre.
-	card.position = _anchor(loser) - card.size / 2.0
-	card.scale = Vector2.ONE * 0.25
 	var enter := scene.create_tween().set_parallel()
-	enter.tween_property(dim, "modulate:a", 1.0, 0.25 / _speed)
 	enter.tween_property(heading, "modulate:a", 1.0, 0.25 / _speed)
-	enter.tween_property(card, "position", centre - card.size / 2.0, 0.45 / _speed) \
-			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	enter.tween_property(card, "scale", Vector2.ONE, 0.45 / _speed) \
-			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	await _wait(0.75)
+	if _take_pick_handoff(loser, d.card):
+		# The loser just picked it: it is already there, face up.
+		card.set_card(d.card, true)
+		card.position = centre - card.size / 2.0
+		dim.modulate.a = 1.0
+		await _wait(0.2)
+	else:
+		# Face down, out of the loser's hand and up to the centre.
+		card.position = _anchor(loser) - card.size / 2.0
+		card.scale = Vector2.ONE * 0.25
+		enter.tween_property(dim, "modulate:a", 1.0, 0.25 / _speed)
+		enter.tween_property(card, "position", centre - card.size / 2.0, 0.45 / _speed) \
+				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		enter.tween_property(card, "scale", Vector2.ONE, 0.45 / _speed) \
+				.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		await _wait(0.75)
+		card.set_card(d.card, true, true)
+		await _wait(0.12)
 
 	# The reveal.
-	card.set_card(d.card, true, true)
-	await _wait(0.12)
 	_play_sfx("breaking")
 	_shake_screen(8.0)
 	card.highlight(UI.GOLD)
@@ -1465,12 +1797,28 @@ func _reveal_label(parent: Control, text: String, font_size: int, color: Color, 
 	return l
 
 
+## Two cards cross the table, face down; both places stay empty on the way.
 func _anim_cards_swapped(d: Dictionary) -> void:
 	var a := _card_center(d.a, d.a_index)
 	var b := _card_center(d.b, d.b_index)
-	_fly(UI.tex(UI.CARD_BACK), a, b, Vector2(44, 80), 0.45)
-	_fly(UI.tex(UI.CARD_BACK), b, a, Vector2(44, 80), 0.45)
-	await _wait(0.5)
+	var views: Array = [_card_view(d.a, d.a_index), _card_view(d.b, d.b_index)]
+	var a_size: Vector2 = views[0].size if views[0] != null else Vector2(44, 80)
+	var b_size: Vector2 = views[1].size if views[1] != null else Vector2(44, 80)
+	_set_cards_shown(views, false)
+	_play_sfx("card_draw")
+	_fly_card(a, b, a_size, b_size, 0.55)
+	_fly_card(b, a, b_size, a_size, 0.55)
+	await _wait(0.55)
+	for view: Variant in views:
+		if view != null and is_instance_valid(view):
+			# It lands face down; the viewer's own turns over on the next sync.
+			view.set_card(&"", false)
+	_set_cards_shown(views, true)
+	_play_sfx("card_draw")
+	for view: Variant in views:
+		if view != null and is_instance_valid(view):
+			UI.pop(view, 1.15, 0.2)
+	await _wait(0.25)
 
 
 func _anim_peek(d: Dictionary) -> void:
@@ -1514,9 +1862,40 @@ func _wait(seconds: float) -> void:
 	await get_tree().create_timer(seconds / _speed).timeout
 
 
-func _play_sfx(sound: String) -> void:
-	if _sfx.has(sound):
-		_sfx[sound].play()
+## Plays `sound`, or `fallback` if there is no such file.
+func _play_sfx(sound: String, fallback := "") -> void:
+	var player: AudioStreamPlayer = _sfx[sound] if _sfx.has(sound) else _load_sfx(sound)
+	if player != null:
+		player.play()
+	elif fallback != "":
+		_play_sfx(fallback)
+
+
+func _play_sfx_later(sound: String, delay: float) -> void:
+	get_tree().create_timer(delay / _speed).timeout.connect(_play_sfx.bind(sound))
+
+
+func _load_sfx(sound: String) -> AudioStreamPlayer:
+	var stream: AudioStream = null
+	for extension: String in ["wav", "mp3"]:
+		var path := "%s%s.%s" % [SOUND_DIR, sound, extension]
+		if ResourceLoader.exists(path):
+			stream = load(path)
+		elif extension == "wav" and FileAccess.file_exists(path):
+			# Not imported yet (the editor has not rescanned): read the file directly.
+			stream = AudioStreamWAV.load_from_file(path)
+		if stream != null:
+			break
+	var player: AudioStreamPlayer = null
+	if stream != null:
+		player = AudioStreamPlayer.new()
+		player.stream = stream
+		player.bus = Settings.SFX_BUS
+		# Quick repeats (coins) ring out instead of cutting each other off.
+		player.max_polyphony = 4
+		add_child(player)
+	_sfx[sound] = player
+	return player
 
 
 func _sprite(texture: Texture2D, center: Vector2, sprite_size: Vector2) -> TextureRect:
@@ -1543,6 +1922,18 @@ func _fly(texture: Texture2D, from: Vector2, to: Vector2, sprite_size: Vector2, 
 	tween.tween_property(sprite, "position", to - sprite_size / 2.0, time / _speed) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
 	tween.tween_callback(sprite.queue_free)
+
+
+## A face-down card that travels between two places, growing or shrinking to
+## the size of the card it lands on.
+func _fly_card(from: Vector2, to: Vector2, from_size: Vector2, to_size: Vector2, time: float) -> void:
+	var sprite := _sprite(UI.tex(UI.CARD_BACK), from, from_size)
+	var tween := sprite.create_tween().set_parallel()
+	tween.tween_property(sprite, "position", to - from_size / 2.0, time / _speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	tween.tween_property(sprite, "scale", to_size / from_size, time / _speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	tween.chain().tween_callback(sprite.queue_free)
 
 
 ## Text that drifts up from a point and fades.
@@ -1636,6 +2027,22 @@ func _coin_anchor(p: PlayerState) -> Vector2:
 		return _hero.coin_anchor()
 	var seat: SeatView = _seats.get(p.id)
 	return seat.coin_anchor() if seat != null else _bank()
+
+
+## The card on screen at `index` of the hand of `p`, null if it is not drawn.
+func _card_view(p: PlayerState, index: int) -> CardView:
+	if p == viewer:
+		return _hero.card(index)
+	var seat: SeatView = _seats.get(p.id)
+	return seat.card(index) if seat != null else null
+
+
+## Empties or fills the places of `cards` in their hands while the cards
+## themselves are flying across the table.
+func _set_cards_shown(cards: Array, shown: bool) -> void:
+	for card: Variant in cards:
+		if card != null and is_instance_valid(card):
+			card.modulate.a = 1.0 if shown else 0.0
 
 
 func _card_center(p: PlayerState, index: int) -> Vector2:

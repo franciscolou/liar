@@ -44,12 +44,18 @@ class ContemptOfCourt extends Ability:
 	func _init() -> void:
 		id = &"judge.contempt"
 		display_name = "Contempt of Court"
-		description = "Take up to %d coins from the player who doubted you." % FINE
+		description = "Take %d coins from the player who doubted you. Whatever they can't pay comes from the bank." % FINE
 		trigger_text = "When you are doubted and were telling the truth"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		return (event.type == &"doubt_failed" and event.data.defender == player
-				and event.data.doubter.alive and event.data.doubter.coins > 0)
+		return event.type == &"doubt_failed" and event.data.defender == player
 
 	func resolve(play: Play) -> void:
-		await play.engine.steal_coins(play.actor, play.event.data.doubter, FINE, play)
+		var engine := play.engine
+		var doubter: PlayerState = play.event.data.doubter
+		var taken := 0
+		if doubter.alive:
+			taken = await engine.steal_coins(play.actor, doubter, FINE, play)
+		# The court always collects in full.
+		if not engine.over:
+			await engine.gain_coins(play.actor, FINE - taken, &"contempt")

@@ -3,6 +3,9 @@ extends CanvasLayer
 ## One floating tooltip per screen. Controls register with TipLayer.attach
 ## and get an instant, rich-text hover card instead of Godot's default one.
 
+## Widest a tooltip gets before its text wraps.
+const MAX_WIDTH := 280.0
+
 static var current: TipLayer
 
 var _panel: PanelContainer
@@ -23,7 +26,6 @@ func _ready() -> void:
 	_text.fit_content = true
 	_text.scroll_active = false
 	_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_text.custom_minimum_size = Vector2(280, 0)
 	_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.add_child(_text)
 	add_child(_panel)
@@ -53,10 +55,18 @@ func show_tip(control: Control, bbcode: String) -> void:
 	if bbcode == "":
 		return
 	_owner = control
+	# Laid out unwrapped first, to learn how wide the text really is.
+	_text.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_text.custom_minimum_size = Vector2.ZERO
 	_text.text = bbcode
 	_panel.visible = true
 	_panel.modulate.a = 0.0
 	_panel.reset_size()
+	await get_tree().process_frame
+	if _owner != control or not is_instance_valid(control):
+		return
+	_text.custom_minimum_size = Vector2(minf(ceilf(_text.get_content_width()), MAX_WIDTH), 0)
+	_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	await get_tree().process_frame
 	if _owner != control or not is_instance_valid(control):
 		return

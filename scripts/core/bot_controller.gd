@@ -36,7 +36,7 @@ func decide(d: Decision) -> Variant:
 			await engine.think(0.3)
 			return _target(d)
 		Decision.Kind.DOUBT:
-			return _doubt(d.context.play)
+			return _doubt(d.context.play, d.options)
 		Decision.Kind.REACT:
 			return _react(d)
 		Decision.Kind.PICK:
@@ -93,15 +93,16 @@ func _target(d: Decision) -> Variant:
 	return _weighted(weights)
 
 
-func _doubt(play: Play) -> bool:
+## The stake to call LIAR! with, or false to let the claim pass.
+func _doubt(play: Play, stakes: Array) -> Variant:
 	var ability := play.ability()
-	if play.actor.has_status(&"truth_bound"):
+	if play.actor.has_status(&"truth_bound") or stakes.is_empty():
 		return false
 	# Holding every copy of the character proves the claim is a lie.
 	if player.cards.count(ability.character_id) >= engine.copies_in_play():
-		return true
-	# A wrong call would have to go on a tab the bot can't back up.
-	if player.coins < engine.config.doubt_cost and not player.has_character(&"vagabond"):
+		return stakes[0]
+	var stake := doubt_stake(player, stakes)
+	if stake == &"":
 		return false
 	# Bots grow impatient, so that a table of cowards still ends the match.
 	var chance := suspicion + minf(engine.turn_count * 0.002, 0.25)
@@ -115,9 +116,23 @@ func _doubt(play: Play) -> bool:
 	# Someone who has already claimed more characters than fit in a hand.
 	if _claims.get(play.actor.id, {}).size() > engine.config.hand_size:
 		chance += 0.15
-	if player.coins - engine.config.doubt_cost < 2:
+	if stake == GameEngine.STAKE_MORALE:
+		chance *= 0.4
+	elif player.coins - engine.config.doubt_cost < 2:
 		chance *= 0.5
-	return engine.rng.randf() < chance
+	return stake if engine.rng.randf() < chance else false
+
+
+## What a bot that isn't sure would put up, or &"" if nothing is worth it.
+static func doubt_stake(who: PlayerState, stakes: Array) -> StringName:
+	if stakes.has(GameEngine.STAKE_COINS):
+		return GameEngine.STAKE_COINS
+	# A tab the bot can back up beats bleeding for a hunch.
+	if stakes.has(GameEngine.STAKE_DEBT) and who.has_character(&"vagabond"):
+		return GameEngine.STAKE_DEBT
+	if stakes.has(GameEngine.STAKE_MORALE) and who.morale > 1:
+		return GameEngine.STAKE_MORALE
+	return &""
 
 
 func _react(d: Decision) -> Variant:

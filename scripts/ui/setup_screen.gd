@@ -7,6 +7,18 @@ const GAME_SCENE := "res://scenes/main.tscn"
 const MAX_SEATS := 6
 const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent"]
 const ANIM_SPEEDS := [50, 75, 100, 150, 200, 250, 300]  # percent
+## Two arrows chasing each other clockwise (the reset buttons).
+const CYCLE_ICON: Array[String] = [
+	"..###....",
+	".#...#...",
+	"#...#####",
+	"#....###.",
+	"..#...#..",
+	".###....#",
+	"#####...#",
+	"...#...#.",
+	"....###..",
+]
 
 var _config: GameConfig
 var _seat_count := 4
@@ -22,6 +34,7 @@ var _mode_picked: Button
 var _count_row: Control
 var _summary: Label
 var _start: Button
+var _resets: Array = []  # {button, is_default: Callable}
 var _problem: Label
 
 
@@ -108,9 +121,8 @@ func _build_players(box: VBoxContainer) -> void:
 		box.add_child(row)
 		_seat_rows.append({"row": row, "name": name_edit, "bot": bot})
 
-	var rules := UI.label("HOUSE RULES", 16, UI.GOLD, true)
 	box.add_child(HSeparator.new())
-	box.add_child(rules)
+	box.add_child(_header("HOUSE RULES", 16, _reset_rules, _rules_default))
 	box.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
 			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
 	box.add_child(_stepper("Starting coins", "",
@@ -132,6 +144,7 @@ func _build_match(box: VBoxContainer) -> void:
 	var title := UI.label("CHARACTERS", 20, UI.GOLD, true)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
+	head.add_child(_reset_button(_reset_characters, _characters_default))
 	_mode_random = UI.button("Random", UI.BORDER, 15)
 	_mode_random.custom_minimum_size = Vector2(110, 32)
 	_mode_random.pressed.connect(_set_random.bind(true))
@@ -175,7 +188,7 @@ func _build_match(box: VBoxContainer) -> void:
 	box.add_child(_summary)
 
 	box.add_child(HSeparator.new())
-	box.add_child(UI.label("ITEMS IN THE SHOP", 20, UI.GOLD, true))
+	box.add_child(_header("ITEMS IN THE SHOP", 20, _reset_items, _items_default))
 	var items := HBoxContainer.new()
 	items.add_theme_constant_override("separation", 12)
 	box.add_child(items)
@@ -310,12 +323,97 @@ func _refresh() -> void:
 		problem = "Pick at least 3 characters."
 	_problem.text = problem
 	_start.disabled = problem != ""
+	for reset: Dictionary in _resets:
+		reset.button.visible = not reset.is_default.call()
 
 
 func _style_toggle(b: Button, on: bool) -> void:
 	var accent := UI.GOLD if on else UI.BORDER.darkened(0.3)
 	b.add_theme_stylebox_override("normal", UI.box(accent.darkened(0.6) if on else UI.PANEL, accent, 2, 4, 6))
 	b.add_theme_color_override("font_color", UI.GOLD if on else UI.MUTED)
+
+
+## A section title with its reset button at the right end.
+func _header(text: String, size: int, action: Callable, is_default: Callable) -> Control:
+	var row := HBoxContainer.new()
+	row.custom_minimum_size = Vector2(0, 26)
+	var title := UI.label(text, size, UI.GOLD, true)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(title)
+	row.add_child(_reset_button(action, is_default))
+	return row
+
+
+## Red "cycling arrows" button that puts one section back to its defaults.
+## It only shows while `is_default` says the section was changed.
+func _reset_button(action: Callable, is_default: Callable) -> Button:
+	var b := UI.button("", UI.RED, 14)
+	b.custom_minimum_size = Vector2(30, 26)
+	b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	TipLayer.attach(b, "Reset")
+	var icon := Control.new()
+	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.draw.connect(_draw_cycle.bind(icon))
+	b.add_child(icon)
+	b.pressed.connect(func():
+		action.call()
+		_refresh())
+	_resets.append({"button": b, "is_default": is_default})
+	return b
+
+
+## The CYCLE_ICON bitmap, drawn as square pixels to match the pixel art.
+func _draw_cycle(icon: Control) -> void:
+	var cell := 2.0
+	var origin := ((icon.size - Vector2(CYCLE_ICON[0].length(), CYCLE_ICON.size()) * cell) / 2.0).round()
+	for y in CYCLE_ICON.size():
+		for x in CYCLE_ICON[y].length():
+			if CYCLE_ICON[y][x] == "#":
+				icon.draw_rect(Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell)), UI.CREAM)
+
+
+func _rules_default() -> bool:
+	var base := GameConfig.new()
+	return (_config.start_morale == base.start_morale
+			and _config.start_coins == base.start_coins
+			and _config.income == base.income
+			and _config.doubt_cost == base.doubt_cost
+			and _config.shop_slots == base.shop_slots
+			and is_equal_approx(_config.anim_speed, base.anim_speed))
+
+
+func _reset_rules() -> void:
+	var base := GameConfig.new()
+	_config.start_morale = base.start_morale
+	_config.start_coins = base.start_coins
+	_config.income = base.income
+	_config.doubt_cost = base.doubt_cost
+	_config.shop_slots = base.shop_slots
+	_config.anim_speed = base.anim_speed
+
+
+func _characters_default() -> bool:
+	var base := GameConfig.new()
+	return (_random and _config.character_count == base.character_count
+			and _config.copies_per_character == base.copies_per_character)
+
+
+func _reset_characters() -> void:
+	var base := GameConfig.new()
+	_random = true
+	_picked.clear()
+	_config.character_count = base.character_count
+	_config.copies_per_character = base.copies_per_character
+
+
+func _items_default() -> bool:
+	return not _items_on.values().has(false)
+
+
+func _reset_items() -> void:
+	for item_id: StringName in _items_on:
+		_items_on[item_id] = true
 
 
 func _on_start() -> void:

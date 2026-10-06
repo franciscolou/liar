@@ -21,13 +21,14 @@ extends RefCounted
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item}
 ##   claim_declared {play} / claim_resolving {play} (cancellable)
 ##   claim_cancelled {play} / claim_resolved {play}
-##   doubt_declared {play, doubter} / doubt_revealed {play, doubter, truthful}
+##   doubt_declared {play, doubter, stake} / doubt_revealed {play, doubter, truthful}
 ##     (play.params.standing: a claim that already resolved, doubted later on)
 ##   doubt_failed {play, doubter, defender} / doubt_succeeded {play, doubter, liar}
 ##   lie_succeeded {play, player}               private to the liar
 ##   targeted {play, target, blocked, reflected}
 ##   before_morale_loss {target, source, amount, cause, play}  cancellable
 ##   morale_lost {target, source, amount, cause, play} / morale_gained {player, amount}
+##     (source is null when the Morale was staked on a wrong LIAR! call)
 ##   damage_dealt {source, target, play}
 ##   player_eliminated {player, killer, play}
 ##   cards_changed {player, index, reason, old} / cards_swapped {a, a_index, b, b_index}

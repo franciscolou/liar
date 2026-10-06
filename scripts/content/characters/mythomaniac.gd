@@ -51,20 +51,16 @@ class CashOut extends Ability:
 		id = &"mythomaniac.cash_out"
 		display_name = "Cash Out"
 		description = "Discard this card for a new one and collect every coin in your Vault."
-		trigger_text = "On your turn, or when you lose Morale"
 		on_turn = true
 
 	func can_use(player: PlayerState, _engine: GameEngine) -> String:
 		return "" if player.counter(VAULT) > 0 else Loc.t("Vault is empty")
 
-	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		return event.type == &"morale_lost" and event.data.target == player and player.alive
-
 	func resolve(play: Play) -> void:
 		var engine := play.engine
 		var index := play.actor.cards.find(character_id)
 		if index == -1:
-			index = engine.random_card_index(play.actor)
+			index = await engine.pick_own_card(play.actor, Loc.t("%s, you don't hold the %s: choose the card to swap") % [play.actor.name, Content.character(character_id).display_name])
 		await engine.replace_card(play.actor, index, &"cash_out")
 		var stash := play.actor.counter(VAULT)
 		await engine.set_counter(play.actor, VAULT, 0)
@@ -72,6 +68,3 @@ class CashOut extends Ability:
 
 	func ai_weight(player: PlayerState, _engine: GameEngine) -> float:
 		return 0.4 * player.counter(VAULT)
-
-	func ai_react_weight(_event: GameEvent, player: PlayerState, _engine: GameEngine) -> float:
-		return 0.15 * player.counter(VAULT)

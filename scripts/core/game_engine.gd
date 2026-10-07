@@ -43,6 +43,8 @@ var aborted := false
 var tree: SceneTree
 
 var _reaction_depth := 0
+## The plays whose resolve() is running, innermost last.
+var _resolving: Array = []
 
 
 func setup(game_config: GameConfig) -> void:
@@ -146,14 +148,20 @@ func _reaction_window(event: GameEvent) -> void:
 		var options := reaction_options(p, event)
 		if options.is_empty():
 			continue
-		var choice: Variant
-		var early := _early_reactions(event)
+		var choice: Variant = null
+		var early: Dictionary = _early_reactions(event).get(p.id, {})
 		if event.data.get("auto") == p:
 			choice = options[0]
-		elif early.has(p.id):
-			# Already answered in the doubt window (null: let it through).
-			choice = _same_option(options, early[p.id])
+		elif _same_option(options, early.get("answer")) != null:
+			# Already answered in the doubt window. Once: it is spent.
+			choice = _same_option(options, early.answer)
+			early.answer = null
 		else:
+			# What they saw there and let through is not offered again.
+			options = options.filter(func(option: Dictionary) -> bool:
+				return _same_option(early.get("offered", []), option) == null)
+			if options.is_empty():
+				continue
 			var d := Decision.new(Decision.Kind.REACT, p)
 			d.options = options
 			d.context = {"event": event}
@@ -169,12 +177,14 @@ func _reaction_window(event: GameEvent) -> void:
 
 
 ## Answers given ahead of time, in the doubt window, to the reaction window
-## of `event`: {player id: option, or null to pass}.
+## of `event`: {player id: {answer: option or null to pass, offered: what they
+## chose from}}. They stand for the claim_resolving of that claim and for
+## whatever happens while it resolves.
 func _early_reactions(event: GameEvent) -> Dictionary:
 	var cause: Play = event.data.get("play")
-	if event.type != &"claim_resolving" or cause == null:
-		return {}
-	return _early_of(cause)
+	if event.type == &"claim_resolving" and cause != null:
+		return _early_of(cause)
+	return {} if _resolving.is_empty() else _early_of(_resolving.back())
 
 
 func _early_of(play: Play) -> Dictionary:
@@ -190,6 +200,23 @@ func _same_option(options: Array, wanted: Variant) -> Variant:
 			if option.kind == wanted.get("kind") and option.get("ability") == wanted.get("ability") and option.get("item") == wanted.get("item"):
 				return option
 	return null
+
+
+## What `player` may already answer `play` with as it is announced, instead
+## of waiting to be asked: the reactions to its claim_resolving and those
+## that see their own trigger coming (Ability.foresees).
+func early_options(player: PlayerState, play: Play) -> Array:
+	var out := reaction_options(player, GameEvent.new(&"claim_resolving", {"play": play}))
+	if not player.alive:
+		return out
+	for def in characters:
+		for ability: Ability in def.abilities:
+			if ability.info_only or not ability.foresees(play, player, self):
+				continue
+			var option := ability_option(player, ability)
+			if option.enabled and _same_option(out, option) == null:
+				out.append(option)
+	return out
 
 
 ## What `player` could play in response to `event`.
@@ -395,7 +422,7 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 		# The claim was proven: whoever let it pass may think again.
 		var early := _early_of(play)
 		for id: int in early.keys():
-			if early[id] == null:
+			if early[id].answer == null:
 				early.erase(id)
 	# The ability itself may send the card away (Fickle, Swindle...).
 	var copies := actor.cards.count(ability.character_id)
@@ -419,10 +446,9 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 
 
 ## `doubter` calls LIAR! on `play`, whose `truthful` must be up to date.
-## Returns true if it was a lie. Also used for claims that stay open to doubt
-## after they resolved (see voodooist.gd). When it was the truth, the caller
-## owes the actor a renew_proven_card(). `stake` is one of doubt_stakes():
-## what the doubter loses for a wrong call.
+## Returns true if it was a lie. When it was the truth, the caller owes the
+## actor a renew_proven_card(). `stake` is one of doubt_stakes(): what the
+## doubter loses for a wrong call.
 func challenge(doubter: PlayerState, play: Play, stake: StringName = STAKE_COINS) -> bool:
 	var actor := play.actor
 	play.doubter = doubter
@@ -587,8 +613,8 @@ func _doubt_window(play: Play) -> Dictionary:
 		d.options = doubt_stakes(p)
 		d.context = {
 			"play": play,
-			# Blocking the claim is the third way out of this window.
-			"reactions": reaction_options(p, GameEvent.new(&"claim_resolving", {"play": play})),
+			# Answering the claim with a reaction is the third way out of this window.
+			"reactions": early_options(p, play),
 		}
 		# Someone who can neither doubt nor react has nothing to be asked.
 		if not d.options.is_empty() or not d.context.reactions.is_empty():
@@ -628,7 +654,9 @@ func _poll_doubt(d: Decision, poll: DoubtPoll) -> void:
 	if poll.done:
 		return
 	if not d.context.reactions.is_empty():
-		_early_of(d.context.play)[d.player.id] = _same_option(d.context.reactions, answer)
+		_early_of(d.context.play)[d.player.id] = {
+			"answer": _same_option(d.context.reactions, answer), "offered": d.context.reactions,
+		}
 	poll.open -= 1
 	if answer is StringName and d.options.has(answer):
 		poll.result = {"player": d.player, "stake": answer}
@@ -646,24 +674,65 @@ class DoubtPoll extends RefCounted:
 
 
 func _resolve(play: Play) -> void:
-	if play.target != null:
+	# A mirror sends the play back at whoever aimed it, and that is a play
+	# aimed at them like any other: it goes back and forth for as long as
+	# there is a mirror to break, until it lands or a shield stops it.
+	while play.target != null and not over:
 		var targeted := await fire(&"targeted", {"play": play, "target": play.target})
 		if targeted.data.get("blocked", false):
 			play.blocked = true
-		elif targeted.data.get("reflected", false):
-			if play.target == play.actor:
-				play.blocked = true
-			else:
-				var original := play.actor
-				play.actor = play.target
-				play.target = original
-				play.reflected = true
+			break
+		if not targeted.data.get("reflected", false):
+			break
+		if play.target == play.actor:
+			# Aimed at themselves: there is nobody to send it back to.
+			play.blocked = true
+			break
+		var sender := play.actor
+		play.actor = play.target
+		play.target = sender
+		play.reflected = not play.reflected
 	if play.blocked or over or not play.actor.alive:
 		return
 	if play.target != null and not play.target.alive:
 		return
+	_resolving.append(play)
 	await fire(&"play_effect", {"play": play})
 	await play.source.resolve(play)
+	_resolving.erase(play)
+
+
+## For the passive items that answer a play aimed at their holder (they set
+## ItemDef.guard: shield.gd, mirror.gd). True if `instance` is the one that
+## acts on this `targeted` event: only one does, and a holder with more than
+## one kind of them chooses which.
+func guards(instance: ItemInstance, holder: PlayerState, event: GameEvent) -> bool:
+	if event.type != &"targeted" or event.data.target != holder:
+		return false
+	if not event.data.has("guard"):
+		event.data["guard"] = await _choose_guard(holder, event.data.play)
+	return event.data.guard == instance
+
+
+func _choose_guard(holder: PlayerState, play: Play) -> ItemInstance:
+	# The first of each kind held, in the order of the inventory.
+	var held: Array = []
+	for instance: ItemInstance in holder.items:
+		if instance.def.guard and not held.any(func(other: ItemInstance) -> bool: return other.def == instance.def):
+			held.append(instance)
+	if held.size() <= 1:
+		return null if held.is_empty() else held[0]
+	var d := Decision.new(Decision.Kind.PICK, holder)
+	d.prompt = Loc.t("%s's %s is aimed at you. What do you answer it with?") % [play.actor.name, play.source.display_name]
+	d.options = held.map(func(instance: ItemInstance) -> Dictionary: return {
+		"label": instance.def.display_name, "description": instance.def.description, "item": instance.def,
+	})
+	d.context = {
+		"play": play,
+		"weights": held.map(func(instance: ItemInstance) -> float: return instance.def.ai_guard_weight(play, holder)),
+	}
+	var index: int = await ask(d)
+	return held[index] if index >= 0 and index < held.size() else held[0]
 
 
 # --- coins -------------------------------------------------------------------

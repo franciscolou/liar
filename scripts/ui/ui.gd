@@ -21,6 +21,11 @@ const FONT_PATH := "res://assets/fonts/Jersey15-Regular.ttf"
 const CARD_BACK := "res://assets/Card.png"
 const ITEM_BACK := "res://assets/Item.png"
 const CARD_FRAME := "res://assets/ui/card_frame.png"
+## Folder of an alternative set of card art, looked up by file name; a card
+## missing from it keeps its own art. "" uses the art each character names.
+## "res://assets/cards_proto/" and "res://assets/cards_proto2/" are cut from
+## assets/prototype and assets/prototype2 by tools/gen_proto_cards.py.
+const CARD_ART_DIR := "res://assets/cards_proto2/"
 ## Transparent pixels at each end of the first rows of a card: the rounded
 ## corners of the card back.
 const CARD_CORNER := [3, 2, 1]
@@ -71,15 +76,37 @@ static func tex(path: String) -> Texture2D:
 
 
 ## The face of a card: its art under the card frame, with the corners rounded
-## like the card back. The plain art if the frame does not fit it.
+## like the card back. The plain art if the frame does not fit it. `path` is
+## the character's own art; CARD_ART_DIR may swap it for another set.
 static func card_face(path: String) -> Texture2D:
 	if not _faces.has(path):
-		_faces[path] = _frame_card(tex(path), tex(CARD_FRAME))
+		_faces[path] = _frame_card(tex(_card_art(path)), tex(CARD_FRAME))
 	return _faces[path]
 
 
+## Pixel art cards are drawn with hard pixels; art larger than the card is
+## scaled down smoothly.
+static func card_filter(texture: Texture2D) -> CanvasItem.TextureFilter:
+	if texture != null and texture.get_width() > tex(CARD_BACK).get_width():
+		return CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	return CanvasItem.TEXTURE_FILTER_NEAREST
+
+
+static func _card_art(path: String) -> String:
+	if CARD_ART_DIR == "":
+		return path
+	var other := CARD_ART_DIR + path.get_file()
+	return other if ResourceLoader.exists(other) or FileAccess.file_exists(other) else path
+
+
+## `art` may be a whole number of times the size of the frame: the frame and
+## the corners grow with it.
 static func _frame_card(art: Texture2D, frame: Texture2D) -> Texture2D:
-	if art == null or frame == null or art.get_size() != frame.get_size():
+	if art == null or frame == null:
+		return art
+	@warning_ignore("integer_division")
+	var zoom := art.get_width() / frame.get_width()
+	if zoom < 1 or Vector2i(art.get_size()) != Vector2i(frame.get_size()) * zoom:
 		return art
 	var image := art.get_image()
 	var overlay := frame.get_image()
@@ -91,12 +118,19 @@ static func _frame_card(art: Texture2D, frame: Texture2D) -> Texture2D:
 		layer.convert(Image.FORMAT_RGBA8)
 	var width := image.get_width()
 	var height := image.get_height()
+	if zoom > 1:
+		image.clear_mipmaps()
+		overlay.clear_mipmaps()
+		overlay.resize(width, height, Image.INTERPOLATE_NEAREST)
 	image.blend_rect(overlay, Rect2i(0, 0, width, height), Vector2i.ZERO)
+	var clear := Color(0, 0, 0, 0)
 	for row in CARD_CORNER.size():
-		for i: int in CARD_CORNER[row]:
-			for x: int in [i, width - 1 - i]:
-				for y: int in [row, height - 1 - row]:
-					image.set_pixel(x, y, Color(0, 0, 0, 0))
+		var cut: int = CARD_CORNER[row] * zoom
+		for y: int in [row * zoom, height - (row + 1) * zoom]:
+			image.fill_rect(Rect2i(0, y, cut, zoom), clear)
+			image.fill_rect(Rect2i(width - cut, y, cut, zoom), clear)
+	if zoom > 1:
+		image.generate_mipmaps()
 	return ImageTexture.create_from_image(image)
 
 

@@ -21,6 +21,8 @@ var targeting := Targeting.NONE
 ## Free-form labels. Statuses can block tags (a hexed player can't use
 ## anything tagged &"damage" or &"heal").
 var tags: Array = []
+## Puts a status on its target, with the user as its `by`.
+var inflicts := false
 
 
 ## "" when usable, otherwise the reason shown to the player.

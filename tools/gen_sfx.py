@@ -479,6 +479,23 @@ def fx_poof():
     return out
 
 
+def fx_conjure():
+    """Something printed out of thin air, row by row, and the chime when it is whole."""
+    out = silence(1.6)
+    # The hum of it coming, climbing all the way.
+    mix(out, tone(196.0, 0.86, 0.25, 0.9, "tri", glide=3.0, vibrato=0.012), 0.0, 0.2)
+    # The rows: quick glassy ticks, each a step higher.
+    steps = (0, 2, 4, 7, 9)
+    for i in range(14):
+        freq = 659.3 * 2 ** ((steps[i % 5] + 12 * (i // 5)) / 12.0)
+        mix(out, tone(freq, 0.09, 0.002, 0.05, "tri"), 0.03 + i * 0.058, 0.3)
+        mix(out, highpass(noise(0.012, 0.0004, 0.004, 231 + i), 5000), 0.03 + i * 0.058, 0.1)
+    # Whole: a bright chord.
+    for i, freq in enumerate((1568.0, 1975.5, 2349.3, 3136.0)):
+        mix(out, bell(freq, 0.6, 0.45), 0.86 + i * 0.012, 0.3)
+    return out
+
+
 def fx_shimmer():
     """One thing becoming two."""
     out = silence(0.8)
@@ -679,6 +696,23 @@ def fx_lasso():
     return out
 
 
+def fx_lasso_miss():
+    """The rope drawn back and cracked out at nothing: it shuts on air, drops and is dragged home."""
+    out = silence(1.5)
+    mix(out, bandpass(noise(0.16, 0.08, 0.06, 207), 500, lambda t: 1200 + 6000 * t), 0.0, 0.5)
+    mix(out, bandpass(noise(0.16, 0.12, 0.03, 208), 1500, lambda t: 3000 + 60000 * t), 0.14, 0.9)
+    # No crack: a dry flick where the loop closes on nothing.
+    mix(out, highpass(noise(0.014, 0.0003, 0.005, 221), 4000), 0.31, 0.45)
+    # It falls on the wood and bounces once.
+    for at, gain in ((0.56, 1.0), (0.70, 0.45)):
+        mix(out, lowpass(noise(0.08, 0.001, 0.03, 223), 700), at, 0.7 * gain)
+        mix(out, tone(105, 0.12, 0.001, 0.05, glide=0.7), at, 0.45 * gain)
+    # A let-down note, and the rope dragged back.
+    mix(out, tone(392.0, 0.3, 0.02, 0.22, "tri", glide=0.62), 0.74, 0.2)
+    mix(out, bandpass(noise(0.4, 0.12, 0.22, 225), 300, 1500), 1.05, 0.28)
+    return out
+
+
 def fx_wave():
     """A shockwave rolling out across the room: the thump, the air rushing
     after it, and a ring of brass on top."""
@@ -727,6 +761,7 @@ SOUNDS = {
     "fx_cash": fx_cash,
     "fx_gavel": fx_gavel,
     "fx_poof": fx_poof,
+    "fx_conjure": fx_conjure,
     "fx_shimmer": fx_shimmer,
     "fx_burst_fire": fx_burst_fire,
     "fx_vault": fx_vault,
@@ -744,6 +779,7 @@ SOUNDS = {
     "fx_whistle": fx_whistle,
     "fx_glint": fx_glint,
     "fx_lasso_spin": fx_lasso_spin,
+    "fx_lasso_miss": fx_lasso_miss,
     "fx_lasso": fx_lasso,
     "fx_wave": fx_wave,
     "fx_fuse": fx_fuse,
@@ -770,7 +806,7 @@ PEAKS = {
     "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "fx_burst_fire": 0.85, "fx_hex": 0.75,
     "item_death": 0.9,
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
-    "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
+    "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
 }
 

@@ -89,6 +89,7 @@ func settle() -> void:
 func _apply() -> void:
 	var def := Content.character(card_id) if face_up else null
 	_art.texture = UI.card_face(def.texture_path) if def != null else UI.tex(UI.CARD_BACK)
+	_art.texture_filter = UI.card_filter(_art.texture)
 
 
 func _tip() -> String:

@@ -20,6 +20,8 @@ var doubter: PlayerState
 var failed := false  # caught lying, or could not pay
 var cancelled := false
 var blocked := false
+## Going the other way from how it was aimed: actor and target traded
+## places an odd number of times (see mirror.gd).
 var reflected := false
 
 

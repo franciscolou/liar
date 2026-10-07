@@ -101,6 +101,7 @@ class TimeBomb extends Ability:
 		cost = 3
 		targeting = Targeting.OPPONENT
 		tags = [&"damage"]
+		inflicts = true
 
 	func target_candidates(play: Play) -> Array:
 		return play.engine.targetable_opponents(play.actor).filter(

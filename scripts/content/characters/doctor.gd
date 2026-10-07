@@ -49,5 +49,9 @@ class Antidote extends Ability:
 		var by: int = player.statuses.get(event.data.status, {}).get("by", -1)
 		return by != -1 and by != player.id
 
+	# No need to let it land first: it may be answered as it is announced.
+	func foresees(play: Play, player: PlayerState, _engine: GameEngine) -> bool:
+		return play.target == player and play.source.inflicts
+
 	func resolve(play: Play) -> void:
 		await play.engine.remove_status(play.actor, play.event.data.status)

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bjd6m1vnt24vo"
-path="res://.godot/imported/SpyLarge.png-c336c4abf24b99a4eec0506998d2fab2.ctex"
+uid="uid://byiy5h7lwaahw"
+path="res://.godot/imported/Bartender.png-ff4a9fe14c1a5aba986a66b436175da8.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/prototype/SpyLarge.png"
-dest_files=["res://.godot/imported/SpyLarge.png-c336c4abf24b99a4eec0506998d2fab2.ctex"]
+source_file="res://assets/cards_proto2/Bartender.png"
+dest_files=["res://.godot/imported/Bartender.png-ff4a9fe14c1a5aba986a66b436175da8.ctex"]
 
 [params]
 

@@ -71,11 +71,12 @@ func _init() -> void:
 	_chips.size = Vector2(78, 40)
 	add_child(_chips)
 
-	# The doll and the dynamite lean on the bottom corners from outside, so
-	# that neither covers what the box says; the stars circle the whole box.
+	# The doll sits on the bottom right corner, one leg along the edge and one
+	# over it, and the dynamite leans on the left one from outside: neither
+	# covers what the box says. The stars circle the whole box.
 	_status_fx.ring_centre = Vector2(SIZE.x / 2.0, SIZE.y * 0.44)
 	_status_fx.ring_reach = Vector2(SIZE.x / 2.0 + 26.0, 22.0)
-	_status_fx.doll_foot = Vector2(SIZE.x + 9, SIZE.y + 1)
+	_status_fx.doll_foot = Vector2(SIZE.x - 3, SIZE.y)
 	_status_fx.bomb_foot = Vector2(-9, SIZE.y + 1)
 	add_child(_status_fx)
 

@@ -32,6 +32,8 @@ const GAVEL_RAISED := 0.95  # radians the gavel is lifted before a knock
 const DRAIN_FRAMES := 12
 const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
+## How long an item takes to be printed out of the hat.
+const PRINT_TIME := 0.85
 
 ## The match screen (table.gd): untyped, it has no class name.
 var table: Variant
@@ -45,6 +47,9 @@ var _drain_frames: Dictionary = {}  # texture path -> Array of Texture2D
 ## The lasso of a Confiscate, turning overhead until it is thrown.
 var _lasso: RopeFx
 var _lasso_spin: Tween
+## The hat of a Hat Trick, set down and waiting for what comes out of it.
+var _hat: HatFx
+var _hat_owner: PlayerState
 
 
 func _init(match_table: Variant) -> void:
@@ -210,18 +215,101 @@ func _gavel(who: PlayerState, color: Color) -> void:
 	leave.tween_callback(gavel.queue_free)
 
 
-## A puff of smoke, and something that was not there a second ago.
+## The hat is set down mouth up and something stirs in it. What comes out is
+## only known once the item is gained (item_conjured); if nothing does, the
+## hat is put away when the play is over.
 func _fx_magician_hat_trick(play: Play) -> void:
+	drop_hat()
 	var here := _at(play.actor)
+	var speed: float = table._speed
+	var hat := HatFx.new()
+	# Room over it for the item, and under it for the hat itself.
+	hat.position = Vector2(here.x, clampf(here.y + 16.0, HatFx.ITEM.y + HatFx.LIFT + 26.0, size.y - 50.0))
+	hat.scale = Vector2(0.3, 0.3)
+	hat.modulate.a = 0.0
+	add_child(hat)
+	_hat = hat
+	_hat_owner = play.actor
 	_snd("fx_poof")
-	rise(here, UI.PURPLE.lightened(0.4), 8, 40.0)
+	var land := hat.create_tween().set_parallel()
+	land.tween_property(hat, "modulate:a", 1.0, 0.1 / speed)
+	land.tween_property(hat, "scale", Vector2.ONE, 0.22 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	await _wait(0.3)
-	burst(here, UI.PURPLE, 26, 130.0, 0.7, -40.0, 11.0)
-	burst(here, SMOKE.lightened(0.3), 14, 90.0, 0.8, -60.0, 12.0)
-	ring(here, Color.WHITE, 8.0, 80.0, 0.3, 3.0)
-	await _wait(0.25)
-	rise(here, UI.GOLD, 12, 80.0)
+	if not is_instance_valid(hat):
+		return
+	burst(hat.position, SMOKE.lightened(0.3), 12, 90.0, 0.6, -60.0, 10.0)
+	ring(hat.position, UI.PURPLE.lightened(0.3), 8.0, 60.0, 0.3, 3.0)
+	hat.create_tween().tween_property(hat, "glow", 1.0, 0.25 / speed)
 	await _wait(0.3)
+
+
+## True while the hat of `who` is out with nothing pulled from it yet.
+func conjuring(who: PlayerState) -> bool:
+	return _hat != null and is_instance_valid(_hat) and _hat_owner == who
+
+
+## An item printed into being over the hat, row by row from the bottom up,
+## and then sent to `home`, its place in the inventory. `label` is what the
+## table calls it once it is whole.
+func item_conjured(texture: Texture2D, home: Vector2, label: String) -> void:
+	var hat := _hat
+	_hat = null
+	_hat_owner = null
+	if hat == null or not is_instance_valid(hat):
+		return
+	var speed: float = table._speed
+	hat.set_item(texture)
+	_snd("fx_conjure")
+	hat.create_tween().tween_property(hat, "printed", 1.0, PRINT_TIME / speed)
+	await _wait(PRINT_TIME)
+	if not is_instance_valid(hat):
+		return
+
+	# The last row lands: it is a real thing now.
+	var middle := hat.position + hat.item_middle()
+	hat.set_item(null)
+	var item: TextureRect = table._sprite(texture, middle, HatFx.ITEM)
+	flash(Color(0.8, 0.65, 1.0, 0.12), 0.15)
+	ring(middle, Color.WHITE, 12.0, 76.0, 0.3, 4.0)
+	burst(middle, UI.GOLD, 14, 180.0, 0.45, 220.0)
+	burst(middle, UI.PURPLE.lightened(0.35), 10, 120.0, 0.5, -40.0)
+	UI.pop(item, 1.25, 0.18)
+	table._float(label, middle + Vector2(0, -HatFx.ITEM.y / 2.0 - 10.0), UI.BLUE)
+	var leave := hat.create_tween()
+	leave.tween_property(hat, "glow", 0.0, 0.2 / speed)
+	leave.tween_property(hat, "modulate:a", 0.0, 0.2 / speed)
+	leave.tween_callback(hat.queue_free)
+	await _wait(0.4)
+	if not is_instance_valid(item):
+		return
+
+	# And into the pocket.
+	var pocket := item.create_tween().set_parallel()
+	pocket.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	pocket.tween_property(item, "position", home - HatFx.ITEM / 2.0, 0.3 / speed)
+	pocket.tween_property(item, "scale", Vector2.ONE * 0.5, 0.3 / speed)
+	await _wait(0.3)
+	_snd("item_get")
+	rise(home, UI.PURPLE.lightened(0.4), 6, 16.0)
+	if is_instance_valid(item):
+		item.queue_free()
+
+
+## Puts away a hat nothing came out of.
+func drop_hat() -> void:
+	if _hat != null and is_instance_valid(_hat):
+		var leave := _hat.create_tween()
+		leave.tween_property(_hat, "modulate:a", 0.0, 0.15 / table._speed)
+		leave.tween_callback(_hat.queue_free)
+	_hat = null
+	_hat_owner = null
+
+
+## Clears away what an effect left out waiting for something that never
+## came: the play is over.
+func put_away() -> void:
+	drop_lasso()
+	drop_hat()
 
 
 func _fx_magician_counterfeit(play: Play) -> void:
@@ -520,13 +608,10 @@ func drop_lasso() -> void:
 	_lasso = null
 
 
-## An item changing inventory at the end of a rope: the loop is thrown from
-## `thief` to where the item lies (`item_at`), drawn tight around it and
-## hauled back to `home`, its place in the thief's inventory. `caught` is
-## called the moment the loop closes: the item is no longer where it was.
-func item_roped(thief: PlayerState, texture: Texture2D, item_at: Vector2, home: Vector2, caught: Callable) -> void:
+## The lasso of `thief`, in hand and ready to be thrown: the one turning
+## over their head if there is one, a new one otherwise.
+func _lasso_in_hand(thief: PlayerState) -> RopeFx:
 	var here := _at(thief)
-	var speed: float = table._speed
 	var rope := _lasso
 	if _lasso_spin != null:
 		_lasso_spin.kill()
@@ -539,23 +624,39 @@ func item_roped(thief: PlayerState, texture: Texture2D, item_at: Vector2, home: 
 		rope.squash = 0.4
 		add_child(rope)
 	rope.modulate.a = 1.0
+	return rope
 
+
+## Draws the loop of `rope` back and lashes it out at `at`. False if the rope
+## did not last that long.
+func _throw_lasso(rope: RopeFx, at: Vector2) -> bool:
+	var speed: float = table._speed
 	# The wind-up: the loop is drawn back, away from what it is after.
-	_snd("fx_lasso")
 	rope.slack = 0.3
-	var back := here + (here - item_at).normalized() * 46.0 + Vector2(0, -34)
+	var back := rope.hand + (rope.hand - at).normalized() * 46.0 + Vector2(0, -34)
 	var draw_back := rope.create_tween().set_parallel()
 	draw_back.tween_property(rope, "tip", back, 0.14 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	draw_back.tween_property(rope, "loop", 18.0, 0.14 / speed)
 	await _wait(0.14)
 	if not is_instance_valid(rope):
-		return
+		return false
 	# The strike: nothing, and then all of it at once, like a whip.
 	rope.slack = 0.12
-	rope.create_tween().tween_method(rope.fling.bind(rope.tip, item_at), 0.0, 1.0, 0.16 / speed) \
+	rope.create_tween().tween_method(rope.fling.bind(rope.tip, at), 0.0, 1.0, 0.16 / speed) \
 			.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
 	await _wait(0.17)
-	if not is_instance_valid(rope):
+	return is_instance_valid(rope)
+
+
+## An item changing inventory at the end of a rope: the loop is thrown from
+## `thief` to where the item lies (`item_at`), drawn tight around it and
+## hauled back to `home`, its place in the thief's inventory. `caught` is
+## called the moment the loop closes: the item is no longer where it was.
+func item_roped(thief: PlayerState, texture: Texture2D, item_at: Vector2, home: Vector2, caught: Callable) -> void:
+	var speed: float = table._speed
+	var rope := _lasso_in_hand(thief)
+	_snd("fx_lasso")
+	if not await _throw_lasso(rope, item_at):
 		return
 
 	# The catch: it lands with a crack and is drawn tight.
@@ -604,6 +705,50 @@ func item_roped(thief: PlayerState, texture: Texture2D, item_at: Vector2, home: 
 	await _wait(0.2)
 	if is_instance_valid(item):
 		item.queue_free()
+
+
+## A rope thrown at an inventory with nothing in it: the loop shuts on air
+## where the first item would be (`at`), drops, and is dragged back empty.
+func rope_missed(thief: PlayerState, at: Vector2) -> void:
+	var speed: float = table._speed
+	var rope := _lasso_in_hand(thief)
+	_snd("fx_lasso_miss")
+	if not await _throw_lasso(rope, at):
+		return
+
+	# Nothing there: no crack, no jolt, only the loop closing on itself.
+	burst(at, SMOKE.lightened(0.4), 6, 70.0, 0.35, -30.0, 7.0)
+	rope.slack = 0.05
+	rope.twang(2.0)
+	rope.create_tween().tween_property(rope, "loop", 6.0, 0.08 / speed)
+	await _wait(0.22)
+	if not is_instance_valid(rope):
+		return
+
+	# Then it is only a rope: it drops where it is and lies there.
+	var ground := minf(at.y + 36.0, size.y - 22.0)
+	rope.slack = 0.28
+	if rope.hand.y < ground:
+		rope.ground = ground + 6.0
+	var fall := rope.create_tween().set_parallel()
+	fall.tween_property(rope, "tip:y", ground, 0.34 / speed).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	fall.tween_property(rope, "loop", 13.0, 0.2 / speed)
+	fall.tween_property(rope, "squash", 0.3, 0.2 / speed)
+	await _wait(0.26)
+	burst(Vector2(at.x, ground), EARTH.lightened(0.3), 5, 50.0, 0.3, 120.0, 6.0)
+	table._float("NOTHING!", at + Vector2(0, -26), UI.MUTED, 22)
+	await _wait(0.5)
+	if not is_instance_valid(rope):
+		return
+
+	# Dragged home along the table, with nothing in it.
+	rope.slack = 0.3
+	var drag := rope.create_tween()
+	drag.tween_property(rope, "tip", rope.hand + Vector2(0, 14), 0.42 / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	drag.parallel().tween_property(rope, "modulate:a", 0.0, 0.14 / speed).set_delay(0.3 / speed)
+	drag.tween_callback(rope.queue_free)
+	await _wait(0.46)
 
 
 ## A red cross; the rest is the heal itself.
@@ -1094,6 +1239,8 @@ class RopeFx extends Control:
 	## How much longer the rope is than the straight way from hand to loop:
 	## 0 is taut, 0.3 hangs and whips about.
 	var slack := 0.2
+	## What the rope lies on when it is let go: no point of it gets below.
+	var ground := INF
 
 	var _points := PackedVector2Array()
 	var _before := PackedVector2Array()
@@ -1149,6 +1296,7 @@ class RopeFx extends Control:
 		for i in range(1, LINKS - 1):
 			var now := _points[i]
 			_points[i] = now + (now - _before[i]) * DRAG + Vector2(0, GRAVITY) * delta * delta
+			_points[i].y = minf(_points[i].y, ground)
 			_before[i] = now
 		for pass_ in 8:
 			_points[0] = hand
@@ -1205,3 +1353,171 @@ class RopeFx extends Control:
 				if not cells.has(cell):
 					cells[cell] = STRANDS[int((run + length * along) / TWIST) % STRANDS.size()]
 			run += length
+
+
+## The Magician's hat, set down mouth up, and what it brings into being: an
+## item printed row by row over it, from the bottom up, under a ring of light
+## that climbs with the last row. Its origin is the middle of the mouth.
+class HatFx extends Control:
+	const PIXEL := 4.0
+	## The size the item is printed at, and how far over the mouth it floats.
+	const ITEM := Vector2(92, 96)
+	const LIFT := 16.0
+	## K: outline, B: felt, H: where the light catches it, R: the band,
+	## M: the inside of the hat.
+	const SHAPE: Array[String] = [
+		".....KKKKKKKKKKK.....",
+		"..KKKHHHHHHHHHHHKKK..",
+		".KHHHKMMMMMMMMMKBBBK.",
+		"KHHHHKMMMMMMMMMKBBBBK",
+		".KHHHBKKKKKKKKKBBBBK.",
+		"..KKKBBBBBBBBBBBKKK..",
+		".....KRRRRRRRRRK.....",
+		".....KRRRRRRRRRK.....",
+		".....KHBBBBBBBBK.....",
+		".....KHBBBBBBBBK.....",
+		".....KHBBBBBBBBK.....",
+		".....KHBBBBBBBBK.....",
+		".....KHBBBBBBBBK.....",
+		"......KKKKKKKKK......",
+	]
+	## The cell of SHAPE the origin sits on: the middle of the mouth.
+	const MOUTH := Vector2(10.5, 3.0)
+	const INK := {"K": Color("0d0b12"), "B": Color("262230"), "H": Color("5d5670"), "R": Color("c22a22")}
+	const DEPTH := Color("120a1c")
+	const SPELL := Color("c79bff")
+	const SPELL_DEEP := Color("7a45c9")
+	const GOLD := Color("ffd76a")
+	const MOTES := 10
+
+	## How much of the item is there, 0 to 1 from the bottom up.
+	var printed := 0.0
+	## How hard the inside of the hat is shining, 0 to 1.
+	var glow := 0.0
+
+	var _item: Texture2D
+	## The shape of the item with nothing in it: what is yet to be printed.
+	var _outline: Texture2D
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
+	func _process(delta: float) -> void:
+		_time += delta
+		queue_redraw()
+
+	## What the hat prints from now on; null takes it away.
+	func set_item(texture: Texture2D) -> void:
+		_item = texture
+		_outline = null
+		printed = 0.0
+		var image := texture.get_image() if texture != null else null
+		if image == null:
+			return
+		if image.is_compressed():
+			image.decompress()
+		image.convert(Image.FORMAT_RGBA8)
+		var blank := Image.create_empty(image.get_width(), image.get_height(), false, Image.FORMAT_RGBA8)
+		blank.fill(Color(1, 1, 1, 0))
+		var white := blank.duplicate() as Image
+		white.fill(Color.WHITE)
+		blank.blit_rect_mask(white, image, Rect2i(Vector2i.ZERO, image.get_size()), Vector2i.ZERO)
+		_outline = ImageTexture.create_from_image(blank)
+
+	## The middle of the printed item, from the origin.
+	func item_middle() -> Vector2:
+		return Vector2(0, -LIFT - ITEM.y / 2.0)
+
+	func _draw() -> void:
+		var corner := Vector2(-ITEM.x / 2.0, -LIFT - ITEM.y)
+		var rows := int(ITEM.y / PIXEL)
+		var done := clampi(floori(printed * rows), 0, rows)
+		# The row being laid down right now, from the origin.
+		var level := corner.y + ITEM.y - done * PIXEL
+		var printing := _item != null and printed < 1.0
+		if printing:
+			# What the hat throws up at it.
+			for x: float in [-28.0, -12.0, 4.0, 20.0]:
+				var beam := 0.1 + 0.07 * sin(_time * 11.0 + x)
+				draw_rect(Rect2(x, level, 8.0, -level), Color(SPELL, beam * glow))
+		_halo(Vector2.ZERO, Vector2(54, 10), 16, 2.2, false)
+		for y in SHAPE.size():
+			for x in SHAPE[y].length():
+				var mark := SHAPE[y][x]
+				if mark == ".":
+					continue
+				var ink: Color = INK.get(mark, DEPTH)
+				if mark == "M":
+					ink = DEPTH.lerp(SPELL, glow * (0.75 + 0.25 * sin(_time * 9.0 + x)))
+				elif mark == "K":
+					# Lit from inside, its edge shows against the dark of the table.
+					ink = ink.lerp(SPELL_DEEP, 0.25 + 0.45 * glow)
+				draw_rect(Rect2((Vector2(x, y) - MOUTH) * PIXEL, Vector2(PIXEL, PIXEL)), ink)
+		_halo(Vector2.ZERO, Vector2(54, 10), 16, 2.2, true)
+		if _item == null:
+			return
+		var reach := Vector2(ITEM.x / 2.0 + 16.0, 9.0)
+		if printing:
+			_halo(Vector2(0, level), reach, 18, -3.4, false)
+		if _outline != null:
+			# Yet to come: every other row of its shape, like something seen through.
+			for row in range(0, rows - done, 2):
+				_strip(_outline, corner, row, Color(SPELL, 0.32 + 0.1 * sin(_time * 13.0 + row)))
+		if done > 0:
+			var part := done * PIXEL / ITEM.y
+			var source := _item.get_size()
+			draw_texture_rect_region(_item, Rect2(corner.x, level, ITEM.x, done * PIXEL),
+					Rect2(0, source.y * (1.0 - part), source.x, source.y * part))
+		if not printing:
+			return
+		if _outline != null:
+			# Fresh off the line it is still white hot.
+			for step in mini(3, done):
+				_strip(_outline, corner, rows - done + step, Color(1.0, 0.92, 1.0, 0.8 - 0.27 * step))
+		# The line itself, and the head running along it.
+		draw_rect(Rect2(corner.x - 8.0, level - PIXEL, ITEM.x + 16.0, PIXEL), Color(SPELL_DEEP, 0.9))
+		draw_rect(Rect2(corner.x, level - PIXEL, ITEM.x, PIXEL), Color.WHITE)
+		var sweep := 0.5 + 0.5 * sin(_time * 26.0)
+		var head := snappedf(corner.x + sweep * (ITEM.x - 8.0), PIXEL)
+		draw_rect(Rect2(head - 2.0, level - PIXEL - 4.0, 12.0, 12.0), GOLD)
+		draw_rect(Rect2(head, level - PIXEL - 2.0, 8.0, 8.0), Color.WHITE)
+		_halo(Vector2(0, level), reach, 18, -3.4, true)
+		_motes(corner, level)
+
+	## One row of `texture`, `row` rows down from the top of the item.
+	func _strip(texture: Texture2D, corner: Vector2, row: int, tint: Color) -> void:
+		var source := texture.get_size()
+		var step := PIXEL / ITEM.y
+		draw_texture_rect_region(texture, Rect2(corner.x, corner.y + row * PIXEL, ITEM.x, PIXEL),
+				Rect2(0, source.y * step * row, source.x, source.y * step), tint)
+
+	## Half of a ring of lights lying flat about `at`, going round: the far
+	## half, drawn before what it circles, or the `near` one, drawn after.
+	func _halo(at: Vector2, radius: Vector2, dots: int, turn: float, near: bool) -> void:
+		if glow <= 0.0:
+			return
+		for i in dots:
+			var angle := TAU * i / dots + _time * turn
+			if (sin(angle) >= 0.0) != near:
+				continue
+			var ink := GOLD if i % 3 == 0 else SPELL
+			_dot(at + Vector2(cos(angle), sin(angle)) * radius, Color(ink, glow * (0.95 if near else 0.45)))
+
+	## Sparks that come off the line and drift up; every third one is a star.
+	func _motes(corner: Vector2, level: float) -> void:
+		for i in MOTES:
+			var seed_ := i * 0.618
+			var life := fposmod(_time * (1.1 + 0.6 * fposmod(seed_ * 3.7, 1.0)) + seed_, 1.0)
+			var at := Vector2(corner.x + ITEM.x * fposmod(seed_ * 7.3, 1.0) + sin(_time * 5.0 + i) * 4.0,
+					level - 8.0 - life * 46.0)
+			var shade: Color = [Color.WHITE, GOLD, SPELL][i % 3]
+			var ink := Color(shade, 1.0 - life * life)
+			_dot(at, ink)
+			if i % 3 == 0 and life < 0.6:
+				for arm: Vector2 in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
+					_dot(at + arm * PIXEL, Color(ink, ink.a * 0.7))
+
+	func _dot(at: Vector2, ink: Color) -> void:
+		draw_rect(Rect2((at / PIXEL).floor() * PIXEL, Vector2(PIXEL, PIXEL)), ink)

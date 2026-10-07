@@ -63,6 +63,8 @@ class Confiscate extends Ability:
 		var engine := play.engine
 		var target := play.target
 		if target.items.is_empty():
+			# Only a rope that came back off a mirror is thrown at empty hands.
+			await engine.fire(&"item_missed", {"thief": play.actor, "victim": target})
 			return
 		var index := 0
 		if target.items.size() > 1:

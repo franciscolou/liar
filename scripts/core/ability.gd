@@ -23,6 +23,13 @@ var trigger_text := "":
 		return Loc.t(trigger_text)
 
 
+## For reactions: true when `player` may already answer `play` with this as
+## it is announced, in the doubt window, because what triggers it is plain to
+## see coming (doctor.gd). It is still claimed when its own trigger comes.
+func foresees(_play: Play, _player: PlayerState, _engine: GameEngine) -> bool:
+	return false
+
+
 func kind_label() -> String:
 	if info_only:
 		return Loc.t("Passive")

@@ -51,6 +51,7 @@ class MickeyFinn extends Ability:
 		on_turn = true
 		cost = 3
 		targeting = Targeting.OPPONENT
+		inflicts = true
 
 	func target_candidates(play: Play) -> Array:
 		return play.engine.targetable_opponents(play.actor).filter(

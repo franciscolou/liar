@@ -21,10 +21,10 @@ extends RefCounted
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item}
 ##   item_stolen {thief, victim, item, index}   a held item changes inventory as it is
 ##     (index: where it was in the victim's inventory)
+##   item_missed {thief, victim}                the victim had no item to take
 ##   claim_declared {play} / claim_resolving {play} (cancellable)
 ##   claim_cancelled {play} / claim_resolved {play}
 ##   doubt_declared {play, doubter, stake} / doubt_revealed {play, doubter, truthful}
-##     (play.params.standing: a claim that already resolved, doubted later on)
 ##   doubt_failed {play, doubter, defender} / doubt_succeeded {play, doubter, liar}
 ##   lie_succeeded {play, player}               private to the liar
 ##   targeted {play, target, blocked, reflected}

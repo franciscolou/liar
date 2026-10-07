@@ -26,6 +26,7 @@ class UnderOath extends Ability:
 		description = "Choose a player. They can't lie until the end of their next turn."
 		on_turn = true
 		targeting = Targeting.OPPONENT
+		inflicts = true
 
 	func target_candidates(play: Play) -> Array:
 		return play.engine.targetable_opponents(play.actor).filter(

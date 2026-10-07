@@ -8,12 +8,11 @@ func _init() -> void:
 	price = 5
 	texture_path = "res://assets/items/shield.png"
 	kind = Kind.PASSIVE
+	guard = true
 
 
 func on_held_event(event: GameEvent, holder: PlayerState, instance: ItemInstance, engine: GameEngine) -> void:
-	if event.type != &"targeted" or event.data.target != holder:
-		return
-	if event.data.get("blocked", false) or event.data.get("reflected", false) or event.data.play.reflected:
+	if not await engine.guards(instance, holder, event):
 		return
 	event.data["blocked"] = true
 	await engine.break_item(holder, instance)

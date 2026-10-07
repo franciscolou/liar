@@ -14,6 +14,9 @@ var texture_path := ""
 var kind := Kind.ACTIVE
 ## Always on sale: takes no shop slot, survives rerolls and can't be banned.
 var fixed := false
+## A passive item that answers a play aimed at its holder (shield.gd,
+## mirror.gd). Only one of them acts on a play: see GameEngine.guards().
+var guard := false
 var status_defs: Dictionary = {}
 
 
@@ -29,6 +32,11 @@ func kind_label() -> String:
 		Kind.REACTION:
 			return Loc.t("Reaction")
 	return Loc.t("Use on your turn")
+
+
+## How much a bot wants this one, of the guards it holds, to answer `play`.
+func ai_guard_weight(_play: Play, _holder: PlayerState) -> float:
+	return 1.0
 
 
 ## How much a bot wants to buy this (0 = never).

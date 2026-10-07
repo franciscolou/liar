@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cfjllu8drcafw"
-path="res://.godot/imported/SpyLargeTest.png-4be78614cc7a98496aee2efc7e76b054.ctex"
+uid="uid://be2ss2er53m81"
+path="res://.godot/imported/Assassin.png-797be3beeb822d08a228a2d3fbfa69c7.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/prototype/SpyLargeTest.png"
-dest_files=["res://.godot/imported/SpyLargeTest.png-4be78614cc7a98496aee2efc7e76b054.ctex"]
+source_file="res://assets/prototype2/Assassin.png"
+dest_files=["res://.godot/imported/Assassin.png-797be3beeb822d08a228a2d3fbfa69c7.ctex"]
 
 [params]
 

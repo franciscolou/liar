@@ -1350,10 +1350,6 @@ func present(e: GameEvent) -> void:
 		&"claim_declared":
 			await _anim_claim(d.play)
 		&"doubt_declared":
-			if d.play.params.get("standing", false):
-				# Doubting something claimed long ago: bring it back on stage.
-				_push_stage({"play": d.play, "arrow": null, "transient": true})
-				await _wait(0.6)
 			await _anim_doubt(d.doubter)
 		&"doubt_revealed":
 			await _anim_reveal(d.play, d.truthful)
@@ -1361,16 +1357,14 @@ func present(e: GameEvent) -> void:
 			_play_sfx("cancel")
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolved":
-			_play_fx.drop_lasso()
+			_play_fx.put_away()
 			await _pop_stage(d.play)
 		&"item_buying":
 			_sync_shop()
 		&"item_bought":
 			await _anim_item_bought(d)
 		&"item_gained":
-			_play_sfx("item_get")
-			_float("+ %s" % (Loc.t("ITEM") if d.item.hidden and d.player != viewer else d.item.def.display_name.to_upper()), _anchor(d.player), UI.BLUE)
-			await _wait(0.35)
+			await _anim_item_gained(d)
 		&"targeted":
 			_play_fx.last_attacker = d.play.actor
 		&"play_effect":
@@ -1383,6 +1377,8 @@ func present(e: GameEvent) -> void:
 			await _anim_item_broken(d)
 		&"item_stolen":
 			await _anim_item_stolen(d)
+		&"item_missed":
+			await _play_fx.rope_missed(d.thief, _item_spot(d.victim, 0))
 		&"shop_restocked":
 			_sync_shop()
 			_pop_shop_slot(d.slot)
@@ -1834,6 +1830,21 @@ func _anim_item_bought(d: Dictionary) -> void:
 	var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
 	_fly(texture, _shop_point(d.slot, instance.def), _anchor(d.player), Vector2(48, 50), 0.4)
 	await _wait(0.42)
+
+
+## An item out of nowhere. Out of the Magician's hat it is printed into being
+## first, and only then goes to its place in the inventory.
+func _anim_item_gained(d: Dictionary) -> void:
+	var instance: ItemInstance = d.item
+	var concealed: bool = instance.hidden and d.player != viewer
+	var label := "+ %s" % (Loc.t("ITEM") if concealed else instance.def.display_name.to_upper())
+	if _play_fx.conjuring(d.player):
+		var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
+		await _play_fx.item_conjured(texture, _item_spot(d.player, d.player.items.size() - 1), label)
+		return
+	_play_sfx("item_get")
+	_float(label, _anchor(d.player), UI.BLUE)
+	await _wait(0.35)
 
 
 func _anim_item_broken(d: Dictionary) -> void:

@@ -23,10 +23,12 @@ const RING_TILT := -0.07
 const TURBULENCE := 1.0
 ## Seconds for a look to fade in or out.
 const FADE := 0.25
-## How far the doll has slid over, in radians: it leans on the box to its left.
-const SLUMP := -0.24
-## Its hips, above the middle of its base: what the slump turns around.
-const HIP := Vector2(0, -5)
+## The doll, from the point of the ledge it sits on: how far it has sagged to
+## one side (radians), and the joints its floppy parts hang from.
+const SLUMP := 0.1
+const NECK := Vector2(1, -17)
+const SHOULDER := Vector2(9, -14)
+const HIP := Vector2(5, -3)
 
 const OUTLINE := Color("1a100c")
 const GOLD := Color("f2c84b")
@@ -74,45 +76,78 @@ const DROP_INK := {"#": BUBBLE, "+": GLINT}
 ## What goes round a groggy player, evenly spread: a star, then smaller things.
 const ORBIT := [STAR, TWINKLE, DROP, STAR, DROP, TWINKLE, STAR, TWINKLE, DROP]
 
+## o: outline, B: burlap, L: where the light catches it, S: its shadow,
+## r: stitches, x: the eyes, w: steel, h and H: the head of a pin.
 const DOLL_INK := {
-	"o": Color("2a1a10"), "B": Color("b98d5a"), "S": Color("8f6a40"),
-	"x": Color("1a1210"), "n": Color("1a1210"), "w": Color("e8e2c8"),
-	"m": Color("3a2416"), "h": Color("c8402f"),
+	"o": Color("2a1a10"), "B": Color("b98d5a"), "L": Color("d4aa74"), "S": Color("8f6a40"),
+	"r": Color("7a2a1c"), "x": Color("3a0f0c"), "w": Color("d6dde8"),
+	"h": Color("c8322a"), "H": Color("ff8a70"),
 }
-## One stitched X for an eye, one button.
+## A sack of a head, too big for the rest: two crosses for eyes, a mouth
+## sewn shut and a seam where it was closed.
 const DOLL_HEAD := [
-	"...ooooo...",
-	"..oBBBBBo..",
-	".oBBBBBBSo.",
-	"oBxBxBBBBSo",
-	"oBBxBBnnBSo",
-	"oBxBxBnwBSo",
-	"oBBBBBBBBSo",
-	".oBmBmBmSo.",
-	"..oBBBBSo..",
-	"...ooooo...",
+	"...ooooooo...",
+	"..oLLLLBBBo..",
+	".oLLBBBBBrSo.",
+	"oLxBxBBBxBxSo",
+	"oLBxBBBBBxBSo",
+	"oBxBxBBBxBxSo",
+	"oBBBBBBBBBSSo",
+	"oBBBrrrrrBBSo",
+	".oBBBBBBBSSo.",
+	"..oSSSSSSSo..",
+	"...ooooooo...",
 ]
+## A heart stitched on the chest and a seam down the belly.
 const DOLL_BODY := [
 	"..ooooo..",
-	".oBBBBSo.",
+	".oLBBBSo.",
+	"oLBrBrBSo",
+	"oBBrrrBSo",
+	"oBBBrBBSo",
 	"oBBBBBBSo",
-	"oBBhBhBSo",
-	"oBBhhhBSo",
-	"oBBBhBBSo",
-	".ooooooo.",
+	"oBBBrBBSo",
+	".oBBBBSo.",
+	"..ooooo..",
 ]
+## Hanging from the shoulder: its top middle is the joint.
 const DOLL_ARM := [
 	".o.",
+	"oLo",
 	"oBo",
-	"oBo",
+	"oro",
 	"oBo",
 	"oSo",
 	".o.",
 ]
-const DOLL_LEG := [
+## The leg laid out along the ledge, its foot turned up at the far end.
+const DOLL_LEG_FLAT := [
+	".ooo........",
+	"oLBoooooooo.",
+	"oBBBrBrBrBSo",
+	"oSBBBBBBBSSo",
+	".oooooooooo.",
+]
+## The leg that hangs over the edge, from the hip at its top.
+const DOLL_LEG_LOOSE := [
+	"..ooo.",
+	".oLBSo",
+	".oBBSo",
+	".oBrSo",
+	".oBBSo",
+	".oBrSo",
+	".oBBSo",
+	"ooBBSo",
+	"oLBBSo",
 	".oooo.",
-	"oBBBSo",
-	".oooo.",
+]
+## A pin, from its point up to its head.
+const DOLL_PIN := [
+	"...oo",
+	"..ohH",
+	"..ohh",
+	".wwo.",
+	"ww...",
 ]
 
 ## The ring the stars fly on, in this node's coordinates: its middle, and how
@@ -123,7 +158,8 @@ var ring_reach := Vector2(100, 20)
 ## player's box (before the panel or the texts the stars should pass behind),
 ## at the same position as this node.
 var back: Control
-## Where the doll sits and where the dynamite stands: the middle of their base.
+## Where the doll sits, a point on a ledge with room under it for a leg to
+## hang, and where the dynamite stands: the middle of its base.
 var doll_foot := Vector2.ZERO
 var bomb_foot := Vector2.ZERO
 
@@ -236,48 +272,53 @@ func _on_ring(angle: float, swing := 1.0) -> Vector2:
 
 # --- hexed ----------------------------------------------------------------------
 
-## The doll sits where it was dropped, leaning on the box: a slow breath, a
-## head that lolls, limbs that settle now and then. Something purple hangs
-## around it.
+## A rag doll sat on a ledge and left there: one leg laid out along it, the
+## other hanging over the edge and swinging, an arm that dangles, a head too
+## heavy for its neck. Nothing in it moves by itself: it only settles, and
+## now and then something tugs at a pin. Something purple hangs around it.
 func _draw_doll(level: float) -> void:
-	var breath := sin(_time * TAU / 3.4)
 	var heart := doll_foot + Vector2(0, -17)
+	var pulse := sin(_time * TAU / 3.4)
 	for ring: int in 3:
-		draw_circle(heart, 17.0 + ring * 5.0 + breath * 1.5, Color(HEX, level * (0.2 - 0.055 * ring)))
+		draw_circle(heart, 18.0 + ring * 5.0 + pulse * 1.5, Color(HEX, level * (0.18 - 0.05 * ring)))
 	for i: int in 5:
 		var life := fposmod(_time * 0.32 + i / 5.0, 1.0)
-		var mote := doll_foot + Vector2(-17.0 + 8.5 * i + sin(_time * 1.3 + i * 2.1) * 3.0, -2.0 - life * 40.0)
+		var mote := doll_foot + Vector2(-19.0 + 9.0 * i + sin(_time * 1.3 + i * 2.1) * 3.0, -2.0 - life * 44.0)
 		var side := 3.0 if i % 2 == 0 else 2.0
 		draw_rect(Rect2(mote.round(), Vector2(side, side)), Color(HEX_LIGHT, level * sin(life * PI) * 0.9))
 
 	var grown := lerpf(0.5, 1.0, ease(level, 0.4))
-	# The chest rises a pixel on the in-breath and takes head and arms along.
-	var lift := Vector2(0, -1) if breath > 0.25 else Vector2.ZERO
-	# Limbs: one leg shifts, one arm hangs and sways, the other twitches.
-	var kick := Vector2(1, 0) if fposmod(_time + 2.0, 6.1) < 0.22 else Vector2.ZERO
-	var sway := Vector2(-1, 0) if sin(_time * 1.1) > 0.0 else Vector2.ZERO
-	var twitch := Vector2(0, -2) if fposmod(_time, 5.3) < 0.16 else Vector2.ZERO
-	# The legs lie flat on the ground; everything above the hips has slid over.
-	draw_set_transform(doll_foot, 0.0, Vector2.ONE * grown)
-	_bitmap_at(DOLL_LEG, DOLL_INK, Vector2(-15, -6), level)
-	_bitmap_at(DOLL_LEG, DOLL_INK, Vector2(3, -6) + kick, level)
-	draw_set_transform(doll_foot + HIP * grown, SLUMP, Vector2.ONE * grown)
-	lift -= HIP
-	_bitmap_at(DOLL_ARM, DOLL_INK, Vector2(-15, -19) + lift + sway, level)
-	_bitmap_at(DOLL_ARM, DOLL_INK, Vector2(8, -18) + lift + twitch, level)
-	_bitmap_at(DOLL_BODY, DOLL_INK, Vector2(-10, -19) + lift, level)
-	# The head hangs towards the box, and nods off every so often.
-	var loll := Vector2(1, 0) if sin(_time * 0.9) > 0.6 else Vector2.ZERO
-	var nod := Vector2(0, 1) if sin(_time * 0.37 + 1.0) > 0.9 else Vector2.ZERO
-	var head := Vector2(-14, -37) + lift + loll + nod
-	_bitmap_at(DOLL_HEAD, DOLL_INK, head, level)
-	# The pin that keeps it working, stuck through the crown.
-	var pin := head + Vector2(16, 0)
-	for step: int in 3:
-		draw_rect(Rect2(pin + Vector2(step * 2, -step * 2), Vector2(2, 2)), Color(Color("c9d2e0"), level))
-	draw_rect(Rect2(pin + Vector2(5, -9), Vector2(4, 4)), Color(OUTLINE, level))
-	draw_rect(Rect2(pin + Vector2(6, -8), Vector2(2, 2)), Color(Color("e0503c"), level))
+	# A tug at a pin every few seconds: everything loose jumps and swings back.
+	var since := fposmod(_time, 5.7)
+	var jolt := exp(-since * 2.2) * cos(since * 9.0)
+	var slump := SLUMP + 0.03 * sin(_time * 0.7) + 0.05 * jolt
+	var swing := 0.2 * sin(_time * 1.7) + 0.3 * jolt
+	var dangle := 0.55 + 0.12 * sin(_time * 1.3 + 1.0) - 0.25 * jolt
+	var loll := 0.14 + 0.08 * sin(_time * 0.9) + 0.1 * jolt
+
+	# Behind the body: the leg over the edge and the arm on the far side.
+	_doll_part(DOLL_LEG_LOOSE, HIP, swing, Vector2(-7, -1), grown, level)
+	_doll_part(DOLL_ARM, SHOULDER.rotated(slump), slump - dangle, Vector2(-3, -1), grown, level)
+	# The body sags over the hips; the other leg lies along the ledge in front of it.
+	_doll_part(DOLL_BODY, Vector2.ZERO, slump, Vector2(-7, -18), grown, level)
+	_doll_part(DOLL_LEG_FLAT, Vector2.ZERO, 0.0, Vector2(-23, -10), grown, level)
+	# The near arm hangs straight down, its hand on the ledge.
+	_doll_part(DOLL_ARM, Vector2(-9, -14).rotated(slump), 0.04 * jolt, Vector2(-3, -1), grown, level)
+	var neck := NECK.rotated(slump)
+	_doll_part(DOLL_HEAD, neck, slump + loll, Vector2(-13, -21), grown, level)
+	# The pins that keep it working: through the crown, the chest and the leg.
+	_doll_part(DOLL_PIN, neck, slump + loll, Vector2(8, -29), grown, level)
+	_doll_part(DOLL_PIN, Vector2.ZERO, slump, Vector2(5, -17), grown, level)
+	_doll_part(DOLL_PIN, Vector2.ZERO, 0.0, Vector2(-22, -17), grown, level)
 	draw_set_transform(Vector2.ZERO)
+
+
+## One piece of the doll: `rows` turned by `angle` about `joint` (a point
+## counted from where the doll sits), with its top left corner at `corner`
+## from that joint.
+func _doll_part(rows: Array, joint: Vector2, angle: float, corner: Vector2, grown: float, level: float) -> void:
+	draw_set_transform(doll_foot + joint * grown, angle, Vector2.ONE * grown)
+	_bitmap_at(rows, DOLL_INK, corner, level)
 
 
 # --- ticking --------------------------------------------------------------------

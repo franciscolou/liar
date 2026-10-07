@@ -92,12 +92,13 @@ func _init() -> void:
 	_extras.size = Vector2(116, 80)
 	add_child(_extras)
 	# The player's own box is the block on the left: the stars circle the
-	# name and the hearts, the doll sits in the gap next to the inventory and
-	# the dynamite stands beside the name.
+	# name and the hearts, the doll sits on the top edge of the band where the
+	# block ends (a leg along it, a leg hanging into the gap before the hand)
+	# and the dynamite stands beside the name.
 	_status_fx.ring_centre = Vector2(116, 44)
 	_status_fx.ring_reach = Vector2(110, 20)
-	_status_fx.doll_foot = Vector2(220, 163)
-	_status_fx.bomb_foot = Vector2(214, 39)
+	_status_fx.doll_foot = Vector2(232, 1)
+	_status_fx.bomb_foot = Vector2(203, 46)
 	add_child(_status_fx)
 	_restyle()
 

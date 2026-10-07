@@ -21,6 +21,8 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s uses %s%s.") % [d.player.name, d.item.def.display_name, _on(d.play)]
 		&"item_stolen":
 			return Loc.t("%s takes %s from %s.") % [d.thief.name, _item(d.item), d.victim.name]
+		&"item_missed":
+			return Loc.t("%s finds nothing to take from %s.") % [d.thief.name, d.victim.name]
 		&"item_broken":
 			return Loc.t("%s's %s breaks.") % [d.player.name, d.item.def.display_name]
 		&"claim_declared":
@@ -31,8 +33,6 @@ static func describe(e: GameEvent) -> String:
 		&"claim_cancelled":
 			return Loc.t("%s is silenced.") % d.play.source.display_name
 		&"doubt_declared":
-			if d.play.params.get("standing", false):
-				return Loc.t("%s shouts LIAR! at %s's %s.") % [d.doubter.name, d.play.actor.name, d.play.source.display_name]
 			return Loc.t("%s shouts LIAR!") % d.doubter.name
 		&"doubt_revealed":
 			if d.truthful:

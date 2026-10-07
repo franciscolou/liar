@@ -410,7 +410,7 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 				await fire(&"claim_cancelled", {"play": play})
 			else:
 				await _resolve(play)
-	if proven and actor.cards.count(ability.character_id) >= copies:
+	if proven and not play.stand_in and actor.cards.count(ability.character_id) >= copies:
 		await renew_proven_card(actor, ability.character_id)
 	await fire(&"claim_resolved", {"play": play})
 	if not play.truthful and doubter == null and not play.failed and not over and actor.alive:
@@ -462,6 +462,13 @@ func use_item(player: PlayerState, instance: ItemInstance, trigger: GameEvent = 
 	await fire(&"item_used", {"player": player, "item": instance, "play": play})
 	await _resolve(play)
 	return play
+
+
+## Carries out a play that was never announced as a claim or an item use (a
+## bomb going off, see bomber.gd): shields and mirrors get their say, the
+## table shows its effect and then it resolves.
+func carry_out(play: Play) -> void:
+	await _resolve(play)
 
 
 ## `slot` is the shop slot holding `def`, or -1 for an item that is always
@@ -516,6 +523,18 @@ func break_item(player: PlayerState, instance: ItemInstance) -> void:
 	await fire(&"item_broken", {"player": player, "item": instance})
 
 
+## Moves a held item from one inventory to another. A hidden item stays
+## hidden: only the two of them know what changed hands.
+func take_item(thief: PlayerState, victim: PlayerState, instance: ItemInstance) -> bool:
+	if not victim.items.has(instance) or thief.items.size() >= config.inventory_limit:
+		return false
+	var index := victim.items.find(instance)
+	victim.items.erase(instance)
+	thief.items.append(instance)
+	await fire(&"item_stolen", {"thief": thief, "victim": victim, "item": instance, "index": index})
+	return true
+
+
 func _choose_target(play: Play) -> bool:
 	var source := play.source
 	if source.targeting == Playable.Targeting.NONE:
@@ -538,9 +557,11 @@ func _choose_target(play: Play) -> bool:
 ## What `player` may put up for a LIAR! call, lost if the claim was true.
 ## With the coins for the fine there is nothing to choose. Without them it is
 ## a debt (only if something lets them go that far into the red) or 1 Morale.
+## Empty for someone who can't call LIAR! at all.
 func doubt_stakes(player: PlayerState) -> Array[StringName]:
 	var out: Array[StringName] = []
-	if not player.alive:
+	# A status may take the call away altogether (it blocks the tag &"doubt").
+	if not player.alive or blocked_reason(player, [&"doubt"]) != "":
 		return out
 	if player.coins >= config.doubt_cost or config.doubt_cost <= 0:
 		out.append(STAKE_COINS)
@@ -560,19 +581,23 @@ func _doubt_window(play: Play) -> Dictionary:
 	for p in seat_order(play.actor):
 		if p != play.actor and p.alive:
 			(bots if p.is_bot else humans).append(p)
-	if not humans.is_empty():
-		var poll := DoubtPoll.new()
-		poll.open = humans.size()
-		var asked := []
-		for p: PlayerState in humans:
-			var d := Decision.new(Decision.Kind.DOUBT, p)
-			d.options = doubt_stakes(p)
-			d.context = {
-				"play": play, "shared": humans.size() > 1,
-				# Blocking the claim is the third way out of this window.
-				"reactions": reaction_options(p, GameEvent.new(&"claim_resolving", {"play": play})),
-			}
+	var asked := []
+	for p: PlayerState in humans:
+		var d := Decision.new(Decision.Kind.DOUBT, p)
+		d.options = doubt_stakes(p)
+		d.context = {
+			"play": play,
+			# Blocking the claim is the third way out of this window.
+			"reactions": reaction_options(p, GameEvent.new(&"claim_resolving", {"play": play})),
+		}
+		# Someone who can neither doubt nor react has nothing to be asked.
+		if not d.options.is_empty() or not d.context.reactions.is_empty():
 			asked.append(d)
+	if not asked.is_empty():
+		var poll := DoubtPoll.new()
+		poll.open = asked.size()
+		for d: Decision in asked:
+			d.context["shared"] = asked.size() > 1
 		for d: Decision in asked:
 			_poll_doubt(d, poll)
 		if not poll.done:
@@ -659,6 +684,10 @@ func pay(player: PlayerState, amount: int, reason: StringName = &"cost") -> bool
 		})
 		if not short.data.allowed or over or not player.alive:
 			return false
+		# What was allowed is the debt as it stood. Coins spent while the tab
+		# was being argued over (a reaction with a price) may have used it up.
+		if not can_pay(player, amount):
+			return false
 	await change_coins(player, -amount, reason)
 	return true
 
@@ -692,6 +721,19 @@ func steal_coins(thief: PlayerState, victim: PlayerState, amount: int, play: Pla
 	await change_coins(victim, -amount, &"stolen", thief)
 	await gain_coins(thief, amount, &"steal", victim)
 	return amount
+
+
+## A coin tossed in front of the whole table. True for heads.
+func flip_coin(player: PlayerState) -> bool:
+	var heads := rng.randf() < 0.5
+	await fire(&"coin_flipped", {"player": player, "heads": heads})
+	return heads
+
+
+## Something content wants the table to hear about and that no other event
+## tells. `text` is an English key with one %s, for the player's name.
+func note(player: PlayerState, text: String, good := true) -> void:
+	await fire(&"note", {"player": player, "text": text, "good": good})
 
 
 func set_counter(player: PlayerState, counter_id: StringName, value: int) -> void:
@@ -798,6 +840,31 @@ func replace_card(player: PlayerState, index: int, reason: StringName = &"swap")
 	deck.append(old)
 	_shuffle(deck)
 	await fire(&"cards_changed", {"player": player, "index": index, "reason": reason, "old": old})
+
+
+## Trades the card at `index` of the hand for the one at `deck_index` of the
+## deck (the player chose it: see gravedigger.gd), then shuffles the deck.
+func trade_with_deck(player: PlayerState, index: int, deck_index: int, reason: StringName = &"swap") -> void:
+	if index < 0 or index >= player.cards.size() or deck_index < 0 or deck_index >= deck.size():
+		return
+	var old: StringName = player.cards[index]
+	player.cards[index] = deck[deck_index]
+	deck[deck_index] = old
+	_shuffle(deck)
+	await fire(&"cards_changed", {"player": player, "index": index, "reason": reason, "old": old})
+
+
+## The whole hand goes back into the deck and as many cards come out of it.
+func redraw_hand(player: PlayerState) -> void:
+	var count := player.cards.size()
+	if count == 0 or not player.alive:
+		return
+	deck.append_array(player.cards)
+	player.cards.clear()
+	_shuffle(deck)
+	for i in count:
+		player.cards.append(deck.pop_back())
+	await fire(&"hand_redrawn", {"player": player, "count": count})
 
 
 ## A doubt showed the whole table that `player` holds `character_id`: the card

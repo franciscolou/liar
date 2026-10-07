@@ -58,6 +58,11 @@ func ai_target_weight(_play: Play, candidate: PlayerState) -> float:
 	return 1.0 + candidate.coins * 0.05 + (3 - candidate.morale) * 0.3
 
 
+## Added to a bot's chance of calling LIAR! on this play (it may be negative).
+func ai_suspicion(_play: Play, _doubter: PlayerState) -> float:
+	return 0.0
+
+
 ## How much a bot wants to play this as a reaction to `event` (0..1).
 func ai_react_weight(_event: GameEvent, _player: PlayerState, _engine: GameEngine) -> float:
 	return 1.0

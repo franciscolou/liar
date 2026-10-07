@@ -15,6 +15,8 @@ extends RefCounted
 ##             answer the claim's reaction window with that option right away
 ##   REACT  -> one of the option dictionaries, or null to pass
 ##   PICK   -> index into `options` ([{label, description, card, item}]), -1 to cancel
+##             (context.weights: how much a bot likes each option, default 1;
+##             context.foreign: the cards offered are not from the player's hand)
 
 enum Kind { TURN, TARGET, DOUBT, REACT, PICK }
 

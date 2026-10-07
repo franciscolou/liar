@@ -32,7 +32,9 @@ class UnderOath extends Ability:
 			func(p): return not p.has_status(&"truth_bound"))
 
 	func resolve(play: Play) -> void:
-		await play.engine.add_status(play.target, &"truth_bound", {"expires": &"own_turn_end"})
+		await play.engine.add_status(play.target, &"truth_bound", {
+			"expires": &"own_turn_end", "by": play.actor.id,
+		})
 
 	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
 		return 0.7

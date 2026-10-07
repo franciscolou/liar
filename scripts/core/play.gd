@@ -13,6 +13,9 @@ var params: Dictionary = {}
 var cost := 0
 
 var truthful := true  # the actor really holds the claimed character
+## A doubted claim that stood without its card being shown (see impostor.gd):
+## there is no proven card to send back to the deck.
+var stand_in := false
 var doubter: PlayerState
 var failed := false  # caught lying, or could not pay
 var cancelled := false

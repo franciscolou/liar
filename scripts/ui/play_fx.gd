@@ -18,6 +18,14 @@ const BLOOD := Color("b3201a")
 const SMOKE := Color("4a4458")
 const STEEL := Color("c9d2e0")
 const SPIRIT := Color("7fe0d8")
+const PORCELAIN := Color("f2efe6")
+const EARTH := Color("6b4a2a")
+const EMBER := Color("ff7a2a")
+const CHIP_RED := Color("c8402f")
+const CHIP_GREEN := Color("3f8a5a")
+## The middle of the table, where a bet is pushed to.
+const POT := Vector2(576, 322)
+const COIN_ART := "res://assets/ui/coin.png"
 ## The potion going down: how many steps, over how long, and what is left
 ## where the liquid was.
 const GAVEL_RAISED := 0.95  # radians the gavel is lifted before a knock
@@ -34,6 +42,9 @@ var _bits: Array = []
 var _rings: Array = []
 var _lines: Array = []
 var _drain_frames: Dictionary = {}  # texture path -> Array of Texture2D
+## The lasso of a Confiscate, turning overhead until it is thrown.
+var _lasso: RopeFx
+var _lasso_spin: Tween
 
 
 func _init(match_table: Variant) -> void:
@@ -318,6 +329,373 @@ func _fx_voodooist_hex(play: Play) -> void:
 	flash(Color(0.4, 0.1, 0.6, 0.25), 0.35)
 	table._shake_screen(6.0)
 	await _wait(0.55)
+
+
+## Every paper in her pockets goes up in smoke; someone else walks out of it.
+func _fx_impostor_cover_story(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_hush")
+	burst(here, SMOKE.lightened(0.25), 18, 100.0, 0.6, -40.0, 11.0)
+	ring(here, UI.CREAM, 80.0, 12.0, 0.35, 3.0)
+	await _wait(0.4)
+
+
+## The mask comes up. Whoever they said they were, that is who they are.
+func _fx_impostor_perfect_disguise(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_mask")
+	dim(0.5, 0.95)
+	ring(here, PORCELAIN, 120.0, 26.0, 0.4, 4.0)
+	await _wait(0.4)
+	flash(Color(1.0, 1.0, 1.0, 0.22), 0.2)
+	burst(here, PORCELAIN, 18, 150.0, 0.5, -30.0, 9.0)
+	ring(here, UI.GOLD, 20.0, 96.0, 0.35, 4.0)
+	await _wait(0.5)
+
+
+## Chips pushed forward; the coin itself is flown by coin_flip.
+func _fx_gambler_double_down(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_chips")
+	burst(here, CHIP_RED, 6, 120.0, 0.35, 420.0)
+	burst(here, CHIP_GREEN, 6, 120.0, 0.35, 420.0)
+	await _wait(0.3)
+
+
+## A stack of chips slid to the middle of the table.
+func _fx_gambler_side_bet(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_chips")
+	stream(here, POT, CHIP_RED, 5, 0.35, 0.2)
+	stream(here, POT, CHIP_GREEN, 4, 0.4, 0.25)
+	await _wait(0.45)
+	ring(POT, UI.GOLD, 10.0, 46.0, 0.3, 4.0)
+	await _wait(0.2)
+
+
+## The shovel goes into the deck twice, and something comes up.
+func _fx_gravedigger_exhume(_play: Play) -> void:
+	var deck: Vector2 = table._bank()
+	_snd("fx_dig")
+	for i in 2:
+		burst(deck + Vector2(0, 18), EARTH, 10, 170.0, 0.45, 520.0)
+		table._shake_screen(4.0)
+		await _wait(0.36)
+	rise(deck, SPIRIT, 8, 26.0)
+	ring(deck, SPIRIT, 8.0, 56.0, 0.4, 3.0)
+	await _wait(0.3)
+
+
+## A bell, a cross over the body, and the purse changes hands.
+func _fx_gravedigger_last_rites(play: Play) -> void:
+	var dead: PlayerState = play.event.data.get("player") if play.event != null else null
+	var here := _at(play.actor)
+	var there := _at(dead) if dead != null else here
+	_snd("fx_bell")
+	dim(0.5, 1.0)
+	line(there + Vector2(0, -44), there + Vector2(0, 40), UI.CREAM, 6.0, 0.6, 0.15)
+	line(there + Vector2(-24, -18), there + Vector2(24, -18), UI.CREAM, 6.0, 0.6, 0.15)
+	await _wait(0.5)
+	stream(there, here, UI.GOLD, 8, 0.4, 0.25)
+	await _wait(0.45)
+
+
+## A glass slid down the bar. Whatever was in it starts working at once.
+func _fx_bartender_mickey_finn(play: Play) -> void:
+	var here := _at(play.actor)
+	var there := _at(play.target)
+	_snd("fx_pour")
+	await _wait(0.4)
+	line(here, there, Color("cfe6ea"), 4.0, 0.25, 0.3)
+	await _wait(0.32)
+	rise(there, Color("9fd24a"), 14, 44.0)
+	ring(there, Color("7f9a3c"), 90.0, 18.0, 0.45, 5.0)
+	await _wait(0.5)
+
+
+func _fx_bartender_liquid_courage(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_pour")
+	rise(here, Color("d99a2e"), 12, 40.0)
+	await _wait(0.3)
+	ring(here, UI.GOLD, 14.0, 76.0, 0.3, 4.0)
+	await _wait(0.3)
+
+
+## The badge comes out spinning, catches the light, and then the whole room
+## feels a hand in its pocket.
+func _fx_sheriff_shakedown(play: Play) -> void:
+	var here := _at(play.actor)
+	var speed: float = table._speed
+	var badge := BadgeFx.new()
+	badge.position = here
+	badge.scale = Vector2.ONE * 0.2
+	badge.rotation = -TAU * 2.5
+	badge.modulate.a = 0.0
+	add_child(badge)
+	_snd("fx_whistle")
+	dim(0.45, 1.7)
+	# Out of the pocket: a quick spin that winds down as it grows.
+	var enter := badge.create_tween().set_parallel()
+	enter.tween_property(badge, "modulate:a", 1.0, 0.1 / speed)
+	enter.tween_property(badge, "scale", Vector2.ONE, 0.5 / speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	enter.tween_property(badge, "rotation", 0.0, 0.58 / speed) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	for i in 4:
+		burst(here, UI.GOLD, 3, 120.0, 0.25, 0.0, 6.0)
+		await _wait(0.14)
+	await _wait(0.06)
+	if not is_instance_valid(badge):
+		return
+
+	# Held still, it catches the light.
+	_snd("fx_glint")
+	badge.create_tween().tween_property(badge, "shine", 1.0, 0.45 / speed)
+	rise(here, BadgeFx.LIGHT, 8, 34.0)
+	await _wait(0.47)
+	if not is_instance_valid(badge):
+		return
+
+	# The wave, and what it shakes out of everyone it reaches.
+	var pulse := badge.create_tween()
+	pulse.tween_property(badge, "scale", Vector2.ONE * 1.3, 0.07 / speed)
+	pulse.tween_property(badge, "scale", Vector2.ONE, 0.22 / speed)
+	_snd("fx_wave")
+	ring(here, UI.GOLD, 30.0, 400.0, 0.6, 6.0)
+	ring(here, BadgeFx.LIGHT, 20.0, 300.0, 0.5, 3.0)
+	flash(Color(1.0, 0.9, 0.5, 0.14), 0.2)
+	table._shake_screen(5.0)
+	await _wait(0.22)
+	for p: PlayerState in table.engine.opponents(play.actor):
+		var there := _at(p)
+		ring(there, UI.RED, 80.0, 18.0, 0.35, 4.0)
+		burst(there, UI.GOLD, 6, 150.0, 0.35, 420.0)
+		stream(there, here, UI.GOLD, 4, 0.35, 0.2)
+		var box: Control = table._node_of(p)
+		if box is SeatView:
+			UI.shake(box, 6.0, 0.25)
+	await _wait(0.5)
+	if not is_instance_valid(badge):
+		return
+	var leave := badge.create_tween().set_parallel()
+	leave.tween_property(badge, "modulate:a", 0.0, 0.2 / speed)
+	leave.tween_property(badge, "scale", Vector2.ONE * 0.8, 0.2 / speed)
+	leave.chain().tween_callback(badge.queue_free)
+
+
+## The lasso comes off the saddle and goes round overhead. It keeps turning
+## until there is something to throw it at (item_roped) or the play is over.
+func _fx_sheriff_confiscate(play: Play) -> void:
+	drop_lasso()
+	var here := _at(play.actor)
+	var speed: float = table._speed
+	var rope := RopeFx.new()
+	rope.hand = here
+	rope.tip = here + Vector2(0, -56)
+	rope.loop = 4.0
+	rope.squash = 0.4
+	rope.slack = 0.3
+	rope.modulate.a = 0.0
+	add_child(rope)
+	_lasso = rope
+	_snd("fx_lasso_spin")
+	var grow := rope.create_tween().set_parallel()
+	grow.tween_property(rope, "modulate:a", 1.0, 0.1 / speed)
+	grow.tween_property(rope, "loop", 22.0, 0.2 / speed)
+	_lasso_spin = rope.create_tween().set_loops()
+	_lasso_spin.tween_method(rope.whirl.bind(here + Vector2(0, -56)), 0.0, TAU, 0.36 / speed)
+	await _wait(0.75)
+
+
+## Lets go of a lasso nobody threw: the play ended with nothing to rope.
+func drop_lasso() -> void:
+	if _lasso_spin != null:
+		_lasso_spin.kill()
+		_lasso_spin = null
+	if _lasso != null and is_instance_valid(_lasso):
+		var leave := _lasso.create_tween()
+		leave.tween_property(_lasso, "modulate:a", 0.0, 0.15 / table._speed)
+		leave.tween_callback(_lasso.queue_free)
+	_lasso = null
+
+
+## An item changing inventory at the end of a rope: the loop is thrown from
+## `thief` to where the item lies (`item_at`), drawn tight around it and
+## hauled back to `home`, its place in the thief's inventory. `caught` is
+## called the moment the loop closes: the item is no longer where it was.
+func item_roped(thief: PlayerState, texture: Texture2D, item_at: Vector2, home: Vector2, caught: Callable) -> void:
+	var here := _at(thief)
+	var speed: float = table._speed
+	var rope := _lasso
+	if _lasso_spin != null:
+		_lasso_spin.kill()
+		_lasso_spin = null
+	_lasso = null
+	if rope == null or not is_instance_valid(rope):
+		rope = RopeFx.new()
+		rope.hand = here
+		rope.tip = here + Vector2(0, -56)
+		rope.squash = 0.4
+		add_child(rope)
+	rope.modulate.a = 1.0
+
+	# The wind-up: the loop is drawn back, away from what it is after.
+	_snd("fx_lasso")
+	rope.slack = 0.3
+	var back := here + (here - item_at).normalized() * 46.0 + Vector2(0, -34)
+	var draw_back := rope.create_tween().set_parallel()
+	draw_back.tween_property(rope, "tip", back, 0.14 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	draw_back.tween_property(rope, "loop", 18.0, 0.14 / speed)
+	await _wait(0.14)
+	if not is_instance_valid(rope):
+		return
+	# The strike: nothing, and then all of it at once, like a whip.
+	rope.slack = 0.12
+	rope.create_tween().tween_method(rope.fling.bind(rope.tip, item_at), 0.0, 1.0, 0.16 / speed) \
+			.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
+	await _wait(0.17)
+	if not is_instance_valid(rope):
+		return
+
+	# The catch: it lands with a crack and is drawn tight.
+	caught.call()
+	flash(Color(1.0, 1.0, 1.0, 0.1), 0.1)
+	ring(item_at, PORCELAIN, 8.0, 46.0, 0.2, 4.0)
+	table._shake_screen(6.0)
+	var item_size := Vector2(44, 46)
+	var item := TextureRect.new()
+	item.texture = texture
+	item.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	item.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	item.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	item.size = item_size
+	item.pivot_offset = item_size / 2.0
+	item.position = item_at - item_size / 2.0
+	item.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(item)
+	# Under the rope: the loop goes round it.
+	move_child(item, rope.get_index())
+	UI.pop(item, 1.3, 0.15)
+	burst(item_at, RopeFx.ROPE, 8, 130.0, 0.3, 300.0, 6.0)
+	# Pulled taut all at once, the rope twangs.
+	rope.slack = 0.03
+	rope.twang(3.0)
+	rope.create_tween().tween_property(rope, "loop", 15.0, 0.1 / speed)
+	await _wait(0.24)
+	if not is_instance_valid(rope):
+		return
+
+	# The haul: item and loop come home together, the rope going slack as it
+	# is gathered in.
+	rope.slack = 0.2
+	var haul := rope.create_tween().set_parallel()
+	haul.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	haul.tween_property(rope, "tip", home, 0.45 / speed)
+	haul.tween_property(item, "position", home - item_size / 2.0, 0.45 / speed)
+	await _wait(0.47)
+	_snd("item_get")
+	if is_instance_valid(item):
+		UI.pop(item, 1.4, 0.2)
+	if is_instance_valid(rope):
+		var leave := rope.create_tween()
+		leave.tween_property(rope, "modulate:a", 0.0, 0.12 / speed)
+		leave.tween_callback(rope.queue_free)
+	await _wait(0.2)
+	if is_instance_valid(item):
+		item.queue_free()
+
+
+## A red cross; the rest is the heal itself.
+func _fx_doctor_patch_up(play: Play) -> void:
+	var here := _at(play.actor)
+	_cross(here, 30.0, Color("e0503c"))
+	ring(here, PORCELAIN, 16.0, 70.0, 0.35, 4.0)
+	await _wait(0.4)
+
+
+func _fx_doctor_antidote(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_shimmer")
+	_cross(here, 22.0, UI.GREEN.lightened(0.2))
+	ring(here, UI.GREEN, 100.0, 16.0, 0.35, 5.0)
+	await _wait(0.3)
+	rise(here, PORCELAIN, 10, 44.0)
+	await _wait(0.3)
+
+
+## A match, a fuse, and a parcel left on somebody's chair.
+func _fx_bomber_time_bomb(play: Play) -> void:
+	var here := _at(play.actor)
+	var there := _at(play.target)
+	_snd("fx_fuse")
+	burst(here, EMBER, 6, 90.0, 0.3, -60.0, 6.0)
+	stream(here, there, EMBER, 9, 0.5, 0.35)
+	await _wait(0.6)
+	for i in 2:
+		_snd("item_roulette_tick")
+		ring(there, EMBER, 46.0, 14.0, 0.2, 4.0)
+		await _wait(0.2)
+
+
+## It was always going to end like this.
+func _fx_bomber_blast(play: Play) -> void:
+	var there := _at(play.target)
+	_snd("item_roulette_tick")
+	ring(there, UI.RED, 90.0, 10.0, 0.3, 4.0)
+	await _wait(0.32)
+	_snd("fx_boom")
+	flash(Color(1.0, 0.85, 0.5, 0.55), 0.3)
+	burst(there, EMBER, 30, 420.0, 0.7, 300.0, 12.0)
+	burst(there, Color("ffd98a"), 18, 300.0, 0.5, 200.0, 9.0)
+	burst(there, SMOKE, 16, 160.0, 1.0, -60.0, 13.0)
+	ring(there, Color.WHITE, 10.0, 170.0, 0.4, 8.0)
+	table._float("BOOM!", there + Vector2(0, -30), EMBER, 34)
+	UI.shake(table._table, 26.0, 0.5)
+	await _wait(0.75)
+
+
+## A coin thumbed into the air in front of `who`; it lands on its answer.
+func coin_flip(who: PlayerState, heads: bool) -> void:
+	var here := _at(who)
+	var speed: float = table._speed
+	var coin: TextureRect = table._sprite(UI.tex(COIN_ART), here, Vector2(44, 44))
+	var ground := coin.position.y - 56.0
+	_snd("fx_coin_flip")
+	var toss := coin.create_tween()
+	toss.tween_property(coin, "position:y", ground - 110.0, 0.4 / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	toss.tween_property(coin, "position:y", ground, 0.34 / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	var spin := coin.create_tween().set_loops(7)
+	spin.tween_property(coin, "scale:x", 0.08, 0.05 / speed)
+	spin.tween_property(coin, "scale:x", 1.0, 0.05 / speed)
+	await _wait(0.76)
+	if not is_instance_valid(coin):
+		return
+	var at := here + Vector2(0, -56)
+	if heads:
+		_snd("coin_2")
+		ring(at, UI.GOLD, 10.0, 76.0, 0.35, 5.0)
+		burst(at, UI.GOLD, 16, 200.0, 0.5, 420.0)
+		UI.pop(coin, 1.6, 0.25)
+	else:
+		_snd("coin_3")
+		coin.modulate = Color(0.5, 0.46, 0.42)
+		burst(at, SMOKE.lightened(0.2), 8, 90.0, 0.4, -20.0, 9.0)
+	table._float("HEADS!" if heads else "TAILS", at + Vector2(0, -40), UI.GOLD if heads else UI.MUTED, 28)
+	await _wait(0.6)
+	if not is_instance_valid(coin):
+		return
+	var leave := coin.create_tween()
+	leave.tween_property(coin, "modulate:a", 0.0, 0.2 / speed)
+	leave.tween_callback(coin.queue_free)
+
+
+## A plus sign, the way it is painted on a medicine chest.
+func _cross(at: Vector2, arm: float, color: Color) -> void:
+	line(at + Vector2(0, -arm), at + Vector2(0, arm), color, 12.0, 0.4, 0.08)
+	line(at + Vector2(-arm, 0), at + Vector2(arm, 0), color, 12.0, 0.4, 0.08)
 
 
 # --- items --------------------------------------------------------------------
@@ -613,3 +991,217 @@ func _draw() -> void:
 		var corner: Vector2 = (bit.p / PIXEL).floor() * PIXEL
 		var side: float = maxf(PIXEL, bit.s * (1.0 - 0.5 * k))
 		draw_rect(Rect2(corner, Vector2(side, side)), Color(bit.c, 1.0 - k * k * k))
+
+
+# --- props ---------------------------------------------------------------------
+
+## The sheriff's badge: a five-pointed star in the same chunky pixels as the
+## rest of the effects, three tones of gold and a dark rim. `shine` (0 to 1)
+## runs a glint across it.
+class BadgeFx extends Control:
+	const PIXEL := 4.0
+	## From the middle of the star to a point, in pixels of the badge.
+	const REACH := 10
+	const EDGE := Color("4a2e0e")
+	const LIGHT := Color("ffe9a0")
+	const MID := Color("e6bc4c")
+	const DARK := Color("b07f24")
+
+	var shine := 0.0:
+		set(value):
+			shine = value
+			queue_redraw()
+
+	var _rim: Array[Vector2i] = []
+	var _gold: Dictionary = {}  # Vector2i -> Color
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_cut()
+
+	## Cuts the star out of a grid: the pixels of its edge that face the light
+	## (up and left) are bright, the ones facing away are dark.
+	func _cut() -> void:
+		var star := PackedVector2Array()
+		for i in 5:
+			star.append(Vector2.from_angle(-PI / 2.0 + TAU * i / 5.0) * REACH)
+			star.append(Vector2.from_angle(-PI / 2.0 + TAU * (i + 0.5) / 5.0) * REACH * 0.45)
+		var inside := {}
+		for y in range(-REACH - 1, REACH + 1):
+			for x in range(-REACH - 1, REACH + 1):
+				if Geometry2D.is_point_in_polygon(Vector2(x + 0.5, y + 0.5), star):
+					inside[Vector2i(x, y)] = true
+		for cell: Vector2i in inside:
+			var lit := not inside.has(cell + Vector2i.UP) or not inside.has(cell + Vector2i.LEFT)
+			var shaded := not inside.has(cell + Vector2i.DOWN) or not inside.has(cell + Vector2i.RIGHT)
+			# Where the star is too thin to have two sides, it is plain gold.
+			_gold[cell] = MID if lit == shaded else (LIGHT if lit else DARK)
+			for step: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+				if not inside.has(cell + step) and not _rim.has(cell + step):
+					_rim.append(cell + step)
+
+	func _draw() -> void:
+		for cell: Vector2i in _rim:
+			_dot(cell, EDGE)
+		for cell: Vector2i in _gold:
+			_dot(cell, _gold[cell])
+		if shine <= 0.0 or shine >= 1.0:
+			return
+		# The glint crosses from the top left; a smaller one answers it.
+		var path := Vector2(-6, -6).lerp(Vector2(5, 5), shine)
+		_glint(Vector2i(path.round()), roundi(4.0 * sin(shine * PI)))
+		var late := clampf((shine - 0.35) / 0.65, 0.0, 1.0)
+		_glint(Vector2i(6, -4), roundi(2.0 * sin(late * PI)))
+
+	## A plus of light, `arm` pixels from its middle to each end.
+	func _glint(at: Vector2i, arm: int) -> void:
+		if arm <= 0:
+			return
+		for i in range(1, arm + 1):
+			var ink := LIGHT if i == arm else Color.WHITE
+			for step: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+				_dot(at + step * i, ink)
+		_dot(at, Color.WHITE)
+
+	func _dot(cell: Vector2i, ink: Color) -> void:
+		draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), ink)
+
+
+## A lasso. The rope is a chain of points with weight and no stiffness: held
+## at one end, tied to the loop at the other, it sags, trails behind whatever
+## the loop does and snaps about when it is pulled tight. It is drawn in the
+## chunky pixels of the other effects.
+class RopeFx extends Control:
+	const PIXEL := 4.0
+	const ROPE := Color("b98d54")
+	const EDGE := Color("2a1a10")
+	const KNOT := Color("6b4a2a")
+	## The twisted strands, as they come round one after the other along the
+	## rope, and how many pixels of rope each one shows for.
+	const STRANDS: Array[Color] = [Color("dcb87c"), Color("b98d54"), Color("8a6238"), Color("a67c48")]
+	const TWIST := 5.0
+	const LINKS := 18
+	const GRAVITY := 1500.0
+	## How much of its speed a point of the rope keeps from one step to the next.
+	const DRAG := 0.955
+
+	## Where the rope is held, and the middle of the loop at its other end.
+	var hand := Vector2.ZERO
+	var tip := Vector2.ZERO
+	## The radius of the loop, and how round it looks (1: seen flat on).
+	var loop := 20.0
+	var squash := 1.0
+	## How much longer the rope is than the straight way from hand to loop:
+	## 0 is taut, 0.3 hangs and whips about.
+	var slack := 0.2
+
+	var _points := PackedVector2Array()
+	var _before := PackedVector2Array()
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		_time += delta
+		_swing(minf(delta, 1.0 / 30.0))
+		queue_redraw()
+
+	## The loop going round over the head of whoever holds it, about `centre`.
+	func whirl(angle: float, centre: Vector2) -> void:
+		tip = centre + Vector2(cos(angle) * 30.0, sin(angle) * 10.0)
+		squash = 0.4 + 0.1 * sin(angle)
+
+	## The loop on its way from `from` to `to` (`along` from 0 to 1): lashed
+	## out almost straight, with a low arc and a flick from side to side that
+	## dies as it gets there. How sudden it is is up to whoever drives `along`.
+	func fling(along: float, from: Vector2, to: Vector2) -> void:
+		var way := to - from
+		var arc := minf(way.length() * 0.1, 30.0) * sin(along * PI)
+		var flick := way.orthogonal().normalized() * sin(along * TAU) * 10.0 * (1.0 - along)
+		tip = from.lerp(to, along) + Vector2(0, -arc) + flick
+		loop = lerpf(18.0, 26.0, along)
+		squash = lerpf(0.45, 0.9, along)
+
+	## A jolt sideways along the whole rope, as when it is pulled tight.
+	func twang(strength: float) -> void:
+		if _points.size() < LINKS:
+			return
+		var side := (_knot() - hand).orthogonal().normalized()
+		for i in range(1, LINKS - 1):
+			_points[i] += side * sin(TAU * i / (LINKS - 1)) * strength
+
+	## Where the rope meets the loop: on its rim, on the side the rope comes from.
+	func _knot() -> Vector2:
+		var from := hand if _points.size() < LINKS else _points[LINKS - 2]
+		var toward := (from - tip).angle()
+		return tip + Vector2(cos(toward) * loop, sin(toward) * loop * squash)
+
+	## One step of the rope: every point keeps going the way it was, falls a
+	## little, and is then pulled back to within reach of its neighbours.
+	func _swing(delta: float) -> void:
+		var knot := _knot()
+		if _points.size() < LINKS:
+			for i in LINKS:
+				_points.append(hand.lerp(knot, i / float(LINKS - 1)))
+			_before = _points.duplicate()
+		var reach := hand.distance_to(knot) * (1.0 + slack) / (LINKS - 1)
+		for i in range(1, LINKS - 1):
+			var now := _points[i]
+			_points[i] = now + (now - _before[i]) * DRAG + Vector2(0, GRAVITY) * delta * delta
+			_before[i] = now
+		for pass_ in 8:
+			_points[0] = hand
+			_points[LINKS - 1] = knot
+			for i in LINKS - 1:
+				var gap := _points[i + 1] - _points[i]
+				var length := gap.length()
+				# A rope pulls and never pushes.
+				if length <= reach:
+					continue
+				var pull := gap * (1.0 - reach / length)
+				var first := i == 0
+				var last := i + 1 == LINKS - 1
+				if not first:
+					_points[i] += pull * (1.0 if last else 0.5)
+				if not last:
+					_points[i + 1] -= pull * (1.0 if first else 0.5)
+		_points[0] = hand
+		_points[LINKS - 1] = knot
+
+	func _draw() -> void:
+		if _points.size() < LINKS:
+			return
+		# The loop is rope too: it wobbles as it goes.
+		var ring := PackedVector2Array()
+		for i in 21:
+			var angle := TAU * i / 20.0
+			var wobble := 1.0 + 0.09 * sin(angle * 3.0 + _time * 9.0)
+			ring.append(tip + Vector2(cos(angle) * loop, sin(angle) * loop * squash) * wobble)
+		var cells := {}
+		_trace(_points, cells)
+		_trace(ring, cells)
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * PIXEL - Vector2(2, 2), Vector2(PIXEL + 4.0, PIXEL + 4.0)), EDGE)
+		for cell: Vector2i in cells:
+			var strand: Color = cells[cell]
+			draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), strand)
+		# The knot: a dark lump where the rope runs into the loop.
+		var knot := (_points[LINKS - 1] / PIXEL).floor() * PIXEL - Vector2(PIXEL, PIXEL) / 2.0
+		draw_rect(Rect2(knot - Vector2(2, 2), Vector2(PIXEL, PIXEL) * 2.0 + Vector2(4, 4)), EDGE)
+		draw_rect(Rect2(knot, Vector2(PIXEL, PIXEL) * 2.0), KNOT)
+		draw_rect(Rect2(knot, Vector2(PIXEL, PIXEL)), STRANDS[3])
+
+	## Marks in `cells` the pixels that the line through `path` goes over,
+	## each with the colour of the strand that is on top at that point.
+	func _trace(path: PackedVector2Array, cells: Dictionary) -> void:
+		var run := 0.0
+		for i in path.size() - 1:
+			var length := path[i].distance_to(path[i + 1])
+			var steps := maxi(ceili(length / 2.0), 1)
+			for step in steps + 1:
+				var along := step / float(steps)
+				var cell := Vector2i((path[i].lerp(path[i + 1], along) / PIXEL).floor())
+				if not cells.has(cell):
+					cells[cell] = STRANDS[int((run + length * along) / TWIST) % STRANDS.size()]
+			run += length

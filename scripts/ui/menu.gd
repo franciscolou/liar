@@ -2,6 +2,7 @@ extends Control
 ## Title screen. The buttons are painted on the artwork; the real ones sit
 ## on top of them and only draw a highlight.
 
+const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 # The look of the plates painted on the artwork.
 const PLATE := Color("3b2a20")
 const PLATE_BORDER := Color("86705a")
@@ -25,6 +26,11 @@ func _ready() -> void:
 	settings.size = Vector2(140, 38)
 	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
 	add_child(settings)
+	var help := UI.button("HOW TO PLAY", UI.BORDER, 16)
+	help.position = Vector2(836, 12)
+	help.size = Vector2(154, 38)
+	help.pressed.connect(func(): add_child(HelpPanel.new()))
+	add_child(help)
 
 
 func _notification(what: int) -> void:

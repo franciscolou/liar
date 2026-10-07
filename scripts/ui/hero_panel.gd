@@ -9,8 +9,12 @@ signal item_clicked(instance: ItemInstance, view: ItemView)
 signal end_turn_pressed
 signal extra_pressed(option: Dictionary)
 
+const StatusFx := preload("res://scripts/ui/status_fx.gd")
 const SIZE := Vector2(1152, 170)
 const MAX_EXTRAS := 3
+const STRIP_SCALE := 0.92
+## Room for the strip, from its left edge to the END TURN button.
+const STRIP_WIDTH := 572.0
 
 var player: PlayerState
 var engine: GameEngine
@@ -19,6 +23,7 @@ var _bg: Panel
 var _name: Label
 var _stats: StatBar
 var _chips: StatusChips
+var _status_fx: StatusFx
 var _inventory: HBoxContainer
 var _hand: Control
 var _hand_cards: Array = []
@@ -41,10 +46,13 @@ func _init() -> void:
 	_bg.size = SIZE + Vector2(0, 8)
 	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_bg)
+	# The far side of the ring of stars: over the band, under what is written on it.
+	_status_fx = StatusFx.new()
+	add_child(_status_fx.back)
 
 	_name = UI.label("", 20, UI.CREAM, true)
 	_name.position = Vector2(14, 6)
-	_name.size = Vector2(210, 26)
+	_name.size = Vector2(178, 26)  # the dynamite stands to its right
 	_name.clip_text = true
 	_name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	add_child(_name)
@@ -83,6 +91,14 @@ func _init() -> void:
 	_extras.position = Vector2(1024, 78)
 	_extras.size = Vector2(116, 80)
 	add_child(_extras)
+	# The player's own box is the block on the left: the stars circle the
+	# name and the hearts, the doll sits in the gap next to the inventory and
+	# the dynamite stands beside the name.
+	_status_fx.ring_centre = Vector2(116, 44)
+	_status_fx.ring_reach = Vector2(110, 20)
+	_status_fx.doll_foot = Vector2(220, 163)
+	_status_fx.bomb_foot = Vector2(214, 39)
+	add_child(_status_fx)
 	_restyle()
 
 
@@ -104,16 +120,25 @@ func _sync_strip() -> void:
 		_strip.remove_child(child)
 		child.queue_free()
 	_strip_cards.clear()
-	var step := minf(60.0, 572.0 / maxi(engine.characters.size(), 1))
+	# Up to eleven sit side by side; a bigger cast overlaps like a fanned hand
+	# (the one under the mouse comes to the front) and drops the captions,
+	# which would run into each other. The tooltip still names every card.
+	var card_width := CardView.BASE.x * STRIP_SCALE
+	var step := 60.0
+	if defs.size() > 1:
+		step = minf(step, (STRIP_WIDTH - card_width) / (defs.size() - 1))
+	var captioned := step >= card_width
 	for i in defs.size():
 		var def: CharacterDef = defs[i]
-		var card := CardView.new(0.92)
-		card.position = Vector2(i * step, 0)
+		var card := CardView.new(STRIP_SCALE)
+		card.position = Vector2(roundf(i * step), 0)
 		card.set_card(def.id, true)
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		card.clicked.connect(func(): character_clicked.emit(def, card))
 		_strip.add_child(card)
 		_strip_cards[def.id] = card
+		if not captioned:
+			continue
 		var caption := UI.label(def.display_name, 10, UI.MUTED)
 		caption.position = Vector2(i * step - 6, 94)
 		caption.size = Vector2(step + 12 - 4, 14)
@@ -158,6 +183,7 @@ func sync() -> void:
 	_name.text = player.name if player.alive else Loc.t("%s (eliminated)") % player.name
 	_stats.sync(player, engine.config.start_morale, true)
 	_chips.sync(player, engine)
+	_status_fx.sync(player, engine)
 	_sync_hand()
 	_sync_strip()
 	_sync_inventory()
@@ -175,7 +201,7 @@ func sync() -> void:
 	if my_turn:
 		# All of them are also listed in their character's menu; only so many
 		# fit next to END TURN.
-		var shown: Array = _options.extras.slice(0, MAX_EXTRAS)
+		var shown := _urgent_first(_options.extras).slice(0, MAX_EXTRAS)
 		var compact := shown.size() > 2
 		_extras.add_theme_constant_override("separation", 2 if compact else 4)
 		for extra: Dictionary in shown:
@@ -192,6 +218,21 @@ func sync() -> void:
 			_extras.add_child(b)
 
 
+## `extras` with the ones that can't wait in front (see CharacterDef.turn_extras),
+## otherwise in the order they came.
+func _urgent_first(extras: Array) -> Array:
+	var levels := []
+	for extra: Dictionary in extras:
+		if not levels.has(extra.get("priority", 0)):
+			levels.append(extra.get("priority", 0))
+	levels.sort()
+	levels.reverse()
+	var out := []
+	for level: int in levels:
+		out.append_array(extras.filter(func(extra: Dictionary) -> bool: return extra.get("priority", 0) == level))
+	return out
+
+
 func hand_center() -> Vector2:
 	return _hand.global_position + Vector2(90, 78)
 
@@ -202,6 +243,11 @@ func coin_anchor() -> Vector2:
 
 func stat_bar() -> StatBar:
 	return _stats
+
+
+## The middle of the inventory slot at `index`.
+func item_spot(index: int) -> Vector2:
+	return _inventory.global_position + Vector2(maxi(index, 0) * 64.0 + 29.0, 29.0)
 
 
 func card_center(index: int) -> Vector2:

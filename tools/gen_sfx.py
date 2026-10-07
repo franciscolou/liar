@@ -561,6 +561,157 @@ def fx_hex():
     return lowpass(out, 5000)
 
 
+def fade_out(samples, seconds=0.012):
+    """Brings the end of a sound down to silence, so a cut note does not click."""
+    n = min(int(seconds * RATE), len(samples))
+    for i in range(n):
+        samples[-1 - i] *= i / n
+    return samples
+
+
+def fx_mask():
+    """A mask lifted into place: a swish of cloth, then porcelain on bone."""
+    out = silence(0.6)
+    mix(out, bandpass(noise(0.25, 0.1, 0.1, 131), 900, lambda t: 2500 + 9000 * t), 0.0, 0.6)
+    for freq, gain, decay in ((1320, 0.6, 0.09), (2050, 0.4, 0.06), (3300, 0.2, 0.04)):
+        mix(out, tone(freq, 0.25, 0.001, decay), 0.26, gain)
+    mix(out, bell(1760.0, 0.3, 0.2), 0.3, 0.15)
+    return out
+
+
+def fx_chips():
+    """Clay chips pushed into the pot."""
+    out = silence(0.5)
+    rng = random.Random(133)
+    for i in range(6):
+        at = i * 0.045 + rng.uniform(0, 0.012)
+        mix(out, highpass(noise(0.012, 0.0004, 0.004, 135 + i), 2200), at, 0.8)
+        mix(out, tone(2400 + rng.uniform(-300, 400), 0.04, 0.0005, 0.014), at, 0.5)
+        mix(out, tone(880 + rng.uniform(-80, 80), 0.05, 0.0005, 0.018), at, 0.3)
+    return out
+
+
+def fx_coin_flip():
+    """A coin rung off a thumbnail, turning in the air."""
+    out = silence(0.75)
+    mix(out, coin(((0.0, 1.0),), 1.25, 141), 0.0, 0.8)
+    ring = tone(5200, 0.7, 0.002, 0.45)
+    mix(out, [s * (0.5 + 0.5 * math.sin(TAU * 26.0 * i / RATE)) for i, s in enumerate(ring)], 0.01, 0.3)
+    return out
+
+
+def fx_dig():
+    """A shovel driven into wet earth, twice."""
+    out = silence(0.8)
+    for at, seed in ((0.0, 143), (0.36, 147)):
+        mix(out, bandpass(noise(0.18, 0.02, 0.08, seed), 300, 2600), at, 0.9)
+        mix(out, tone(110, 0.14, 0.002, 0.07, glide=0.6), at + 0.02, 0.9)
+        mix(out, steel_click(1.6, seed + 1), at, 0.35)
+        # The earth thrown aside.
+        mix(out, lowpass(noise(0.2, 0.03, 0.09, seed + 2), 900), at + 0.14, 0.4)
+    return out
+
+
+def fx_bell():
+    """A funeral bell, once."""
+    out = silence(1.6)
+    mix(out, bell(196.0, 1.5, 1.3, ((1.0, 1.0), (2.0, 0.6), (2.4, 0.45), (3.0, 0.3), (4.5, 0.15))), 0.0, 1.0)
+    mix(out, lowpass(noise(0.03, 0.001, 0.012, 151), 1500), 0.0, 0.5)
+    return out
+
+
+def fx_pour():
+    """A drink poured, set down and slid along the bar."""
+    out = silence(0.85)
+    rng = random.Random(153)
+    for i in range(14):
+        at = i * 0.028 + rng.uniform(-0.006, 0.006)
+        mix(out, tone(520 + 40 * i + rng.uniform(-40, 40), 0.05, 0.006, 0.035, glide=1.6), max(at, 0.0), 0.5)
+    mix(out, bandpass(noise(0.4, 0.05, 0.2, 155), 1500, 5000), 0.0, 0.12)
+    mix(out, bell(2350.0, 0.25, 0.14), 0.45, 0.4)
+    mix(out, lowpass(noise(0.03, 0.001, 0.012, 157), 900), 0.45, 0.6)
+    mix(out, bandpass(noise(0.3, 0.05, 0.15, 159), 700, 2600), 0.5, 0.3)
+    return out
+
+
+def fx_whistle():
+    """A police whistle: one short blast and a longer one, the pea rattling."""
+    out = silence(0.62)
+    for at, seconds in ((0.0, 0.15), (0.22, 0.32)):
+        body = tone(2850, seconds, 0.008, seconds * 2.5)
+        trill = [s * (0.55 + 0.45 * math.sin(TAU * 34.0 * i / RATE)) for i, s in enumerate(body)]
+        mix(out, fade_out(trill), at, 0.8)
+        mix(out, fade_out(tone(5700, seconds, 0.008, seconds * 2.0)), at, 0.15)
+        mix(out, fade_out(bandpass(noise(seconds, 0.01, seconds * 2.0, 161), 2500, 7000)), at, 0.25)
+    return out
+
+
+def fx_glint():
+    """Light caught on polished brass: one clean ping and the shimmer after it."""
+    out = silence(0.7)
+    mix(out, bell(3136.0, 0.6, 0.4), 0.0, 0.6)
+    mix(out, bell(4186.0, 0.5, 0.3), 0.03, 0.35)
+    shimmer = tone(6272, 0.5, 0.05, 0.3)
+    mix(out, [x * (0.5 + 0.5 * math.sin(TAU * 18.0 * i / RATE)) for i, x in enumerate(shimmer)], 0.02, 0.15)
+    return out
+
+
+def fx_lasso_spin():
+    """A rope going round overhead: three swishes, each a little harder."""
+    out = silence(0.8)
+    for i, at in enumerate((0.0, 0.24, 0.46)):
+        swish = bandpass(noise(0.22, 0.09, 0.09, 201 + i), 500, lambda t: 1800 + 9000 * t)
+        mix(out, swish, at, 0.6 + 0.15 * i)
+    return out
+
+
+def fx_lasso():
+    """The rope drawn back, cracked out like a whip, and hauled in."""
+    out = silence(0.95)
+    mix(out, bandpass(noise(0.16, 0.08, 0.06, 207), 500, lambda t: 1200 + 6000 * t), 0.0, 0.5)
+    # The strike: a rush that climbs out of hearing and ends in the crack.
+    mix(out, bandpass(noise(0.16, 0.12, 0.03, 208), 1500, lambda t: 3000 + 60000 * t), 0.14, 0.9)
+    mix(out, highpass(noise(0.018, 0.0003, 0.006, 209), 3000), 0.30, 1.6)
+    mix(out, noise(0.03, 0.0003, 0.01, 210), 0.30, 0.8)
+    mix(out, tone(170, 0.2, 0.001, 0.09, "tri", glide=0.6), 0.30, 0.8)
+    mix(out, lowpass(noise(0.06, 0.001, 0.025, 211), 900), 0.30, 0.7)
+    mix(out, bandpass(noise(0.35, 0.1, 0.2, 213), 400, 1800), 0.54, 0.3)
+    return out
+
+
+def fx_wave():
+    """A shockwave rolling out across the room: the thump, the air rushing
+    after it, and a ring of brass on top."""
+    out = silence(1.0)
+    mix(out, tone(95, 0.5, 0.004, 0.28, glide=0.45), 0.0, 1.6)
+    mix(out, lowpass(noise(0.5, 0.01, 0.2, 221), 400), 0.0, 0.8)
+    rush = bandpass(noise(0.9, 0.12, 0.45, 223), 300, lambda t: 5000 * math.exp(-t * 3.0) + 500)
+    mix(out, rush, 0.02, 0.7)
+    mix(out, bell(784.0, 0.6, 0.5), 0.0, 0.12)
+    return out
+
+
+def fx_fuse():
+    """A match struck, and a fuse catching."""
+    out = silence(0.9)
+    mix(out, highpass(noise(0.12, 0.01, 0.05, 183), 3000), 0.0, 0.8)
+    hiss = highpass(noise(0.75, 0.08, 0.6, 185), 4500)
+    mix(out, [s * (0.6 + 0.4 * math.sin(TAU * 31.0 * i / RATE)) for i, s in enumerate(hiss)], 0.1, 0.5)
+    return out
+
+
+def fx_boom():
+    """A powder charge going off in a small room, and what comes down after."""
+    out = silence(1.5)
+    mix(out, noise(0.06, 0.0003, 0.02, 187), 0.0, 1.6)
+    mix(out, tone(70, 0.9, 0.001, 0.4, glide=0.3), 0.0, 2.4)
+    mix(out, lowpass(noise(1.4, 0.004, 0.5, 189), lambda t: 200 + 5000 * math.exp(-t * 6.0)), 0.0, 1.4)
+    mix(out, lowpass(noise(0.9, 0.2, 0.5, 191), 300), 0.15, 0.6)
+    for i, at in enumerate((0.5, 0.68, 0.8, 0.97)):
+        mix(out, bandpass(noise(0.05, 0.001, 0.02, 193 + i), 800, 4000), at, 0.25)
+    return drive(out[:int(1.5 * RATE)], 3.5)
+
+
 SOUNDS = {
     "card_draw": card_draw,
     "truth": truth,
@@ -584,6 +735,19 @@ SOUNDS = {
     "fx_tin": fx_tin,
     "fx_scribble": fx_scribble,
     "fx_hex": fx_hex,
+    "fx_mask": fx_mask,
+    "fx_chips": fx_chips,
+    "fx_coin_flip": fx_coin_flip,
+    "fx_dig": fx_dig,
+    "fx_bell": fx_bell,
+    "fx_pour": fx_pour,
+    "fx_whistle": fx_whistle,
+    "fx_glint": fx_glint,
+    "fx_lasso_spin": fx_lasso_spin,
+    "fx_lasso": fx_lasso,
+    "fx_wave": fx_wave,
+    "fx_fuse": fx_fuse,
+    "fx_boom": fx_boom,
     "item_get": item_get,
     "item_use": item_use,
     "item_silencer": item_silencer,
@@ -605,6 +769,8 @@ PEAKS = {
     "fx_hush": 0.4, "fx_shutter": 0.5, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5, "fx_lute": 0.55,
     "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "fx_burst_fire": 0.85, "fx_hex": 0.75,
     "item_death": 0.9,
+    "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
+    "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
 }
 

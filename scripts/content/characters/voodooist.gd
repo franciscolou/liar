@@ -66,6 +66,7 @@ func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 			"enabled": affordable,
 			"reason": "" if affordable else Loc.t("Not enough coins"),
 			"run": _break_hex,
+			"priority": 1,
 		})
 	var fine := engine.config.doubt_cost
 	var stakes := engine.doubt_stakes(player)
@@ -137,7 +138,8 @@ func _doubt_doll(player: PlayerState, engine: GameEngine, victim_id: int, stake:
 	# nobody may doubt it again.
 	if still_theirs.call():
 		victim.statuses[&"hexed"]["claimed"] = false
-	await engine.renew_proven_card(owner, id)
+	if not play.stand_in:
+		await engine.renew_proven_card(owner, id)
 
 
 func _ai_doubt(player: PlayerState, victim: PlayerState, stake: StringName, engine: GameEngine) -> float:
@@ -158,6 +160,10 @@ func _ai_doubt(player: PlayerState, victim: PlayerState, stake: StringName, engi
 
 func _break_hex(player: PlayerState, engine: GameEngine) -> void:
 	if not player.has_status(&"hexed") or not await engine.pay(player, BREAK_COST):
+		return
+	# Paying on a tab is a claim of its own: by the time it settles the doll
+	# may be gone (its owner lost their last Morale on a wrong call).
+	if not player.has_status(&"hexed"):
 		return
 	var owner := engine.player_by_id(player.statuses[&"hexed"].get("by", -1))
 	await engine.remove_status(player, &"hexed")

@@ -58,7 +58,15 @@ static func tex(path: String) -> Texture2D:
 	if path == "":
 		return null
 	if not _textures.has(path):
-		_textures[path] = load(path) if ResourceLoader.exists(path) else null
+		var texture: Texture2D = null
+		if ResourceLoader.exists(path):
+			texture = load(path)
+		elif FileAccess.file_exists(path):
+			# Not imported yet (the editor has not rescanned): read the file directly.
+			var image := Image.load_from_file(path)
+			if image != null:
+				texture = ImageTexture.create_from_image(image)
+		_textures[path] = texture
 	return _textures[path]
 
 

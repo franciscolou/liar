@@ -4,6 +4,7 @@ extends Control
 
 signal clicked(player: PlayerState)
 
+const StatusFx := preload("res://scripts/ui/status_fx.gd")
 const SIZE := Vector2(176, 126)
 
 var player: PlayerState
@@ -17,6 +18,7 @@ var _cards: Array = []
 var _card_row: Control
 var _items: HBoxContainer
 var _chips: StatusChips
+var _status_fx: StatusFx
 var _dead_tag: Label
 var _items_shown := ""
 var _targetable := false
@@ -29,6 +31,10 @@ func _init() -> void:
 	custom_minimum_size = SIZE
 	pivot_offset = SIZE / 2.0
 	mouse_filter = Control.MOUSE_FILTER_STOP
+
+	# The far side of a groggy player's ring of stars goes under the box.
+	_status_fx = StatusFx.new()
+	add_child(_status_fx.back)
 
 	_glow = Panel.new()
 	_glow.position = Vector2(-5, -5)
@@ -65,6 +71,14 @@ func _init() -> void:
 	_chips.size = Vector2(78, 40)
 	add_child(_chips)
 
+	# The doll and the dynamite lean on the bottom corners from outside, so
+	# that neither covers what the box says; the stars circle the whole box.
+	_status_fx.ring_centre = Vector2(SIZE.x / 2.0, SIZE.y * 0.44)
+	_status_fx.ring_reach = Vector2(SIZE.x / 2.0 + 26.0, 22.0)
+	_status_fx.doll_foot = Vector2(SIZE.x + 9, SIZE.y + 1)
+	_status_fx.bomb_foot = Vector2(-9, SIZE.y + 1)
+	add_child(_status_fx)
+
 	_dead_tag = UI.label("ELIMINATED", 18, UI.RED, true)
 	_dead_tag.position = Vector2(0, 70)
 	_dead_tag.size = Vector2(SIZE.x, 24)
@@ -94,6 +108,7 @@ func sync() -> void:
 		return
 	_stats.sync(player, engine.config.start_morale)
 	_chips.sync(player, engine)
+	_status_fx.sync(player, engine)
 	while _cards.size() > player.cards.size():
 		_cards.pop_back().queue_free()
 	while _cards.size() < player.cards.size():
@@ -142,6 +157,12 @@ func coin_anchor() -> Vector2:
 
 func stat_bar() -> StatBar:
 	return _stats
+
+
+## The middle of the place the item at `index` of the inventory takes.
+func item_spot(index: int) -> Vector2:
+	var item := ItemView.BASE * 0.4
+	return _items.global_position + Vector2(maxi(index, 0) * (item.x + 2.0) + item.x / 2.0, item.y / 2.0)
 
 
 func card_center(index: int) -> Vector2:

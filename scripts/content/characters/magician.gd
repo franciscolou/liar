@@ -33,6 +33,11 @@ class HatTrick extends Ability:
 	func _hat(engine: GameEngine) -> Array:
 		return engine.fixed_items + engine.item_pool
 
+	# A bot leaves its last slot for an item it chose: three things out of a
+	# hat can fill an inventory with nothing that ends a match.
+	func ai_weight(player: PlayerState, engine: GameEngine) -> float:
+		return 0.0 if player.items.size() >= engine.config.inventory_limit - 1 else 1.0
+
 
 class Counterfeit extends Ability:
 	const DISCOUNT := 3

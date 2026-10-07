@@ -5,6 +5,9 @@ extends Control
 const MENU_SCENE := "res://scenes/menu.tscn"
 const GAME_SCENE := "res://scenes/main.tscn"
 const MAX_SEATS := 6
+## Width of the character grid, and the most cards it shows in a single row.
+const GRID_WIDTH := 690.0
+const GRID_ROW := 10
 const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent"]
 const ANIM_SPEEDS := [50, 75, 100, 150, 200, 250, 300]  # percent
 ## Two arrows chasing each other clockwise (the reset buttons).
@@ -51,11 +54,12 @@ func _ready() -> void:
 			_items_on[def.id] = _config.item_ids.is_empty() or _config.item_ids.has(def.id)
 
 	var bg := TextureRect.new()
-	bg.texture = UI.tex("res://assets/menu.png")
+	# The table itself, before anyone sits down.
+	bg.texture = UI.tex("res://assets/background.png")
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.modulate = Color(0.35, 0.3, 0.3)
+	bg.modulate = Color(0.5, 0.44, 0.42)
 	add_child(bg)
 	add_child(TipLayer.new())
 
@@ -88,7 +92,7 @@ func _panel(rect: Rect2) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	panel.position = rect.position
 	panel.size = rect.size
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.88), UI.BORDER, 2, 6, 14))
+	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.93), UI.BORDER, 2, 6, 14))
 	add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 5)
@@ -161,21 +165,29 @@ func _build_match(box: VBoxContainer) -> void:
 			func(v): _config.character_count = v, 3, Content.characters.size())
 	box.add_child(_count_row)
 
-	var grid := Control.new()
-	grid.custom_minimum_size = Vector2(690, 142)
-	box.add_child(grid)
+	# One row while the cast fits in it, two rows of smaller cards after that.
 	var defs := Content.character_list()
-	var step := 690.0 / defs.size()
+	var rows := 1 if defs.size() <= GRID_ROW else 2
+	var per_row := ceili(defs.size() / float(rows))
+	var card_scale := 1.15 if rows == 1 else 0.9
+	var card_height := CardView.BASE.y * card_scale
+	var row_height := card_height + 22.0
+	var step := GRID_WIDTH / per_row
+	var grid := Control.new()
+	grid.custom_minimum_size = Vector2(GRID_WIDTH, rows * row_height + 6.0)
+	box.add_child(grid)
 	for i in defs.size():
 		var def: CharacterDef = defs[i]
-		var card := CardView.new(1.15)
-		card.position = Vector2(i * step + (step - card.size.x) / 2.0, 6)
+		var column := i % per_row
+		var top := 6.0 + floorf(i / float(per_row)) * row_height
+		var card := CardView.new(card_scale)
+		card.position = Vector2(roundf(column * step + (step - card.size.x) / 2.0), top)
 		card.set_card(def.id, true)
 		card.clicked.connect(_toggle_character.bind(def.id))
 		grid.add_child(card)
 		_cards[def.id] = card
 		var caption := UI.label(def.display_name, 11, UI.MUTED)
-		caption.position = Vector2(i * step, 124)
+		caption.position = Vector2(column * step, top + card_height + 3.0)
 		caption.size = Vector2(step, 16)
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		caption.clip_text = true

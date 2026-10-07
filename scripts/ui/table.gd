@@ -8,6 +8,7 @@ signal doubt_answered(decision: Decision, value: Variant)
 
 const ARC_CENTER := Vector2(576, 322)
 const ARC_RADIUS := Vector2(450, 240)
+const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
 ## Loaded up front; the sound of each item ("item_<id>") is loaded on first use.
@@ -173,8 +174,33 @@ func _lift_hovered() -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	UI.handle_fullscreen_key(event, get_window())
-	if event.is_action_pressed("ui_cancel"):
+	if event.is_action_pressed("ui_cancel") and not _back_out():
 		_toggle_pause()
+
+
+func _input(event: InputEvent) -> void:
+	# A right click anywhere lets go of a target being chosen.
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		if _choosing_target() and _back_out():
+			get_viewport().set_input_as_handled()
+
+
+func _choosing_target() -> bool:
+	return _pending != null and _pending.kind == Decision.Kind.TARGET and _pending.cancellable
+
+
+## Closes the most recent thing the player opened and can still take back: a
+## menu, or the choice of a target. False if there was nothing to close.
+func _back_out() -> bool:
+	if _pause != null and is_instance_valid(_pause):
+		return false
+	if _popup.get_child_count() > 0:
+		_close_popup()
+		return true
+	if _choosing_target():
+		_answer(null)
+		return true
+	return false
 
 
 # === layout ===================================================================
@@ -632,6 +658,7 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 			"text": text, "tip": tip, "enabled": option.enabled,
 			"accent": UI.GREEN if option.legit else UI.RED,
 			"action": _answer_turn.bind(option), "reason": option.reason,
+			"note": ability.description,
 		})
 	if options != null:
 		for extra: Dictionary in options.extras:
@@ -730,7 +757,7 @@ func _prompt_target(d: Decision) -> void:
 	var buttons := []
 	if d.cancellable:
 		buttons.append({"text": "Cancel", "action": _answer.bind(null)})
-	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click a highlighted player.")], buttons)
+	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click a highlighted player. Esc or right click cancels." if d.cancellable else "Click a highlighted player.")], buttons)
 
 
 func _prompt_doubt(d: Decision) -> void:
@@ -738,7 +765,10 @@ func _prompt_doubt(d: Decision) -> void:
 	var def := Content.character(play.ability().character_id)
 	var text := _claim_line(play, "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
 		Loc.t("You hold %d of the %d %s cards. Is it a lie?") % [d.player.cards.count(def.id), engine.copies_in_play(), def.display_name]])
-	if not d.options.has(GameEngine.STAKE_COINS):
+	if d.options.is_empty():
+		# Only here for what they may play instead (context.reactions).
+		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), engine.blocked_reason(d.player, [&"doubt"])]
+	elif not d.options.has(GameEngine.STAKE_COINS):
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You don't have the %d coins a wrong call costs: pick what you put on the line.") % engine.config.doubt_cost]
 	var buttons := _doubt_buttons(d)
 	for option: Dictionary in d.context.get("reactions", []):
@@ -854,13 +884,16 @@ func _open_pick(d: Decision) -> void:
 			picture.set_card(option.card, true)
 		elif option.has("item"):
 			picture = ItemView.new(1.0)
-			picture.set_item(option.item)
+			picture.set_item(option.item, option.get("hidden", false))
 		if picture != null:
 			picture.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			picture.clicked.connect(_answer.bind(i))
 			column.add_child(picture)
 		var b := UI.button(option.get("label", "?"), UI.GOLD, 14)
+		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		b.pressed.connect(_answer.bind(i))
+		if picture == null and option.get("description", "") != "":
+			TipLayer.attach(b, option.description)
 		column.add_child(b)
 	if d.cancellable:
 		var cancel := UI.button("Cancel", UI.BORDER, 14)
@@ -900,7 +933,8 @@ func _open_card_pick(d: Decision) -> void:
 		card.set_card(option.card, true)
 		card.lift = 14.0
 		var rest := Vector2(left + i * (card_size.x + gap), 214)
-		var origin: CardView = _hero.card(i) if d.player == viewer else null
+		var own: bool = d.player == viewer and not d.context.get("foreign", false)
+		var origin: CardView = _hero.card(i) if own else null
 		if origin != null and origin.card_id == option.card and origin.face_up:
 			card.position = origin.global_position
 			card.scale = origin.size / card_size
@@ -975,7 +1009,8 @@ func _close_card_pick(veil: ColorRect, cards: Array, choice: int) -> void:
 				moving.kill()
 		card.modulate.a = 1.0
 	var out := create_tween().bind_node(veil).set_parallel()
-	if choice < 0:
+	# Cards from somewhere else have no animation waiting to pick them up.
+	if choice < 0 or d.context.get("foreign", false):
 		out.tween_property(veil, "modulate:a", 0.0, 0.28 / _speed)
 		await out.finished
 		if _pending == d:
@@ -1150,7 +1185,8 @@ func _hide_prompt() -> void:
 
 
 ## A small menu anchored to something on screen. rows: {info} for a text
-## block, or {text, tip, enabled, accent, action} for a button.
+## block, or {text, tip, enabled, accent, action, note, reason} for a button
+## (`note`: a line under it saying what it does).
 func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color: Color, rows: Array) -> void:
 	_close_popup()
 	var catcher := Control.new()
@@ -1190,6 +1226,13 @@ func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color:
 		if spec.has("tip"):
 			TipLayer.attach(b, spec.tip)
 		box.add_child(b)
+		if spec.get("note", "") != "":
+			# What the button does, readable without hovering it.
+			var note := UI.label(spec.note, 12, UI.MUTED if b.disabled else UI.CREAM)
+			note.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			note.custom_minimum_size = Vector2(270, 0)
+			box.add_child(note)
 		if spec.get("reason", "") != "":
 			box.add_child(UI.label(spec.reason, 12, UI.RED))
 	panel.reset_size()
@@ -1263,6 +1306,9 @@ func _toggle_pause() -> void:
 	var settings := UI.button("Settings", UI.BORDER, 18)
 	settings.pressed.connect(func(): _pause.add_child(SettingsPanel.new()))
 	box.add_child(settings)
+	var help := UI.button("How to play", UI.BORDER, 18)
+	help.pressed.connect(func(): _pause.add_child(HelpPanel.new()))
+	box.add_child(help)
 	var fullscreen := UI.button("Fullscreen: on" if UI.is_fullscreen(get_window()) else "Fullscreen: off", UI.BORDER, 18)
 	fullscreen.pressed.connect(func():
 		UI.toggle_fullscreen(get_window())
@@ -1315,6 +1361,7 @@ func present(e: GameEvent) -> void:
 			_play_sfx("cancel")
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolved":
+			_play_fx.drop_lasso()
 			await _pop_stage(d.play)
 		&"item_buying":
 			_sync_shop()
@@ -1334,6 +1381,8 @@ func present(e: GameEvent) -> void:
 				_log_line(line, e.type)
 		&"item_broken":
 			await _anim_item_broken(d)
+		&"item_stolen":
+			await _anim_item_stolen(d)
 		&"shop_restocked":
 			_sync_shop()
 			_pop_shop_slot(d.slot)
@@ -1363,6 +1412,14 @@ func present(e: GameEvent) -> void:
 			await _anim_card_changed(d.player, d.index)
 		&"cards_swapped":
 			await _anim_cards_swapped(d)
+		&"hand_redrawn":
+			await _anim_hand_redrawn(d)
+		&"coin_flipped":
+			await _play_fx.coin_flip(d.player, d.heads)
+		&"note":
+			_float((Loc.t(d.text) % d.player.name).trim_suffix(".").to_upper(), _anchor(d.player) + Vector2(0, -24),
+					UI.GREEN.lightened(0.25) if d.good else UI.MUTED, 16)
+			await _wait(0.45)
 		&"card_peeked":
 			await _anim_peek(d)
 		&"status_added":
@@ -1791,6 +1848,52 @@ func _anim_item_broken(d: Dictionary) -> void:
 	tween.tween_property(icon, "modulate:a", 0.0, 0.3)
 	tween.tween_callback(icon.queue_free)
 	await _stamp("%s!" % d.item.def.display_name.to_upper(), UI.BLUE)
+
+
+## An item taken from one inventory into another, at the end of a rope. Only
+## the two of them see what it is if it was hidden.
+func _anim_item_stolen(d: Dictionary) -> void:
+	var instance: ItemInstance = d.item
+	var concealed: bool = instance.hidden and d.thief != viewer and d.victim != viewer
+	var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
+	var lost: Control = _node_of(d.victim)
+	# The loop closes on it: from then on it is not in the victim's inventory.
+	var caught := func() -> void:
+		if lost != null and is_instance_valid(lost):
+			lost.sync()
+	await _play_fx.item_roped(d.thief, texture, _item_spot(d.victim, d.get("index", 0)),
+			_item_spot(d.thief, d.thief.items.size() - 1), caught)
+
+
+## A whole hand goes into the deck and as many cards come back out of it, all
+## of it face down.
+func _anim_hand_redrawn(d: Dictionary) -> void:
+	var p: PlayerState = d.player
+	var views := []
+	var spots := []
+	var sizes := []
+	for i: int in d.count:
+		var view := _card_view(p, i)
+		views.append(view)
+		spots.append(_card_center(p, i))
+		sizes.append(view.size if view != null else Vector2(33, 60))
+	_float("NEW HAND", _anchor(p) + Vector2(0, -30), UI.CREAM, 16)
+	_play_sfx("card_draw")
+	_set_cards_shown(views, false)
+	for i: int in d.count:
+		_fly_card(spots[i], _bank(), sizes[i], Vector2(33, 60), 0.4)
+	await _wait(0.6)
+	_play_sfx("card_draw")
+	for i: int in d.count:
+		_fly_card(_bank(), spots[i], Vector2(33, 60), sizes[i], 0.4)
+	await _wait(0.4)
+	for view: Variant in views:
+		if view != null and is_instance_valid(view):
+			# They land face down; the viewer's own turn over on the next sync.
+			view.set_card(&"", false)
+			UI.pop(view, 1.15, 0.2)
+	_set_cards_shown(views, true)
+	await _wait(0.2)
 
 
 ## A card dealt from the deck: its place in the hand stays empty until it lands.
@@ -2264,6 +2367,14 @@ func _stat_bar(p: PlayerState) -> StatBar:
 		return _hero.stat_bar()
 	var seat: SeatView = _seats.get(p.id)
 	return seat.stat_bar() if seat != null else null
+
+
+## Where the item at `index` of the inventory of `p` is drawn.
+func _item_spot(p: PlayerState, index: int) -> Vector2:
+	if p == viewer:
+		return _hero.item_spot(index)
+	var seat: SeatView = _seats.get(p.id)
+	return seat.item_spot(index) if seat != null else _bank()
 
 
 func _coin_anchor(p: PlayerState) -> Vector2:

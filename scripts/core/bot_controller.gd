@@ -20,7 +20,7 @@ func observe(event: GameEvent) -> void:
 			if not _claims.has(play.actor.id):
 				_claims[play.actor.id] = {}
 			_claims[play.actor.id][play.ability().character_id] = true
-		&"cards_changed", &"card_lost", &"card_drawn":
+		&"cards_changed", &"card_lost", &"card_drawn", &"hand_redrawn":
 			_claims.erase(event.data.player.id)
 		&"cards_swapped":
 			_claims.erase(event.data.a.id)
@@ -40,7 +40,7 @@ func decide(d: Decision) -> Variant:
 		Decision.Kind.REACT:
 			return _react(d)
 		Decision.Kind.PICK:
-			return engine.rng.randi_range(0, d.options.size() - 1) if not d.options.is_empty() else -1
+			return _pick(d)
 	return null
 
 
@@ -50,18 +50,28 @@ func _turn(options: Dictionary) -> Dictionary:
 		return {"kind": &"end"}
 	var rng := engine.rng
 
+	# Something it wants and can't pay for yet (breaking a hex, defusing a
+	# bomb): it stops spending until it can.
+	var saving := false
 	for extra: Dictionary in options.extras:
 		if extra.enabled and rng.randf() < extra.get("ai", 0.7):
 			return extra
+		if not extra.enabled and extra.get("cost", 0) > player.coins and extra.get("ai", 0.7) >= 0.5:
+			saving = true
 
 	for use: Dictionary in options.use:
 		if use.enabled and rng.randf() < use.item.def.ai_weight(player, engine) / 3.0:
 			return use
 
 	var buys := {}
+	# The last free slot is kept for something it can use: an inventory full
+	# of shields and money bags can't take the item that would end the match.
+	var last_slot := player.items.size() >= engine.config.inventory_limit - 1
 	for buy: Dictionary in options.buy:
+		if last_slot and buy.item.kind != ItemDef.Kind.ACTIVE:
+			continue
 		# Bots only shop with coins they actually have.
-		if buy.enabled and not buy.credit:
+		if buy.enabled and not buy.credit and not saving:
 			buys[buy] = buy.item.ai_buy_weight(player, engine)
 	if not buys.is_empty() and rng.randf() < 0.45:
 		var buy: Variant = _weighted(buys)
@@ -80,6 +90,8 @@ func _turn(options: Dictionary) -> Dictionary:
 			weight *= boldness
 		if option.credit and not player.has_character(&"vagabond"):
 			weight *= 0.05
+		if saving and option.ability.cost > 0:
+			weight *= 0.1
 		plays[option] = weight
 	var choice: Variant = _weighted(plays)
 	return choice if choice != null else {"kind": &"end"}
@@ -113,6 +125,7 @@ func _doubt(play: Play, stakes: Array) -> Variant:
 		if ability.tags.has(&"steal") and player.coins >= 5:
 			chance += 0.25
 	chance += 0.1 * player.cards.count(ability.character_id)
+	chance += ability.ai_suspicion(play, player)
 	# Someone who has already claimed more characters than fit in a hand.
 	if _claims.get(play.actor.id, {}).size() > engine.config.hand_size:
 		chance += 0.15
@@ -150,6 +163,18 @@ func _react(d: Decision) -> Variant:
 		if engine.rng.randf() < chance:
 			return option
 	return null
+
+
+## An option at random, leaning towards what the content says is better.
+func _pick(d: Decision) -> int:
+	if d.options.is_empty():
+		return -1
+	var hints: Array = d.context.get("weights", [])
+	var weights := {}
+	for i: int in d.options.size():
+		weights[i] = float(hints[i]) if i < hints.size() else 1.0
+	var choice: Variant = _weighted(weights)
+	return choice if choice != null else engine.rng.randi_range(0, d.options.size() - 1)
 
 
 func _weighted(weights: Dictionary) -> Variant:

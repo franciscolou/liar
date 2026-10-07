@@ -19,6 +19,8 @@ extends RefCounted
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
 ##   shop_restocked {slot} / shop_rerolled {player}
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item}
+##   item_stolen {thief, victim, item, index}   a held item changes inventory as it is
+##     (index: where it was in the victim's inventory)
 ##   claim_declared {play} / claim_resolving {play} (cancellable)
 ##   claim_cancelled {play} / claim_resolved {play}
 ##   doubt_declared {play, doubter, stake} / doubt_revealed {play, doubter, truthful}
@@ -39,6 +41,10 @@ extends RefCounted
 ##   card_peeked {viewer, owner, index, card}   private to the viewer
 ##   card_lost {player, index, card}            the hand follows Morale; public
 ##   card_drawn {player, index}
+##   hand_redrawn {player, count}               the whole hand went back for new cards
+##   coin_flipped {player, heads}               a coin tossed for everyone to see
+##   note {player, text, good}                  news from content that no other event
+##     carries: `text` is an English key with one %s for the player's name
 ##   status_added / status_removed {player, status}
 ##   counter_changed {player, counter, value, delta}  a private counter is its owner's secret
 

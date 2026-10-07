@@ -19,6 +19,8 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s gets %s.") % [d.player.name, _item(d.item)]
 		&"item_used":
 			return Loc.t("%s uses %s%s.") % [d.player.name, d.item.def.display_name, _on(d.play)]
+		&"item_stolen":
+			return Loc.t("%s takes %s from %s.") % [d.thief.name, _item(d.item), d.victim.name]
 		&"item_broken":
 			return Loc.t("%s's %s breaks.") % [d.player.name, d.item.def.display_name]
 		&"claim_declared":
@@ -53,6 +55,12 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s gives up the %s.") % [d.player.name, Content.character(d.card).display_name]
 		&"card_drawn":
 			return Loc.t("%s draws a card.") % d.player.name
+		&"hand_redrawn":
+			return Loc.t("%s trades the whole hand for new cards.") % d.player.name
+		&"coin_flipped":
+			return Loc.t("%s flips a coin: heads!" if d.heads else "%s flips a coin: tails.") % d.player.name
+		&"note":
+			return Loc.t(d.text) % d.player.name
 		&"cards_swapped":
 			return Loc.t("%s and %s trade a card.") % [d.a.name, d.b.name]
 		&"card_peeked":

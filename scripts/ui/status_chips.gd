@@ -3,6 +3,7 @@ extends HFlowContainer
 ## Small coloured tags for the statuses on a player (Hexed, Under Oath...).
 
 var _shown := ""
+var _chips := {}  # status id -> its chip
 
 
 func _init() -> void:
@@ -22,6 +23,7 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 		return
 	_shown = signature
 	UI.clear(self)
+	_chips.clear()
 	for status_id: StringName in player.statuses:
 		var def: Dictionary = Content.statuses.get(status_id, {})
 		var color: Color = def.get("color", UI.MUTED)
@@ -35,4 +37,11 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 			tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Placed by %s.") % by.name]
 		TipLayer.attach(chip, tip)
 		add_child(chip)
+		_chips[status_id] = chip
 		UI.pop(chip, 1.4)
+
+
+## The chip showing `status_id`, null if there is none.
+func chip_of(status_id: StringName) -> Control:
+	var found: Variant = _chips.get(status_id)
+	return found if found != null and is_instance_valid(found) else null

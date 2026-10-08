@@ -152,6 +152,16 @@ func anchor() -> Vector2:
 	return global_position + SIZE / 2.0
 
 
+## The chip of status `id` on this player, null if it has none.
+func status_chip(id: StringName) -> Control:
+	return _chips.chip_of(id)
+
+
+## The points the look of status `id` breaks up from (see StatusFx.pieces).
+func status_pieces(id: StringName) -> Array[Vector2]:
+	return _status_fx.pieces(id)
+
+
 func coin_anchor() -> Vector2:
 	return _stats.coin_center()
 

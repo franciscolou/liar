@@ -238,6 +238,16 @@ func hand_center() -> Vector2:
 	return _hand.global_position + Vector2(90, 78)
 
 
+## The chip of status `id` on this player, null if it has none.
+func status_chip(id: StringName) -> Control:
+	return _chips.chip_of(id)
+
+
+## The points the look of status `id` breaks up from (see StatusFx.pieces).
+func status_pieces(id: StringName) -> Array[Vector2]:
+	return _status_fx.pieces(id)
+
+
 func coin_anchor() -> Vector2:
 	return _stats.coin_center()
 

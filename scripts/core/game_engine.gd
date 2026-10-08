@@ -424,7 +424,7 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 		for id: int in early.keys():
 			if early[id].answer == null:
 				early.erase(id)
-	# The ability itself may send the card away (Fickle, Swindle...).
+	# The ability itself may send the card away (Sold Out, Swindle...).
 	var copies := actor.cards.count(ability.character_id)
 
 	if not over and actor.alive:
@@ -583,9 +583,12 @@ func _choose_target(play: Play) -> bool:
 ## What `player` may put up for a LIAR! call, lost if the claim was true.
 ## With the coins for the fine there is nothing to choose. Without them it is
 ## a debt (only if something lets them go that far into the red) or 1 Morale.
-## Empty for someone who can't call LIAR! at all.
-func doubt_stakes(player: PlayerState) -> Array[StringName]:
+## Empty for someone who can't call LIAR! at all, and for everyone when `play`
+## is a claim made Under Oath: it can only be true, there is nothing to call.
+func doubt_stakes(player: PlayerState, play: Play = null) -> Array[StringName]:
 	var out: Array[StringName] = []
+	if play != null and play.actor.has_status(&"truth_bound"):
+		return out
 	# A status may take the call away altogether (it blocks the tag &"doubt").
 	if not player.alive or blocked_reason(player, [&"doubt"]) != "":
 		return out
@@ -610,7 +613,7 @@ func _doubt_window(play: Play) -> Dictionary:
 	var asked := []
 	for p: PlayerState in humans:
 		var d := Decision.new(Decision.Kind.DOUBT, p)
-		d.options = doubt_stakes(p)
+		d.options = doubt_stakes(p, play)
 		d.context = {
 			"play": play,
 			# Answering the claim with a reaction is the third way out of this window.
@@ -638,7 +641,9 @@ func _doubt_window(play: Play) -> Dictionary:
 		if over:
 			return {}
 		var d := Decision.new(Decision.Kind.DOUBT, p)
-		d.options = doubt_stakes(p)
+		d.options = doubt_stakes(p, play)
+		if d.options.is_empty():
+			continue
 		d.context = {"play": play}
 		var answer: Variant = await ask(d)
 		if answer is StringName and d.options.has(answer):

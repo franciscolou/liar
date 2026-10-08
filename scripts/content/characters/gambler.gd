@@ -5,7 +5,7 @@ extends CharacterDef
 ## pays them out here.
 
 const ANTE := 2
-const JACKPOT := 10
+const JACKPOT := 6
 const STAKE := 2
 const PRIZE := 6
 ## Play.params key on a doubted claim: [{player, lie}], one per bet placed.

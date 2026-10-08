@@ -11,7 +11,7 @@ func _init() -> void:
 	status_defs = {
 		&"truth_bound": {
 			"name": "Under Oath",
-			"description": "Can't lie: may only use abilities of characters actually held. Lasts until the end of this player's next turn.",
+			"description": "Can't lie: may only use abilities of characters actually held, and nobody can call LIAR! on them. Lasts until the end of this player's next turn.",
 			"color": Color("c9a24a"),
 		},
 	}

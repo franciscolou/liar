@@ -9,6 +9,7 @@ signal doubt_answered(decision: Decision, value: Variant)
 const ARC_CENTER := Vector2(576, 322)
 const ARC_RADIUS := Vector2(450, 240)
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
+const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
 ## Loaded up front; the sound of each item ("item_<id>") is loaded on first use.
@@ -32,12 +33,23 @@ const SIGHT_ICON := "res://assets/target.png"
 const COIN_ICON := "res://assets/ui/coin.png"
 const HEART_ICON := "res://assets/ui/heart.png"
 const PICK_SCALE := 1.9
+## A peeked card held up to whoever peeks: how big (for a human, for a bot)
+## and how far from them (from the hand on screen, from a seat).
+const PEEK_SCALE := 2.0
+const PEEK_SCALE_BOT := 1.1
+const PEEK_REACH := 265.0
+const PEEK_REACH_SEAT := 150.0
+## How a card looks tipped towards someone else: its length along the way to
+## them (1: not at all) and how far it is sheared across it.
+const PEEK_SQUASH := 0.6
+const PEEK_SHEAR := 0.18
 ## Where, and how large, a card is shown when the table stops to look at it.
 const SHOWN_SCALE := 2.5
 const SHOWN_CENTRE := Vector2(576, 236)
 const SHOP_HEIGHT := 106.0
 const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck
 const SHOP_DECK_WIDTH := 62.0
+const SHOP_TAB_ROW := 36.0  # folded: from one row of mini icons to the next
 const LOG_SIZE := Vector2(232, 136)
 const LOG_HEADER := 18.0  # the strip with the fold button
 const LOG_FOLDED := Vector2(24, 24)  # just the button
@@ -58,7 +70,7 @@ var _arrows: Control  # under whatever the mouse is on (see _lift_hovered)
 var _fx: Control
 var _overlay: Control
 var _shop: Control
-var _shop_bg: Panel
+var _shop_bg: ShopStall
 var _shop_tab: Control  # what shows while folded
 var _shop_body: Control  # what shows while open
 var _shop_entries: Array = []  # {view, price, coin, mini, slot, def}; slot -1 = always on sale
@@ -289,7 +301,8 @@ func _build_shop() -> void:
 	_shop.size = Vector2(_shop_width, SHOP_HEIGHT)
 	_shop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_table.add_child(_shop)
-	_shop_bg = Panel.new()
+	_shop_bg = ShopStall.new()
+	_shop_bg.tray = SHOP_DECK_WIDTH
 	_shop_bg.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_shop_bg.mouse_entered.connect(_set_shop_open.bind(true))
 	_shop_bg.gui_input.connect(_on_shop_bg_input)
@@ -352,7 +365,7 @@ func _build_shop() -> void:
 		var price := UI.label("", 15, UI.GOLD, true)
 		price.position = Vector2(x + 30, 79)
 		_shop_body.add_child(price)
-		var mini := _shop_icon("", Vector2(6 + (i % 2) * 27, 20 + (i >> 1) * 27), ItemView.BASE * 0.4)
+		var mini := _shop_icon("", Vector2(8 + (i % 2) * 27, 22 + (i >> 1) * SHOP_TAB_ROW), ItemView.BASE * 0.4)
 		_shop_tab.add_child(mini)
 		_shop_entries.append({
 			"view": view, "price": price, "coin": coin, "mini": mini,
@@ -391,6 +404,11 @@ func _set_shop_open(open: bool, instant := false) -> void:
 	_shop_open = open
 	_shop_tab.visible = not open
 	_shop_body.visible = open
+	# Folded, the little icons stand on two shelves; open, the goods share one.
+	var shelves: Array[float] = [75.0]
+	if not open:
+		shelves = [48.0, 48.0 + SHOP_TAB_ROW]
+	_shop_bg.shelves = shelves
 	_restyle_shop()
 	var width := _shop_width if open else SHOP_TAB_WIDTH
 	var at := Vector2(_shop_width - width, 0)
@@ -408,8 +426,7 @@ func _set_shop_open(open: bool, instant := false) -> void:
 
 
 func _restyle_shop() -> void:
-	_shop_bg.add_theme_stylebox_override("panel", UI.box(
-			Color(UI.PANEL, 0.94), UI.GOLD if _shop_pinned else UI.BORDER, 2, 6, 0))
+	_shop_bg.pinned = _shop_pinned
 	_shop_hint.text = "pinned · click to unpin" if _shop_pinned else "click to keep open"
 
 
@@ -591,7 +608,9 @@ func _prompt_shared_doubt() -> void:
 	if _open_doubts.is_empty():
 		return
 	var play: Play = _open_doubts[0].context.play
-	var text := _claim_line(play) + "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("The first to call LIAR! takes it.")]
+	var text := _claim_line(play)
+	if not play.actor.has_status(&"truth_bound"):
+		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("The first to call LIAR! takes it.")]
 	var buttons := []
 	for d: Decision in _open_doubts:
 		for spec: Dictionary in _doubt_buttons(d):
@@ -763,9 +782,11 @@ func _prompt_target(d: Decision) -> void:
 func _prompt_doubt(d: Decision) -> void:
 	var play: Play = d.context.play
 	var def := Content.character(play.ability().character_id)
-	var text := _claim_line(play, "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
+	var sworn := play.actor.has_status(&"truth_bound")
+	# Under Oath there is nothing to weigh up: the claim line says why.
+	var text := _claim_line(play, "" if sworn else "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
 		Loc.t("You hold %d of the %d %s cards. Is it a lie?") % [d.player.cards.count(def.id), engine.copies_in_play(), def.display_name]])
-	if d.options.is_empty():
+	if d.options.is_empty() and not sworn:
 		# Only here for what they may play instead (context.reactions).
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), engine.blocked_reason(d.player, [&"doubt"])]
 	elif not d.options.has(GameEngine.STAKE_COINS):
@@ -1423,8 +1444,7 @@ func present(e: GameEvent) -> void:
 			_float(Loc.t(def.get("name", String(d.status))).to_upper(), _anchor(d.player), def.get("color", UI.PURPLE).lightened(0.35), 20)
 			await _wait(0.4)
 		&"status_removed":
-			var def: Dictionary = Content.statuses.get(d.status, {})
-			_float(Loc.t("%s ENDS") % Loc.t(def.get("name", String(d.status))).to_upper(), _anchor(d.player), UI.MUTED, 14)
+			await _anim_status_broken(d)
 		&"counter_changed":
 			var def: Dictionary = Content.counters.get(d.counter, {})
 			if d.delta != 0 and (d.player == viewer or not def.get("private", false)):
@@ -1842,6 +1862,11 @@ func _anim_item_gained(d: Dictionary) -> void:
 		var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
 		await _play_fx.item_conjured(texture, _item_spot(d.player, d.player.items.size() - 1), label)
 		return
+	if _play_fx.copying(d.player):
+		var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
+		await _play_fx.item_copied(texture, _item_spot(d.player, d.player.items.size() - 1),
+				ItemView.BASE * (0.8 if d.player == viewer else 0.4), label)
+		return
 	_play_sfx("item_get")
 	_float(label, _anchor(d.player), UI.BLUE)
 	await _wait(0.35)
@@ -2170,32 +2195,115 @@ func _anim_cards_swapped(d: Dictionary) -> void:
 	await _wait(0.25)
 
 
+## The card being peeked at leaves its hand and is held up next to whoever
+## peeks, then goes back the way it came. A human who peeks sees it turn face
+## up and keeps it there until they have looked. Everyone else only sees its
+## back, tipped towards the one it is being shown to.
 func _anim_peek(d: Dictionary) -> void:
 	var peeker: PlayerState = d.viewer
 	var owner: PlayerState = d.owner
-	if peeker.is_bot:
-		_float("PEEK", _card_center(owner, d.index), UI.BLUE, 18)
-		if owner == viewer:
-			var card: CardView = _hero.card(d.index)
-			if card != null:
-				card.highlight(UI.BLUE)
-				await _wait(0.9)
-				card.highlight(null)
-				return
-		await _wait(0.6)
-		return
-	if peeker != viewer:
+	var asks := not peeker.is_bot
+	if asks and peeker != viewer:
 		await _hand_over(peeker)
-	var box := _open_modal(Loc.t("One of %s's cards") % owner.name)
-	var card := CardView.new(2.2)
-	card.set_card(d.card, true)
-	card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	box.add_child(card)
-	var ok := UI.button("Got it", UI.GOLD, 16)
-	ok.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	box.add_child(ok)
-	await ok.pressed
-	UI.clear(_modal)
+	var view := _card_view(owner, d.index)
+	var from := _card_center(owner, d.index)
+	var small: float = (view.size.x if view != null else 44.0) / CardView.BASE.x
+	var big := PEEK_SCALE if asks else PEEK_SCALE_BOT
+	# Held out between the peeker and the middle of the table.
+	var near := _anchor(peeker)
+	var to := near + (ARC_CENTER - near).normalized() * (PEEK_REACH if peeker == viewer else PEEK_REACH_SEAT)
+
+	var layer := _modal if asks else _fx
+	var veil: ColorRect = null
+	if asks:
+		UI.clear(_modal)
+		veil = ColorRect.new()
+		veil.color = Color(0, 0, 0, 0.0)
+		veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+		layer.add_child(veil)
+		veil.create_tween().tween_property(veil, "color:a", 0.5, 0.2 / _speed)
+	# The card hangs from two nodes: one carries it about and sizes it, the
+	# other tips it (see _lean_card).
+	var mover := Node2D.new()
+	mover.position = from
+	mover.scale = Vector2.ONE * small
+	layer.add_child(mover)
+	var tilt := Node2D.new()
+	mover.add_child(tilt)
+	var card := CardView.new()
+	card.interactive = false
+	card.position = -CardView.BASE / 2.0
+	if not asks:
+		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Out of the hand on screen it leaves as it was there: face up.
+	card.set_card(d.card if owner == viewer else &"", owner == viewer)
+	tilt.add_child(card)
+	_set_cards_shown([view], false)
+	_play_sfx("card_draw")
+	var out := mover.create_tween().set_parallel()
+	out.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	out.tween_property(mover, "position", to, 0.5 / _speed)
+	out.tween_property(mover, "scale", Vector2.ONE * big, 0.5 / _speed)
+	await _wait(0.22)
+	if not is_instance_valid(card):
+		return
+	if asks:
+		card.set_card(d.card, true, true)
+	else:
+		# Its face goes to the peeker: turned away from everyone else, and
+		# tipped towards them.
+		card.set_card(&"", false, true)
+		mover.create_tween().tween_method(_lean_card.bind(tilt, (near - to).normalized()), 0.0, 1.0, 0.38 / _speed) \
+				.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.33)
+
+	if asks:
+		var title := UI.label(Loc.t("One of %s's cards") % owner.name, 20, UI.CREAM, true)
+		layer.add_child(title)
+		title.reset_size()
+		title.position = to + Vector2(-title.size.x / 2.0, -CardView.BASE.y * big / 2.0 - title.size.y - 8.0)
+		var ok := UI.button("Got it", UI.GOLD, 16)
+		layer.add_child(ok)
+		ok.reset_size()
+		ok.position = to + Vector2(CardView.BASE.x * big / 2.0 + 16.0, -ok.size.y / 2.0)
+		await ok.pressed
+		if engine.aborted:
+			return
+		title.queue_free()
+		ok.queue_free()
+		veil.create_tween().tween_property(veil, "color:a", 0.0, 0.25 / _speed)
+	else:
+		await _wait(0.85)
+
+	if is_instance_valid(mover):
+		if asks:
+			card.set_card(&"", false, true)
+		else:
+			mover.create_tween().tween_method(_lean_card.bind(tilt, (near - to).normalized()), 1.0, 0.0, 0.22 / _speed)
+			if owner == viewer:
+				card.set_card(d.card, true, true)
+		var back := mover.create_tween().set_parallel()
+		back.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+		back.tween_property(mover, "position", from, 0.4 / _speed)
+		back.tween_property(mover, "scale", Vector2.ONE * small, 0.4 / _speed)
+	await _wait(0.4)
+	_play_sfx("card_draw")
+	_set_cards_shown([view], true)
+	if asks:
+		UI.clear(_modal)
+	elif is_instance_valid(mover):
+		mover.queue_free()
+
+
+## Tips a card held up to someone, as seen from behind and above: squashed
+## along `toward` (the way from the card to whoever looks at its face) and
+## sheared a little across it. `lean` goes from 0, flat, to 1; `holder` is the
+## node the card hangs from.
+func _lean_card(lean: float, holder: Node2D, toward: Vector2) -> void:
+	if not is_instance_valid(holder):
+		return
+	var push := (toward * (PEEK_SQUASH - 1.0) + toward.orthogonal() * PEEK_SHEAR) * lean
+	holder.transform = Transform2D(Vector2.RIGHT + push * toward.x, Vector2.DOWN + push * toward.y, Vector2.ZERO)
 
 
 func _game_over(winner: PlayerState) -> void:
@@ -2299,6 +2407,33 @@ func _float(text: String, at: Vector2, color: Color, font_size := 20) -> void:
 	tween.tween_property(l, "position:y", l.position.y - 46, 1.0 / _speed).set_ease(Tween.EASE_OUT)
 	tween.parallel().tween_property(l, "modulate:a", 0.0, 0.4 / _speed).set_delay(0.6 / _speed)
 	tween.tween_callback(l.queue_free)
+
+
+## A status coming off a player, without a word: its chip cracks and flies
+## apart, and so does whatever it looked like on their box.
+func _anim_status_broken(d: Dictionary) -> void:
+	var box: Variant = _node_of(d.player)
+	if box == null:
+		return
+	var color: Color = Content.statuses.get(d.status, {}).get("color", UI.MUTED)
+	var chip: Control = box.status_chip(d.status)
+	if chip != null:
+		var rect := chip.get_global_rect()
+		_play_fx.line(rect.position + Vector2(rect.size.x * 0.62, -3), rect.position + Vector2(rect.size.x * 0.38, rect.size.y + 3),
+				Color.WHITE, 2.0, 0.12, 0.06)
+		UI.shake(chip, 3.0, 0.08)
+		await _wait(0.08)
+		_play_sfx("status_break")
+		if is_instance_valid(chip):
+			chip.modulate.a = 0.0
+		_play_fx.burst(rect.get_center(), color, 10, 150.0, 0.45, 520.0, 6.0)
+		_play_fx.burst(rect.get_center(), UI.CREAM, 4, 110.0, 0.35, 520.0, 4.0)
+	else:
+		_play_sfx("status_break")
+	for piece: Vector2 in box.status_pieces(d.status):
+		_play_fx.burst(piece, color.lightened(0.35), 7, 150.0, 0.45, 360.0, 6.0)
+		_play_fx.ring(piece, color.lightened(0.5), 6.0, 26.0, 0.25, 3.0)
+	await _wait(0.25)
 
 
 ## A big word slammed over the stage.

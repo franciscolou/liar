@@ -29,6 +29,12 @@ const COIN_ART := "res://assets/ui/coin.png"
 ## The potion going down: how many steps, over how long, and what is left
 ## where the liquid was.
 const GAVEL_RAISED := 0.95  # radians the gavel is lifted before a knock
+const SCALES_Y := 266.0  # where the pivot of the scales of the court stands
+## A firework rocket: how long it climbs, and how long what it leaves behind
+## takes to go out.
+const ROCKET_RISE := 0.5
+const ROCKET_TAIL := 0.3
+const BOLT := Color("ffd84a")
 const DRAIN_FRAMES := 12
 const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
@@ -43,6 +49,8 @@ var last_attacker: PlayerState
 var _bits: Array = []
 var _rings: Array = []
 var _lines: Array = []
+var _rockets: Array = []
+var _bolts: Array = []
 var _drain_frames: Dictionary = {}  # texture path -> Array of Texture2D
 ## The lasso of a Confiscate, turning overhead until it is thrown.
 var _lasso: RopeFx
@@ -50,6 +58,9 @@ var _lasso_spin: Tween
 ## The hat of a Hat Trick, set down and waiting for what comes out of it.
 var _hat: HatFx
 var _hat_owner: PlayerState
+## The wand of a Counterfeit, out and pointing until the copy is made.
+var _wand: WandFx
+var _wand_owner: PlayerState
 
 
 func _init(match_table: Variant) -> void:
@@ -136,26 +147,51 @@ func _fx_bard_silver_tongue(play: Play) -> void:
 	await _wait(0.35)
 
 
-func _fx_heir_fickle(play: Play) -> void:
+func _fx_heir_sold_out(play: Play) -> void:
 	await _fireworks(play.actor, 2)
 
 
-func _fx_heir_sold_out(play: Play) -> void:
+func _fx_heir_passive_income(play: Play) -> void:
 	await _fireworks(play.actor, 3)
 
 
-## Money, and the party that comes with it.
+## Money, and the party that comes with it: rockets leave one after the other,
+## each from its own spot, and burst where they get to.
 func _fireworks(who: PlayerState, shells: int) -> void:
 	var here := _at(who)
-	_snd("fx_cash")
 	var colors: Array[Color] = [UI.GOLD, Color("e0503c"), Color("c08adf")]
+	var pads: Array[Vector2] = []
+	var skies: Array[Vector2] = []
+	# What happens when: [seconds, shell, whether it is the burst].
+	var cues: Array = []
+	var leaves := 0.0
 	for i in shells:
-		var sky := here + Vector2((i - (shells - 1) / 2.0) * 70.0, -60.0 - 14.0 * (i % 2))
-		line(here, sky, colors[i].lightened(0.4), 3.0, 0.12, 0.1)
-		await _wait(0.12)
-		burst(sky, colors[i], 18, 190.0, 0.6, 160.0)
-		ring(sky, colors[i].lightened(0.3), 6.0, 46.0, 0.3, 3.0)
-	await _wait(0.4)
+		var column := i - (shells - 1) / 2.0
+		pads.append(here + Vector2(column * 38.0 + randf_range(-14.0, 14.0), randf_range(34.0, 56.0)))
+		var sky := here + Vector2(column * 70.0 + randf_range(-16.0, 16.0), -72.0 - 14.0 * (i % 2) - randf_range(0.0, 14.0))
+		# Under the top of the screen, for the players sitting up there.
+		skies.append(Vector2(sky.x, maxf(sky.y, 26.0)))
+		cues.append([leaves, i, false])
+		cues.append([leaves + ROCKET_RISE, i, true])
+		leaves += randf_range(0.12, 0.24)
+	cues.sort_custom(func(first: Array, second: Array) -> bool: return first[0] < second[0])
+	_snd("fx_firework_launch")
+	var now := 0.0
+	for cue: Array in cues:
+		if cue[0] > now:
+			await _wait(cue[0] - now)
+			now = cue[0]
+		var i: int = cue[1]
+		if not cue[2]:
+			rocket(pads[i], skies[i], colors[i], ROCKET_RISE)
+			continue
+		# One sound each: they ring on over one another.
+		_snd("fx_firework_%d" % (i + 1))
+		burst(skies[i], colors[i], 18, 190.0, 0.6, 160.0)
+		ring(skies[i], colors[i].lightened(0.3), 6.0, 46.0, 0.3, 3.0)
+		flash(Color(colors[i], 0.07), 0.12)
+		table._shake_screen(3.0)
+	await _wait(0.35)
 
 
 ## Two knocks of the gavel on the witness, and the oath closes around them.
@@ -167,10 +203,72 @@ func _fx_judge_under_oath(play: Play) -> void:
 	await _wait(0.4)
 
 
+## The scales of the court sink on the side of whoever doubted and are then
+## thrown over to the Judge's, brass on brass. The fine follows.
 func _fx_judge_contempt(play: Play) -> void:
 	var doubter: PlayerState = play.event.data.get("doubter") if play.event != null else null
-	await _gavel(doubter if doubter != null else play.actor, UI.RED)
-	await _wait(0.2)
+	var here := _at(play.actor)
+	var there := _at(doubter) if doubter != null else here
+	var box: Control = table._node_of(doubter)
+	var speed: float = table._speed
+	# Each of the two gets the pan on their own side of the table.
+	var doubt := ScaleFx.LEAN * (-1.0 if there.x < here.x else 1.0)
+	var scales := ScaleFx.new()
+	scales.position = Vector2(clampf((here.x + there.x) / 2.0, 340.0, 812.0), SCALES_Y)
+	# It grows from its foot, as something set down on the table.
+	scales.pivot_offset = Vector2(0, ScaleFx.POST * ScaleFx.PIXEL)
+	scales.scale = Vector2.ONE * 0.7
+	scales.modulate.a = 0.0
+	add_child(scales)
+	_snd("fx_scales_chain")
+	dim(0.45, 1.85)
+	var enter := scales.create_tween().set_parallel()
+	enter.tween_property(scales, "modulate:a", 1.0, 0.12 / speed)
+	enter.tween_property(scales, "scale", Vector2.ONE, 0.22 / speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# The doubt is laid on its pan first, and weighs, in no hurry.
+	enter.tween_property(scales, "tilt", doubt, 0.4 / speed).set_delay(0.25 / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	ring(there, UI.RED, 70.0, 24.0, 0.4, 4.0)
+	stream(there, scales.position + scales.pan(doubt), UI.RED, 5, 0.3, 0.12)
+	await _wait(0.55)
+	if not is_instance_valid(scales):
+		return
+
+	# Then the truth on the other one, and the ruling: all of it at once.
+	stream(here, scales.position + scales.pan(-doubt), UI.GOLD, 6, 0.26, 0.1)
+	await _wait(0.3)
+	if not is_instance_valid(scales):
+		return
+	scales.create_tween().tween_property(scales, "tilt", -doubt, 0.14 / speed) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	await _wait(0.14)
+	if not is_instance_valid(scales):
+		return
+	_snd("fx_scales")
+	scales.jolt()
+	burst(scales.position + scales.pan(-doubt), ScaleFx.LIGHT, 12, 220.0, 0.35, 500.0, 6.0)
+	burst(scales.position, UI.GOLD, 6, 160.0, 0.3, 300.0, 6.0)
+	ring(scales.position, UI.GOLD, 24.0, 170.0, 0.45, 6.0)
+	ring(there, UI.RED, 16.0, 96.0, 0.28, 6.0)
+	flash(Color(1.0, 0.85, 0.45, 0.14), 0.2)
+	if box != null:
+		UI.shake(box, 9.0, 0.2)
+	table._shake_screen(8.0)
+	# The beam bounces off its stop and stays down.
+	var settle := scales.create_tween()
+	settle.tween_property(scales, "tilt", -doubt * 0.62, 0.1 / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	settle.tween_property(scales, "tilt", -doubt, 0.11 / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	settle.tween_property(scales, "tilt", -doubt * 0.9, 0.06 / speed)
+	settle.tween_property(scales, "tilt", -doubt, 0.07 / speed)
+	await _wait(0.65)
+	if not is_instance_valid(scales):
+		return
+	var leave := scales.create_tween()
+	leave.tween_property(scales, "modulate:a", 0.0, 0.2 / speed)
+	leave.tween_callback(scales.queue_free)
 
 
 ## The gavel comes down twice on the box of `who`, unhurried.
@@ -194,8 +292,6 @@ func _gavel(who: PlayerState, color: Color) -> void:
 		_snd("fx_gavel")
 		burst(there, Color("c9a26a"), 10, 200.0, 0.3, 500.0, 6.0)
 		ring(there, color, 16.0, 96.0, 0.28, 6.0)
-		if color == UI.RED:
-			flash(Color(0.6, 0.1, 0.05, 0.16), 0.2)
 		if box != null:
 			UI.shake(box, 9.0, 0.2)
 		table._shake_screen(6.0)
@@ -310,17 +406,163 @@ func drop_hat() -> void:
 func put_away() -> void:
 	drop_lasso()
 	drop_hat()
+	drop_wand()
 
 
+## The wand slides out from behind the Magician's box, turns on the item
+## being copied and lets a ray fly at it. It stays out until the copy is
+## gained (item_copied) or the play is over.
 func _fx_magician_counterfeit(play: Play) -> void:
+	drop_wand()
+	var speed: float = table._speed
 	var here := _at(play.actor)
+	var box: Control = table._node_of(play.actor)
+	var wand := WandFx.new()
+	# Out of whichever edge of the box faces the middle of the table.
+	wand.way = Vector2.DOWN if here.y < POT.y else Vector2.UP
+	wand.rest = here
+	if box != null:
+		var rect := box.get_global_rect()
+		wand.rest = Vector2(clampf(here.x, rect.position.x + 20.0, rect.end.x - 20.0),
+				rect.end.y if wand.way == Vector2.DOWN else rect.position.y)
+	wand.rotation = wand.way.angle()
+	wand.out = 0.0
+	add_child(wand)
+	_wand = wand
+	_wand_owner = play.actor
 	_snd("fx_shimmer")
-	ring(here + Vector2(-16, 0), UI.BLUE, 60.0, 14.0, 0.35, 3.0)
-	await _wait(0.16)
-	ring(here + Vector2(16, 0), UI.PURPLE.lightened(0.2), 60.0, 14.0, 0.35, 3.0)
+	wand.create_tween().tween_property(wand, "out", 1.0, 0.3 / speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	rise(wand.rest + wand.way * 20.0, BOLT, 5, 14.0)
+	await _wait(0.34)
+	var def: ItemDef = play.params.get("item")
+	if def == null or not is_instance_valid(wand):
+		return
+	var original := _copied_from(play.actor, def)
+	if not await _zap(wand, original):
+		return
+	ring(original, Color.WHITE, 40.0, 14.0, 0.3, 3.0)
+	await _wait(0.4)
+
+
+## Where the item `def` that `copier` is copying can be seen: in the hands of
+## another player if one has it, in the shop otherwise.
+func _copied_from(copier: PlayerState, def: ItemDef) -> Vector2:
+	for p: PlayerState in table.engine.opponents(copier):
+		for i: int in p.items.size():
+			if p.items[i].def == def and not p.items[i].hidden:
+				return table._item_spot(p, i)
+	return table._shop_point(table.engine.shop.find(def), def)
+
+
+## The wand turns on `at` and fires: a ray, and sparks where it lands. False
+## if the wand is gone before it could.
+func _zap(wand: WandFx, at: Vector2) -> bool:
+	var speed: float = table._speed
+	var turn := wrapf((at - wand.position).angle() - wand.rotation, -PI, PI)
+	# A wand that a twirl left pointing there has nothing to line up.
+	if absf(turn) > 0.03:
+		var aim := wand.create_tween().set_parallel()
+		aim.tween_property(wand, "rotation", wand.rotation + turn, 0.16 / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		aim.tween_property(wand, "charge", 1.0, 0.2 / speed)
+		await _wait(0.24)
+		if not is_instance_valid(wand):
+			return false
+	var tip := wand.tip()
+	_snd("fx_zap")
+	bolt(tip, at)
+	burst(tip, Color.WHITE, 4, 90.0, 0.2, 0.0, 4.0)
+	burst(at, BOLT, 12, 200.0, 0.45, 300.0, 6.0)
+	burst(at, Color.WHITE, 6, 130.0, 0.35, 300.0, 4.0)
+	ring(at, BOLT, 6.0, 36.0, 0.28, 3.0)
+	for i in 5:
+		burst(tip.lerp(at, randf_range(0.15, 0.9)), BOLT.lightened(0.3), 1, 70.0, 0.35, 160.0, 4.0)
+	# The kick of it, back along the wand.
+	var held := wand.position
+	var kick := wand.create_tween()
+	kick.tween_property(wand, "position", held - Vector2.from_angle(wand.rotation) * 7.0, 0.04 / speed)
+	kick.tween_property(wand, "position", held, 0.14 / speed)
+	wand.create_tween().tween_property(wand, "charge", 0.0, 0.3 / speed)
+	return true
+
+
+## A flourish before the trick: the wand spins a couple of times about its
+## own middle, slow into it and slow out, its tip lighting up and shedding
+## sparks as it goes round, and comes to rest pointing at `at`: the spin is
+## the aiming. False if the wand is gone before it is done.
+func _twirl(wand: WandFx, at: Vector2) -> bool:
+	var speed: float = table._speed
+	_snd("fx_shimmer")
+	# Two full turns, and on round the same way to where it has to point.
+	var onto := fposmod((at - wand.middle()).angle() - wand.rotation, TAU)
+	var spin := wand.create_tween().set_parallel()
+	spin.tween_method(wand.twirl, wand.rotation, wand.rotation + TAU * 2.0 + onto, 0.66 / speed) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	spin.tween_property(wand, "charge", 1.0, 0.66 / speed)
+	for i in 6:
+		await _wait(0.11)
+		if not is_instance_valid(wand):
+			return false
+		burst(wand.tip(), BOLT if i % 2 == 0 else Color.WHITE, 2, 90.0, 0.3, 80.0, 4.0)
+	ring(wand.middle(), BOLT, 34.0, 8.0, 0.2, 3.0)
+	await _wait(0.06)
+	return is_instance_valid(wand)
+
+
+## True while the wand of `who` is out with nothing copied yet.
+func copying(who: PlayerState) -> bool:
+	return _wand != null and is_instance_valid(_wand) and _wand_owner == who
+
+
+## The copy made: the wand turns on `home`, its place in the inventory, the
+## same ray goes there and the item comes out of the sparks. `label` is what
+## the table calls it; `item_size` is how big it is drawn in that inventory.
+func item_copied(texture: Texture2D, home: Vector2, item_size: Vector2, label: String) -> void:
+	var wand := _wand
+	_wand = null
+	_wand_owner = null
+	if wand == null or not is_instance_valid(wand):
+		return
+	var speed: float = table._speed
+	if not await _twirl(wand, home):
+		return
+	if not await _zap(wand, home):
+		return
+	var item: TextureRect = table._sprite(texture, home, item_size)
+	item.scale = Vector2.ONE * 0.2
+	item.create_tween().tween_property(item, "scale", Vector2.ONE, 0.24 / speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	flash(Color(1.0, 0.95, 0.6, 0.1), 0.15)
+	table._float(label, home + Vector2(0, -item_size.y / 2.0 - 12.0), UI.BLUE)
+	await _wait(0.14)
+	_snd("item_get")
 	await _wait(0.3)
-	rise(here, UI.BLUE.lightened(0.4), 12, 60.0)
+	_stow(wand)
 	await _wait(0.2)
+	# The inventory draws the real one from here on.
+	if is_instance_valid(item):
+		item.queue_free()
+
+
+## Puts away a wand that had nothing more to do.
+func drop_wand() -> void:
+	if _wand != null and is_instance_valid(_wand):
+		_stow(_wand)
+	_wand = null
+	_wand_owner = null
+
+
+## The wand turns back the way it came out and slides in behind the box.
+func _stow(wand: WandFx) -> void:
+	var speed: float = table._speed
+	var turn := wrapf(wand.way.angle() - wand.rotation, -PI, PI)
+	var leave := wand.create_tween()
+	leave.tween_property(wand, "rotation", wand.rotation + turn, 0.12 / speed)
+	# A twirl may have left it off the spot it came out to.
+	leave.parallel().tween_property(wand, "position", wand.rest + wand.way * WandFx.CLEAR, 0.12 / speed)
+	leave.tween_property(wand, "out", 0.0, 0.2 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	leave.tween_callback(wand.queue_free)
 
 
 func _fx_mercenary_bounty(play: Play) -> void:
@@ -1050,6 +1292,21 @@ func line(from: Vector2, to: Vector2, color: Color, width := 4.0, life := 0.3, d
 	_wake()
 
 
+## A rocket going up from `from` to `to` in `time` seconds, slowing as it
+## climbs: a bright head and, behind it, a tail of sparks that droops, thins
+## out and is gone a moment after the rocket is.
+func rocket(from: Vector2, to: Vector2, color: Color, time := ROCKET_RISE) -> void:
+	_rockets.append({"a": from, "b": to, "c": color, "t": 0.0, "fly": time, "life": time + ROCKET_TAIL})
+	_wake()
+
+
+## A crackling ray from `from` to `to`: white in a yellow glow, never the
+## same shape two moments running.
+func bolt(from: Vector2, to: Vector2, life := 0.28) -> void:
+	_bolts.append({"a": from, "b": to, "t": 0.0, "life": life, "seed": randf() * 100.0})
+	_wake()
+
+
 ## The whole screen blinks `color`.
 func flash(color: Color, time := 0.25) -> void:
 	var rect := _veil(color)
@@ -1110,10 +1367,16 @@ func _process(delta: float) -> void:
 		shape.t += dt
 	for shape in _lines:
 		shape.t += dt
+	for shape in _rockets:
+		shape.t += dt
+	for shape in _bolts:
+		shape.t += dt
+	_rockets = _rockets.filter(func(shape: Dictionary) -> bool: return shape.t < shape.life)
+	_bolts = _bolts.filter(func(shape: Dictionary) -> bool: return shape.t < shape.life)
 	_bits = _bits.filter(func(bit: Dictionary) -> bool: return bit.t < bit.life)
 	_rings = _rings.filter(func(shape: Dictionary) -> bool: return shape.t < shape.life)
 	_lines = _lines.filter(func(shape: Dictionary) -> bool: return shape.t < shape.life)
-	if _bits.is_empty() and _rings.is_empty() and _lines.is_empty():
+	if _bits.is_empty() and _rings.is_empty() and _lines.is_empty() and _rockets.is_empty() and _bolts.is_empty():
 		set_process(false)
 	queue_redraw()
 
@@ -1125,6 +1388,10 @@ func _draw() -> void:
 		var tip: Vector2 = shape.a.lerp(shape.b, head)
 		draw_line(shape.a, tip, Color(0, 0, 0, 0.5 * fade), shape.w + 4.0)
 		draw_line(shape.a, tip, Color(shape.c, shape.c.a * fade), shape.w)
+	for shape in _rockets:
+		_draw_rocket(shape)
+	for shape in _bolts:
+		_draw_bolt(shape)
 	for shape in _rings:
 		var k: float = shape.t / shape.life
 		var radius: float = lerpf(shape.a, shape.b, 1.0 - pow(1.0 - k, 2.0))
@@ -1138,7 +1405,122 @@ func _draw() -> void:
 		draw_rect(Rect2(corner, Vector2(side, side)), Color(bit.c, 1.0 - k * k * k))
 
 
+## The head of a rocket and the sparks it shed over the last ROCKET_TAIL
+## seconds, the oldest of them the faintest, the smallest and the lowest.
+func _draw_rocket(shape: Dictionary) -> void:
+	var sparks := 18
+	for step: int in sparks:
+		var age := ROCKET_TAIL * step / sparks
+		var then: float = shape.t - age
+		# Nothing was shed before it left, or after it burst.
+		if then < 0.0 or then > shape.fly:
+			continue
+		var along: float = 1.0 - pow(1.0 - then / shape.fly, 2.0)
+		var old := step / float(sparks)
+		var at: Vector2 = shape.a.lerp(shape.b, along) + Vector2(sin(then * 31.0 + step) * 3.0 * old, age * age * 260.0)
+		var side := PIXEL * (2.0 if step < 5 else 1.0)
+		var ink: Color = Color.WHITE if step == 0 else shape.c.lightened(0.5 * (1.0 - old))
+		var corner := ((at - Vector2(side, side) / 2.0) / PIXEL).round() * PIXEL
+		draw_rect(Rect2(corner, Vector2(side, side)), Color(ink, 1.0 - old * old))
+
+
+## A ray as a broken line of pixels between its two ends, kinked afresh every
+## few hundredths of a second and fading out over its last third.
+func _draw_bolt(shape: Dictionary) -> void:
+	var way: Vector2 = shape.b - shape.a
+	var side := way.orthogonal().normalized()
+	var kinks := maxi(int(way.length() / 30.0), 2)
+	var beat := floorf(shape.t / 0.04)
+	var points: Array[Vector2] = [shape.a]
+	for i: int in range(1, kinks):
+		var chance: float = fposmod(sin(shape.seed + i * 12.9898 + beat * 78.233) * 43758.5453, 1.0)
+		points.append(shape.a + way * (i / float(kinks)) + side * (chance - 0.5) * 24.0)
+	points.append(shape.b)
+	var cells := {}
+	for i: int in points.size() - 1:
+		var steps := maxi(ceili(points[i].distance_to(points[i + 1]) / 2.0), 1)
+		for step: int in steps + 1:
+			cells[Vector2i((points[i].lerp(points[i + 1], step / float(steps)) / PIXEL).floor())] = true
+	var alpha := clampf((1.0 - shape.t / shape.life) * 3.0, 0.0, 1.0)
+	for cell: Vector2i in cells:
+		draw_rect(Rect2(Vector2(cell) * PIXEL - Vector2(3, 3), Vector2(PIXEL + 6.0, PIXEL + 6.0)), Color(BOLT, alpha * 0.85))
+	for cell: Vector2i in cells:
+		draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), Color(Color.WHITE, alpha))
+
+
 # --- props ---------------------------------------------------------------------
+
+## The Magician's wand: black, capped in white at both ends. Its origin is
+## the end it is held by and it points along +x. It comes out from behind a
+## box: `rest` is the point of the box's edge it crosses, `way` the direction
+## out of it, and `out` (0 to 1) how much of it has come through; what is
+## still behind the edge is not drawn. `charge` (0 to 1) lights its tip.
+class WandFx extends Control:
+	const PIXEL := 4.0
+	const LENGTH := 15  # in pixels of the wand
+	## How far from the edge it floats once it is all out.
+	const CLEAR := 12.0
+	const EDGE := Color("0d0b12")
+	const BODY := Color("262230")
+	const SHINE := Color("5d5670")
+	const CAP := Color("f2efe6")
+	const CAP_SHADE := Color("b9b4c4")
+	const GLOW := Color("ffd84a")
+
+	var rest := Vector2.ZERO
+	var way := Vector2.UP
+	var out := 1.0:
+		set(value):
+			out = value
+			position = rest + way * (out * (LENGTH * PIXEL + CLEAR) - LENGTH * PIXEL)
+			queue_redraw()
+	var charge := 0.0:
+		set(value):
+			charge = value
+			queue_redraw()
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Where its far end is, in the coordinates of whatever holds the wand.
+	func tip() -> Vector2:
+		return position + Vector2.from_angle(rotation) * LENGTH * PIXEL
+
+	func middle() -> Vector2:
+		return position + Vector2.from_angle(rotation) * LENGTH * PIXEL / 2.0
+
+	## Turns it to `angle` about its middle, not about the end it is held by.
+	func twirl(angle: float) -> void:
+		var hub := middle()
+		rotation = angle
+		position = hub - Vector2.from_angle(angle) * LENGTH * PIXEL / 2.0
+
+	func _draw() -> void:
+		_cells(-1, -2, LENGTH + 2, 4, EDGE)
+		_cells(0, -1, LENGTH, 2, BODY)
+		_cells(0, -1, LENGTH, 1, SHINE)
+		for cap: int in [0, LENGTH - 3]:
+			_cells(cap, -1, 3, 2, CAP)
+			_cells(cap, 0, 3, 1, CAP_SHADE)
+		if charge <= 0.0:
+			return
+		# A star of light on the tip, its arms as long as the charge.
+		var arm := roundi(3.0 * charge)
+		for i in range(1, arm + 1):
+			for step: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+				_cells(LENGTH + step.x * i, step.y * i - (1 if step.y < 0 else 0), 1, 1, GLOW if i == arm else Color.WHITE)
+		_cells(LENGTH - 1, -1, 2, 2, Color.WHITE)
+
+	## A block of pixels of the wand, less whatever of it is still behind the
+	## edge it comes out of.
+	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
+		var hidden := ceili(maxf(LENGTH * PIXEL - out * (LENGTH * PIXEL + CLEAR), 0.0) / PIXEL)
+		var from := maxi(x, hidden) if hidden > 0 else x
+		if from >= x + w:
+			return
+		draw_rect(Rect2(Vector2(from, y) * PIXEL, Vector2(x + w - from, h) * PIXEL), ink)
+
+
 
 ## The sheriff's badge: a five-pointed star in the same chunky pixels as the
 ## rest of the effects, three tones of gold and a dark rim. `shine` (0 to 1)
@@ -1210,6 +1592,136 @@ class BadgeFx extends Control:
 
 	func _dot(cell: Vector2i, ink: Color) -> void:
 		draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), ink)
+
+
+## The scales of the court, in brass: a post on a stepped foot, a beam across
+## its top and a pan hung by chains from each end. The origin is the pivot.
+## `tilt` leans the beam; the pans hang from its ends and swing behind them.
+class ScaleFx extends Control:
+	const PIXEL := 4.0
+	## How far the beam goes down to one side before it meets its stop.
+	const LEAN := 0.3
+	## In pixels of the scales: the pivot to each end of the beam, an end of
+	## the beam down to its pan, half the width of a pan, the pivot to the foot.
+	const ARM := 24.0
+	const DROP := 15
+	const PAN := 8
+	const POST := 30
+	const EDGE := Color("2c1a08")
+	const LIGHT := Color("ffe9a0")
+	const MID := Color("e6bc4c")
+	const DARK := Color("b07f24")
+	const SHADE := Color("7d5616")
+	## How hard a pan is pulled back under its end of the beam, and how fast
+	## its swing dies.
+	const PULL := 90.0
+	const DAMPING := 5.0
+
+	## The lean of the beam, in radians: positive lowers the pan on the right.
+	var tilt := 0.0
+
+	## Where each pan hangs (left, right), sideways, and how fast it is going.
+	var _pans: Array[float] = [1.0 - ARM, ARM - 1.0]
+	var _speeds: Array[float] = [0.0, 0.0]
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		var step := minf(delta, 1.0 / 30.0)
+		for i in 2:
+			_speeds[i] += ((_hook(i).x - _pans[i]) * PULL - _speeds[i] * DAMPING) * step
+			_pans[i] += _speeds[i] * step
+		queue_redraw()
+
+	## The beam hitting its stop: both pans are thrown about on their chains.
+	func jolt(strength := 30.0) -> void:
+		_speeds[0] -= strength
+		_speeds[1] += strength * 0.7
+
+	## The middle of the pan on `side` (negative: left), from the pivot.
+	func pan(side: float) -> Vector2:
+		var i := 0 if side < 0.0 else 1
+		return Vector2(_pans[i], _hook(i).y + DROP + 1.0) * PIXEL
+
+	## The end of the beam a pan hangs from, in pixels of the scales.
+	func _hook(i: int) -> Vector2:
+		var reach := ceili(ARM * cos(tilt))
+		var column := -reach if i == 0 else reach - 1
+		return Vector2(column + (1.0 if i == 0 else 0.0), roundi((column + 0.5) * tan(tilt)))
+
+	func _draw() -> void:
+		var chains := {}
+		var pans := {}
+		for i in 2:
+			var hook := Vector2i(_hook(i))
+			var middle := roundi(_pans[i])
+			var rim := hook.y + DROP
+			_link(chains, hook + Vector2i(-1, 2), Vector2i(middle - PAN + 1, rim - 1))
+			_link(chains, hook + Vector2i(0, 2), Vector2i(middle + PAN - 2, rim - 1))
+			_fill(pans, middle - PAN, rim, PAN * 2, 1, LIGHT)
+			_fill(pans, middle - PAN + 1, rim + 1, PAN * 2 - 2, 1, MID)
+			_fill(pans, middle + PAN - 4, rim + 1, 3, 1, DARK)
+			_fill(pans, middle - PAN + 3, rim + 2, PAN * 2 - 6, 1, DARK)
+		_paint(chains, 2.0)
+		_paint(pans, PIXEL)
+
+		# The post, with a collar halfway down, on its two steps.
+		var stand := {}
+		_fill(stand, -1, 2, 1, POST - 2, MID)
+		_fill(stand, 0, 2, 1, POST - 2, DARK)
+		_fill(stand, -2, 13, 4, 2, MID)
+		_fill(stand, -2, 13, 4, 1, LIGHT)
+		_fill(stand, -5, POST, 10, 2, MID)
+		_fill(stand, -5, POST, 10, 1, LIGHT)
+		_fill(stand, -9, POST + 2, 18, 2, MID)
+		_fill(stand, -9, POST + 2, 18, 1, LIGHT)
+		_fill(stand, 6, POST + 3, 3, 1, DARK)
+		_paint(stand, PIXEL)
+
+		# The beam, a knob at each end, and the hub it turns on under a finial.
+		var beam := {}
+		var slope := tan(tilt)
+		var reach := ceili(ARM * cos(tilt))
+		for column in range(-reach, reach):
+			var row := roundi((column + 0.5) * slope)
+			beam[Vector2i(column, row - 1)] = LIGHT
+			beam[Vector2i(column, row)] = MID
+		for i in 2:
+			var hook := Vector2i(_hook(i))
+			_fill(beam, hook.x - 1, hook.y - 2, 2, 4, MID)
+			_fill(beam, hook.x - 1, hook.y - 2, 2, 1, LIGHT)
+			_fill(beam, hook.x - 1, hook.y + 1, 2, 1, DARK)
+		_fill(beam, -1, -5, 2, 3, MID)
+		_fill(beam, -2, -8, 4, 3, MID)
+		_fill(beam, -2, -8, 3, 1, LIGHT)
+		_fill(beam, 1, -7, 1, 2, DARK)
+		_fill(beam, -3, -3, 6, 6, MID)
+		_fill(beam, -3, -3, 6, 1, LIGHT)
+		_fill(beam, -3, -3, 1, 6, LIGHT)
+		_fill(beam, 2, -2, 1, 5, DARK)
+		_fill(beam, -2, 2, 5, 1, DARK)
+		_fill(beam, -1, -1, 2, 2, SHADE)
+		_paint(beam, PIXEL)
+
+	## A chain from one pixel to another, a link light and a link dark.
+	func _link(cells: Dictionary, from: Vector2i, to: Vector2i) -> void:
+		var steps := maxi(maxi(absi(to.x - from.x), absi(to.y - from.y)), 1)
+		for step in steps + 1:
+			var cell := Vector2i(Vector2(from).lerp(Vector2(to), step / float(steps)).round())
+			cells[cell] = MID if step % 2 == 0 else SHADE
+
+	func _fill(cells: Dictionary, x: int, y: int, w: int, h: int, ink: Color) -> void:
+		for row in h:
+			for column in w:
+				cells[Vector2i(x + column, y + row)] = ink
+
+	## Draws `cells` (Vector2i -> Color) with a dark rim `rim` wide around them.
+	func _paint(cells: Dictionary, rim: float) -> void:
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * PIXEL - Vector2(rim, rim), Vector2(PIXEL + rim * 2.0, PIXEL + rim * 2.0)), EDGE)
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), cells[cell])
 
 
 ## A lasso. The rope is a chain of points with weight and no stiffness: held

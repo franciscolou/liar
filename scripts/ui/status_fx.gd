@@ -195,6 +195,25 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 		set_process(true)
 
 
+## Where the look of status `id` is on screen right now, as the points it
+## flies apart from when the status is broken (none without a look showing).
+func pieces(id: StringName) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	if _level.get(id, 0.0) <= 0.0:
+		return out
+	var onto := get_global_transform()
+	match id:
+		GROGGY:
+			for i: int in ORBIT.size():
+				if ORBIT[i] == STAR:
+					out.append(onto * _on_ring(_time * RING_SPEED + TAU * i / ORBIT.size()))
+		HEXED:
+			out.append(onto * (doll_foot + Vector2(0, -17)))
+		TICKING:
+			out.append(onto * (bomb_foot + Vector2(0, -14)))
+	return out
+
+
 func _process(delta: float) -> void:
 	_time += delta
 	var busy := false

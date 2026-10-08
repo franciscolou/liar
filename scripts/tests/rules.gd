@@ -24,6 +24,7 @@ static func run() -> int:
 		"antidote answered in the doubt window": _antidote_early,
 		"antidote let through is not asked again": _antidote_declined,
 		"a doll can't be doubted once pinned": _doll_stands,
+		"nobody calls LIAR! on a claim under oath": _oath_stands,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -154,6 +155,24 @@ static func _doll_stands() -> String:
 			if extra.id != &"voodooist.break":
 				return "%s is offered %s" % [p.name, extra.id]
 	return ""
+
+
+## A claim made Under Oath can only be true: nobody is offered the call, but
+## whoever can answer the claim with a reaction is still asked about that.
+static func _oath_stands() -> String:
+	var table := Table.new(false)
+	var engine := table.engine
+	engine.players[1].cards = [&"doctor", &"judge"]
+	await engine.add_status(engine.players[0], &"truth_bound", {"expires": &"own_turn_end", "by": 2})
+	await table.spike(0, 1)
+	var doubts: Array = table.asked(1, Decision.Kind.DOUBT)
+	if doubts.size() != 1 or doubts[0].context.reactions.size() != 1:
+		return "the target was asked %d times" % doubts.size()
+	if not doubts[0].options.is_empty():
+		return "the target may stake %s" % [doubts[0].options]
+	if not table.asked(2, Decision.Kind.DOUBT).is_empty():
+		return "a bystander was asked"
+	return table.expect_groggy(1, 0)
 
 
 static func _offers_antidote(d: Decision) -> bool:

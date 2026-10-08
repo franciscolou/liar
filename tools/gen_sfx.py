@@ -468,6 +468,115 @@ def fx_gavel():
     return drive(out, 1.6)
 
 
+def chain_rattle(seconds, links, seed):
+    """A small chain shaken: `links` little knocks of metal on metal, thick at
+    the start and thinning out."""
+    rng = random.Random(seed)
+    out = silence(seconds + 0.12)
+    for _ in range(links):
+        at = seconds * rng.random() ** 1.8
+        freq = rng.uniform(2600, 6200)
+        strength = rng.uniform(0.3, 1.0) * (1.0 - 0.6 * at / seconds)
+        mix(out, tone(freq, 0.1, 0.0004, rng.uniform(0.02, 0.05)), at, 0.5 * strength)
+        mix(out, tone(freq * 1.51, 0.06, 0.0004, 0.015), at, 0.25 * strength)
+        mix(out, highpass(noise(0.004, 0.0002, 0.0015, rng.randrange(1 << 30)), 5000), at, 0.6 * strength)
+    return out
+
+
+def fx_scales_chain():
+    """The scales of the court set down: the foot on the table, the chains
+    shaking out and the pans coming to rest."""
+    out = silence(0.6)
+    mix(out, tone(150, 0.12, 0.001, 0.05, glide=0.7), 0.0, 0.5)
+    mix(out, lowpass(noise(0.05, 0.001, 0.02, 241), 900), 0.0, 0.5)
+    mix(out, chain_rattle(0.42, 14, 243), 0.03, 0.8)
+    for freq, gain in ((1180, 0.12), (1873, 0.08)):
+        mix(out, tone(freq, 0.4, 0.002, 0.25), 0.06, gain)
+    return out
+
+
+def fx_scales():
+    """The scales thrown over: the beam slams against its stop, the whole
+    brass frame rings with it and the chains go on shaking underneath."""
+    out = silence(1.7)
+    # The blow: metal on metal, and the weight of the thing behind it.
+    mix(out, bandpass(noise(0.05, 0.0003, 0.018, 231), 700, 7500), 0.0, 1.3)
+    mix(out, tone(72, 0.35, 0.001, 0.16, glide=0.55), 0.0, 1.5)
+    mix(out, lowpass(noise(0.2, 0.001, 0.07, 233), 420), 0.0, 0.8)
+    # The frame: the modes of a heavy bar of brass, each one doubled a hair
+    # apart, so that the ring beats as it dies.
+    for ratio, gain, decay in ((1.0, 1.0, 1.3), (2.76, 0.8, 0.95), (5.4, 0.55, 0.6), (8.93, 0.35, 0.35), (13.3, 0.2, 0.2)):
+        for detune in (1.0, 1.007):
+            mix(out, tone(164.0 * ratio * detune, 1.6, 0.001, decay), 0.0, gain * 0.5)
+    # The pans, struck a moment later as the chains pull tight.
+    for freq, gain, decay in ((1180, 0.3, 0.5), (1873, 0.22, 0.4), (2960, 0.16, 0.28)):
+        mix(out, tone(freq, 0.9, 0.001, decay), 0.012, gain)
+    mix(out, chain_rattle(0.55, 16, 235), 0.04, 0.3)
+    return drive(out[:int(1.7 * RATE)], 1.8)
+
+
+def fx_firework_launch():
+    """A rocket screaming up: a whistle that starts as high as it gets and
+    sinks and thins out as it goes, over the hiss of its tail."""
+    seconds = 0.62
+    out = silence(seconds)
+    mix(out, lowpass(noise(0.04, 0.001, 0.015, 253), 1500), 0.0, 0.5)
+    # Two reeds a hair apart, so that it shrieks rather than sings.
+    for detune, gain in ((1.0, 1.0), (1.013, 0.6), (2.0, 0.18)):
+        mix(out, tone(lambda t: 4300 * detune * math.exp(-t * 1.15), seconds, 0.012, 0.42, vibrato=0.012), 0.0, gain)
+    mix(out, bandpass(noise(seconds, 0.02, 0.3, 251), 3000, 9000), 0.0, 0.35)
+    return out
+
+
+def firework(seed, chord, pitch=1.0, sparks=22):
+    """A shell bursting the way a cartoon draws it: a snap, a fat boom that
+    drops like a slide whistle let go, a bright chord of stars thrown out
+    with it, and the sparks crackling down."""
+    rng = random.Random(seed)
+    out = silence(1.45)
+    mix(out, noise(0.03, 0.0003, 0.01, seed), 0.0, 1.3)
+    mix(out, tone(430 * pitch, 0.3, 0.001, 0.13, shape="square", glide=0.14), 0.0, 0.9)
+    mix(out, tone(150 * pitch, 0.45, 0.002, 0.22, glide=0.3), 0.0, 1.8)
+    mix(out, lowpass(noise(0.5, 0.002, 0.17, seed + 1), lambda t: 400 + 7000 * math.exp(-t * 13.0)), 0.0, 1.3)
+    out = drive(out, 2.6)
+    for i, freq in enumerate(chord):
+        mix(out, bell(freq, 0.8, 0.55), 0.03 + 0.045 * i, 0.16)
+    for _ in range(sparks):
+        late = rng.random() ** 1.5
+        crack = highpass(noise(0.012, 0.0003, rng.uniform(0.002, 0.006), rng.randrange(1 << 30)), rng.uniform(2500, 6000))
+        mix(out, crack, 0.14 + 0.95 * late, rng.uniform(0.12, 0.34) * (1.0 - 0.6 * late))
+    return out[:int(1.45 * RATE)]
+
+
+def status_break():
+    """A status coming off: something small and brittle snapped in two, and
+    the bits of it landing."""
+    out = silence(0.4)
+    mix(out, highpass(noise(0.012, 0.0003, 0.004, 261), 2500), 0.0, 1.0)
+    mix(out, tone(260, 0.06, 0.0005, 0.03, glide=0.6), 0.0, 0.5)
+    for freq, gain, decay in ((2350, 0.5, 0.06), (3320, 0.35, 0.045), (4870, 0.2, 0.03)):
+        mix(out, tone(freq, 0.2, 0.0005, decay), 0.0, gain)
+    for i, at in enumerate((0.07, 0.12, 0.19)):
+        mix(out, tone(3900 + 700 * i, 0.08, 0.0005, 0.025), at, 0.16 - 0.04 * i)
+        mix(out, highpass(noise(0.004, 0.0002, 0.0015, 263 + i), 5000), at, 0.2)
+    return out
+
+
+def fx_zap():
+    """A wand let off: the snap of it, a bright ray dropping in pitch as it
+    flies, crackling, and the sparkle where it lands."""
+    out = silence(0.62)
+    mix(out, highpass(noise(0.02, 0.0005, 0.008, 291), 3000), 0.0, 0.8)
+    ray = tone(lambda t: 900 + 3200 * math.exp(-t * 14.0), 0.3, 0.003, 0.16, shape="saw")
+    mix(out, lowpass(ray, 6000), 0.0, 0.45)
+    mix(out, tone(lambda t: 1800 + 2600 * math.exp(-t * 10.0), 0.3, 0.003, 0.14), 0.0, 0.5)
+    crackle = bandpass(noise(0.25, 0.005, 0.12, 293), 2500, 8000)
+    mix(out, [s * (0.5 + 0.5 * math.sin(TAU * 55.0 * i / RATE)) for i, s in enumerate(crackle)], 0.0, 0.35)
+    for i, freq in enumerate((2093.0, 2637.0, 3136.0, 4186.0)):
+        mix(out, bell(freq, 0.35, 0.25), 0.1 + 0.035 * i, 0.16)
+    return out
+
+
 def fx_poof():
     """A rising whistle, a puff of smoke and the sparkle after it."""
     out = silence(1.05)
@@ -760,6 +869,14 @@ SOUNDS = {
     "fx_lute_flourish": fx_lute_flourish,
     "fx_cash": fx_cash,
     "fx_gavel": fx_gavel,
+    "fx_scales_chain": fx_scales_chain,
+    "fx_scales": fx_scales,
+    "fx_firework_launch": fx_firework_launch,
+    "fx_firework_1": lambda: firework(271, (1046.5, 1318.5, 1568.0)),
+    "fx_firework_2": lambda: firework(275, (1318.5, 1568.0, 2093.0), 1.12),
+    "fx_firework_3": lambda: firework(279, (1568.0, 2093.0, 2637.0), 0.9),
+    "status_break": status_break,
+    "fx_zap": fx_zap,
     "fx_poof": fx_poof,
     "fx_conjure": fx_conjure,
     "fx_shimmer": fx_shimmer,
@@ -807,6 +924,8 @@ PEAKS = {
     "item_death": 0.9,
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
     "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
+    "fx_scales_chain": 0.4, "fx_scales": 0.9,
+    "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
 }
 

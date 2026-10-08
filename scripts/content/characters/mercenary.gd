@@ -13,7 +13,7 @@ func _init() -> void:
 
 
 class Bounty extends Ability:
-	const REWARD := 7
+	const REWARD := 4
 
 	func _init() -> void:
 		id = &"mercenary.bounty"

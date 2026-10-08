@@ -35,14 +35,16 @@ static func ensure_loaded() -> void:
 static func character_list() -> Array:
 	ensure_loaded()
 	var list := characters.values()
-	list.sort_custom(func(a, b): return a.order < b.order)
+	list.sort_custom(func(a, b): return a.order < b.order if a.order != b.order else String(a.id) < String(b.id))
 	return list
 
 
 static func item_list() -> Array:
 	ensure_loaded()
 	var list := items.values()
-	list.sort_custom(func(a, b): return a.price < b.price if a.price != b.price else a.display_name < b.display_name)
+	# Ties go by id, not by name: the name is translated, and every machine of
+	# a room has to list the items in the same order whatever its language.
+	list.sort_custom(func(a, b): return a.price < b.price if a.price != b.price else String(a.id) < String(b.id))
 	return list
 
 

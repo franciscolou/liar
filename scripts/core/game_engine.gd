@@ -626,8 +626,6 @@ func _doubt_window(play: Play) -> Dictionary:
 		var poll := DoubtPoll.new()
 		poll.open = asked.size()
 		for d: Decision in asked:
-			d.context["shared"] = asked.size() > 1
-		for d: Decision in asked:
 			_poll_doubt(d, poll)
 		if not poll.done:
 			await poll.settled

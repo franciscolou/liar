@@ -19,7 +19,7 @@ func _ready() -> void:
 		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		UI.juice(b, 1.04)
 	_relabel()
-	play_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/setup.tscn"))
+	play_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/room.tscn"))
 	quit_button.pressed.connect(func(): get_tree().quit())
 	var settings := UI.button("SETTINGS", UI.BORDER, 16)
 	settings.position = Vector2(1000, 12)

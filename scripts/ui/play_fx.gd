@@ -446,7 +446,7 @@ func _fx_magician_counterfeit(play: Play) -> void:
 
 
 ## Where the item `def` that `copier` is copying can be seen: in the hands of
-## another player if one has it, in the shop otherwise.
+## the player who has it (the shop is only a fallback, if it is gone by now).
 func _copied_from(copier: PlayerState, def: ItemDef) -> Vector2:
 	for p: PlayerState in table.engine.opponents(copier):
 		for i: int in p.items.size():

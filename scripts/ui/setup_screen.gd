@@ -1,14 +1,18 @@
 extends Control
-## Pre-game screen: who sits at the table, which characters and items are
-## in the match, and the house rules. Produces a GameConfig and starts.
+## The lobby of a room: who sits at the table, which characters and items are
+## in the match, and the house rules.
+##
+## Everything here belongs to the host, who sets it and deals the cards. The
+## others watch the same screen change as the host touches it, and the one
+## thing they may edit is their own name. The seats and the rules live in the
+## room (room.gd), so they are still there when a match ends and everyone
+## comes back.
 
-const MENU_SCENE := "res://scenes/menu.tscn"
-const GAME_SCENE := "res://scenes/main.tscn"
-const MAX_SEATS := 6
+const Room := preload("res://scripts/net/room.gd")
+const ROOM_SCENE := "res://scenes/room.tscn"
 ## Width of the character grid, and the most cards it shows in a single row.
 const GRID_WIDTH := 690.0
 const GRID_ROW := 10
-const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent"]
 const ANIM_SPEEDS := [50, 75, 100, 150, 200, 250, 300]  # percent
 ## Two arrows chasing each other clockwise (the reset buttons).
 const CYCLE_ICON: Array[String] = [
@@ -23,9 +27,13 @@ const CYCLE_ICON: Array[String] = [
 	"....###..",
 ]
 
+var _room: Node
+var _host := false
 var _config: GameConfig
-var _seat_count := 4
-var _seat_rows: Array = []  # {row, name, bot}
+var _seat_rows: Array = []  # {row, name, tag, remove}
+var _seated: Array = []  # who was in each seat when the rows were last filled
+var _seat_title: Label
+var _add_bot: Button
 var _random := true
 var _picked: Array = []
 var _items_on: Dictionary = {}
@@ -45,13 +53,14 @@ func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
 	Content.ensure_loaded()
-	_config = GameConfig.current if GameConfig.current != null else GameConfig.default_config()
-	_seat_count = clampi(_config.seats.size(), 2, MAX_SEATS)
-	_random = _config.character_ids.is_empty()
-	_picked = _config.character_ids.duplicate()
-	for def: ItemDef in Content.item_list():
-		if not def.fixed:
-			_items_on[def.id] = _config.item_ids.is_empty() or _config.item_ids.has(def.id)
+	_room = Room.current
+	if _room == null:
+		# Nobody gets here without a room; the screen before this one opens it.
+		get_tree().change_scene_to_file.call_deferred(ROOM_SCENE)
+		return
+	_host = _room.hosting
+	_config = _room.config
+	_read_config()
 
 	var bg := TextureRect.new()
 	# The table itself, before anyone sits down.
@@ -67,25 +76,65 @@ func _ready() -> void:
 	title.position = Vector2(26, 10)
 	add_child(title)
 
+	_build_address()
 	_build_players(_panel(Rect2(24, 62, 372, 508)))
 	_build_match(_panel(Rect2(408, 62, 720, 508)))
 
-	var back := UI.button("BACK", UI.BORDER, 20)
+	var back := UI.button("LEAVE ROOM", UI.BORDER, 20)
 	back.position = Vector2(24, 584)
-	back.size = Vector2(150, 48)
-	back.pressed.connect(func(): get_tree().change_scene_to_file(MENU_SCENE))
+	back.size = Vector2(170, 48)
+	back.pressed.connect(_on_leave)
+	if _host:
+		TipLayer.attach(back, "Closes the room for everyone.")
 	add_child(back)
 	_start = UI.button("DEAL THE CARDS", UI.GOLD, 22)
 	_start.position = Vector2(868, 584)
 	_start.size = Vector2(260, 48)
 	_start.pressed.connect(_on_start)
+	_start.visible = _host
 	add_child(_start)
 	_problem = UI.label("", 14, UI.RED)
-	_problem.position = Vector2(190, 598)
-	_problem.size = Vector2(664, 20)
+	_problem.position = Vector2(210, 598)
+	_problem.size = Vector2(644, 20)
 	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	add_child(_problem)
+	if not _host:
+		var waiting := UI.label("Waiting for the host to deal...", 18, UI.MUTED, true)
+		waiting.position = Vector2(728, 584)
+		waiting.size = Vector2(400, 48)
+		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		waiting.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		add_child(waiting)
+	_room.changed.connect(_on_room_changed)
 	_refresh()
+
+
+func _exit_tree() -> void:
+	Settings.save()
+
+
+## Top right: where the others find this room, or whose rules these are.
+func _build_address() -> void:
+	var line := UI.label("Only the host changes the table. You may change your name.", 16, UI.MUTED)
+	line.position = Vector2(408, 22)
+	line.size = Vector2(720, 28)
+	line.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	add_child(line)
+	if not _host:
+		return
+	var addresses: Array = Room.addresses()
+	line.add_theme_color_override("font_color", UI.CREAM)
+	line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	if addresses.is_empty():
+		line.text = Loc.t("This computer has no network address to share.")
+		return
+	line.text = Loc.t("ROOM ADDRESS:  %s") % addresses[0]
+	line.mouse_filter = Control.MOUSE_FILTER_PASS
+	var tip := Loc.t("What your friends type to join. With Radmin VPN it is the address that starts with 26.")
+	if addresses.size() > 1:
+		tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1))
+	tip += "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % Room.PORT
+	TipLayer.attach(line, tip)
 
 
 func _panel(rect: Rect2) -> VBoxContainer:
@@ -101,29 +150,41 @@ func _panel(rect: Rect2) -> VBoxContainer:
 
 
 func _build_players(box: VBoxContainer) -> void:
-	box.add_child(_stepper("PLAYERS", "", func(): return _seat_count, func(v): _seat_count = v, 2, MAX_SEATS, true))
-	for i in MAX_SEATS:
-		var seat: Dictionary = _config.seats[i] if i < _config.seats.size() else {}
+	var head := HBoxContainer.new()
+	head.custom_minimum_size = Vector2(0, 30)
+	_seat_title = UI.label("", 18, UI.GOLD, true)
+	_seat_title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_seat_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(_seat_title)
+	_add_bot = UI.button("ADD BOT", UI.BORDER, 14)
+	_add_bot.custom_minimum_size = Vector2(96, 28)
+	_add_bot.pressed.connect(func(): _room.add_bot())
+	_add_bot.visible = _host
+	head.add_child(_add_bot)
+	box.add_child(head)
+	for i in Room.MAX_SEATS:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		var number := UI.label(str(i + 1), 16, UI.MUTED, true)
 		number.custom_minimum_size = Vector2(16, 0)
 		row.add_child(number)
 		var name_edit := LineEdit.new()
-		name_edit.text = seat.get("name", "Player 1" if i == 0 else BOT_NAMES[i % BOT_NAMES.size()])
-		name_edit.max_length = 12
+		name_edit.max_length = Room.NAME_LENGTH
 		name_edit.custom_minimum_size = Vector2(170, 28)
 		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_edit.text_changed.connect(_on_renamed.bind(i))
 		row.add_child(name_edit)
-		var bot := UI.button("", UI.BORDER, 14)
-		bot.toggle_mode = true
-		bot.button_pressed = seat.get("bot", i > 0)
-		bot.custom_minimum_size = Vector2(96, 28)
-		bot.toggled.connect(func(_on): _refresh())
-		TipLayer.attach(bot, "Humans share this screen and pass the device around. Bots play by themselves.")
-		row.add_child(bot)
+		var tag := UI.label("", 14, UI.MUTED, true)
+		tag.custom_minimum_size = Vector2(58, 0)
+		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		row.add_child(tag)
+		var remove := UI.button("X", UI.RED, 13)
+		remove.custom_minimum_size = Vector2(30, 28)
+		remove.pressed.connect(func(): _room.remove_bot(i))
+		TipLayer.attach(remove, "Take this bot out of the room.")
+		row.add_child(remove)
 		box.add_child(row)
-		_seat_rows.append({"row": row, "name": name_edit, "bot": bot})
+		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove})
 
 	box.add_child(HSeparator.new())
 	box.add_child(_header("HOUSE RULES", 16, _reset_rules, _rules_default))
@@ -183,14 +244,17 @@ func _build_match(box: VBoxContainer) -> void:
 		var card := CardView.new(card_scale)
 		card.position = Vector2(roundf(column * step + (step - card.size.x) / 2.0), top)
 		card.set_card(def.id, true)
-		card.clicked.connect(_toggle_character.bind(def.id))
+		if _host:
+			card.clicked.connect(_toggle_character.bind(def.id))
 		grid.add_child(card)
 		_cards[def.id] = card
 		var caption := UI.label(def.display_name, 11, UI.MUTED)
+		# Clipping comes before the size: until then the label refuses to be
+		# narrower than its text, and a long name would be centred in a wider box.
+		caption.clip_text = true
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		caption.position = Vector2(column * step, top + card_height + 3.0)
 		caption.size = Vector2(step, 16)
-		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		caption.clip_text = true
 		grid.add_child(caption)
 
 	box.add_child(_stepper("Copies of each character", "More copies make every claim more believable.",
@@ -213,11 +277,12 @@ func _build_match(box: VBoxContainer) -> void:
 			view.clicked.connect(_refuse.bind(view))
 			items.add_child(view)
 			continue
-		view.note = "Click to allow or ban it."
-		view.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		view.clicked.connect(func():
-			_items_on[def.id] = not _items_on[def.id]
-			_refresh())
+		if _host:
+			view.note = "Click to allow or ban it."
+			view.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			view.clicked.connect(func():
+				_items_on[def.id] = not _items_on[def.id]
+				_refresh())
 		items.add_child(view)
 		_item_views[def.id] = view
 
@@ -271,12 +336,14 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 	_refreshers.append(func():
 		var current: int = getter.call()
 		value.text = format % (current if shown.is_empty() else shown[current])
-		minus.disabled = current <= low
-		plus.disabled = current >= high)
+		minus.disabled = not _host or current <= low
+		plus.disabled = not _host or current >= high)
 	return row
 
 
 func _set_random(value: bool) -> void:
+	if not _host:
+		return
 	_random = value
 	if not _random and _picked.is_empty():
 		for def: CharacterDef in Content.character_list().slice(0, _config.character_count):
@@ -302,17 +369,86 @@ func _character_count() -> int:
 
 func _min_copies() -> int:
 	var probe := GameConfig.new()
-	probe.seats.resize(_seat_count)
+	probe.seats.resize(_room.seats.size())
 	return probe.min_copies(_character_count())
 
 
+## The host changed something: it goes into the room's config and from there
+## to everyone, this screen included (_on_room_changed).
 func _refresh() -> void:
+	if not _host:
+		_redraw()
+		return
+	_write_config()
+	_room.push()
+
+
+func _on_room_changed() -> void:
+	if not _host:
+		_config = _room.config
+		_read_config()
+	_redraw()
+
+
+## What the config says about the characters and items, as this screen keeps it.
+func _read_config() -> void:
+	_random = _config.character_ids.is_empty()
+	_picked = _config.character_ids.duplicate()
+	for def: ItemDef in Content.item_list():
+		if not def.fixed:
+			_items_on[def.id] = _config.item_ids.is_empty() or _config.item_ids.has(def.id)
+
+
+func _write_config() -> void:
+	_config.character_ids = [] if _random else _picked.duplicate()
+	_config.item_ids = []
+	if _items_on.values().has(false):
+		for item_id: StringName in _items_on:
+			if _items_on[item_id]:
+				_config.item_ids.append(item_id)
+		if _config.item_ids.is_empty():
+			_config.item_ids = [&"none"]
+
+
+func _on_renamed(text: String, seat: int) -> void:
+	if seat < _room.seats.size() and _room.seats[seat].peer == _room.my_peer():
+		var player_name: String = Room.clean_name(text)
+		Settings.player_name = player_name if player_name != "" else "Player"
+	_room.rename(seat, text)
+
+
+func _redraw_seats() -> void:
+	var seats: Array = _room.seats
+	var me: int = _room.my_peer()
+	var seated := seats.map(func(seat: Dictionary) -> int: return seat.peer)
+	# Someone came or went: the rows no longer stand for the same people.
+	var moved := seated != _seated
+	_seated = seated
+	_seat_title.text = "%s  %d/%d" % [Loc.t("PLAYERS"), seats.size(), Room.MAX_SEATS]
+	_add_bot.disabled = seats.size() >= Room.MAX_SEATS
+	for i in _seat_rows.size():
+		var row: Dictionary = _seat_rows[i]
+		row.row.visible = i < seats.size()
+		if i >= seats.size():
+			continue
+		var seat: Dictionary = seats[i]
+		var edit: LineEdit = row.name
+		if moved and edit.has_focus():
+			edit.release_focus()
+		# The name being typed is ahead of what the room has heard of it.
+		if not edit.has_focus() and edit.text != seat.name:
+			edit.text = seat.name
+		edit.editable = _host or seat.peer == me
+		edit.modulate = Color.WHITE if edit.editable else Color(0.72, 0.7, 0.68)
+		row.tag.text = "BOT" if seat.bot else ("YOU" if seat.peer == me else ("HOST" if seat.peer == 1 else ""))
+		row.tag.add_theme_color_override("font_color", UI.GOLD if seat.peer == me else UI.MUTED)
+		row.remove.visible = _host and seat.bot
+
+
+func _redraw() -> void:
 	for refresher: Callable in _refreshers:
 		refresher.call()
-	for i in _seat_rows.size():
-		var seat: Dictionary = _seat_rows[i]
-		seat.row.visible = i < _seat_count
-		seat.bot.text = "BOT" if seat.bot.button_pressed else "HUMAN"
+	_redraw_seats()
 	_style_toggle(_mode_random, _random)
 	_style_toggle(_mode_picked, not _random)
 	_count_row.visible = _random
@@ -321,7 +457,7 @@ func _refresh() -> void:
 		var chosen: bool = not _random and _picked.has(character_id)
 		card.highlight(UI.GOLD if chosen else null)
 		card.modulate = Color.WHITE if chosen or _random else Color(0.4, 0.38, 0.38)
-		card.note = "" if _random else ("In the match. Click to remove." if chosen else "Click to add to the match.")
+		card.note = "" if _random or not _host else ("In the match. Click to remove." if chosen else "Click to add to the match.")
 	for item_id: StringName in _item_views:
 		_item_views[item_id].modulate = Color.WHITE if _items_on[item_id] else Color(0.3, 0.28, 0.28)
 
@@ -329,14 +465,16 @@ func _refresh() -> void:
 	var copies := maxi(_config.copies_per_character, _min_copies())
 	_summary.text = Loc.t("%s  ·  deck of %d cards (%d characters x %d copies), %d dealt.") % [
 		Loc.t("%d drawn at random") % count if _random else Loc.t("%d hand-picked") % count,
-		count * copies, count, copies, _seat_count * mini(_config.hand_size, _config.start_morale)]
+		count * copies, count, copies, _room.seats.size() * mini(_config.hand_size, _config.start_morale)]
 	var problem := ""
 	if count < 3:
 		problem = "Pick at least 3 characters."
-	_problem.text = problem
+	elif _room.seats.size() < 2:
+		problem = "A table needs at least 2 players. Add a bot or wait for someone to join."
+	_problem.text = problem if _host else ""
 	_start.disabled = problem != ""
 	for reset: Dictionary in _resets:
-		reset.button.visible = not reset.is_default.call()
+		reset.button.visible = _host and not reset.is_default.call()
 
 
 func _style_toggle(b: Button, on: bool) -> void:
@@ -429,24 +567,13 @@ func _reset_items() -> void:
 
 
 func _on_start() -> void:
-	_config.seats = []
-	for i in _seat_count:
-		var seat: Dictionary = _seat_rows[i]
-		var seat_name: String = seat.name.text.strip_edges()
-		_config.seats.append({
-			"name": seat_name if seat_name != "" else "Player %d" % (i + 1),
-			"bot": seat.bot.button_pressed,
-		})
-	_config.character_ids = [] if _random else _picked.duplicate()
-	_config.item_ids = []
-	if _items_on.values().has(false):
-		for item_id: StringName in _items_on:
-			if _items_on[item_id]:
-				_config.item_ids.append(item_id)
-		if _config.item_ids.is_empty():
-			_config.item_ids = [&"none"]
-	GameConfig.current = _config
-	get_tree().change_scene_to_file(GAME_SCENE)
+	_write_config()
+	_room.start()
+
+
+func _on_leave() -> void:
+	_room.leave()
+	get_tree().change_scene_to_file(ROOM_SCENE)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

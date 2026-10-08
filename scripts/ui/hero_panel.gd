@@ -141,10 +141,12 @@ func _sync_strip() -> void:
 		if not captioned:
 			continue
 		var caption := UI.label(def.display_name, 10, UI.MUTED)
+		# Clipping comes before the size: until then the label refuses to be
+		# narrower than its text, and a long name would be centred in a wider box.
+		caption.clip_text = true
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		caption.position = Vector2(i * step - 6, 94)
 		caption.size = Vector2(step + 12 - 4, 14)
-		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		caption.clip_text = true
 		_strip.add_child(caption)
 
 

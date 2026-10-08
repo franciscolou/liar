@@ -8,6 +8,9 @@ var boldness := 0.3  # appetite for bluffing
 var suspicion := 0.1  # base chance of doubting any claim
 var _claims: Dictionary = {}  # player id -> {character id: true}
 var _steps := 0
+## Its own dice, for a bot whose rolls must not disturb the match's (see
+## HumanController.stand_in). Null: it rolls the engine's.
+var rng: RandomNumberGenerator
 
 
 func observe(event: GameEvent) -> void:
@@ -48,19 +51,19 @@ func _turn(options: Dictionary) -> Dictionary:
 	_steps += 1
 	if _steps > 6:
 		return {"kind": &"end"}
-	var rng := engine.rng
+	var dice := _dice()
 
 	# Something it wants and can't pay for yet (breaking a hex, defusing a
 	# bomb): it stops spending until it can.
 	var saving := false
 	for extra: Dictionary in options.extras:
-		if extra.enabled and rng.randf() < extra.get("ai", 0.7):
+		if extra.enabled and dice.randf() < extra.get("ai", 0.7):
 			return extra
 		if not extra.enabled and extra.get("cost", 0) > player.coins and extra.get("ai", 0.7) >= 0.5:
 			saving = true
 
 	for use: Dictionary in options.use:
-		if use.enabled and rng.randf() < use.item.def.ai_weight(player, engine) / 3.0:
+		if use.enabled and dice.randf() < use.item.def.ai_weight(player, engine) / 3.0:
 			return use
 
 	var buys := {}
@@ -73,12 +76,12 @@ func _turn(options: Dictionary) -> Dictionary:
 		# Bots only shop with coins they actually have.
 		if buy.enabled and not buy.credit and not saving:
 			buys[buy] = buy.item.ai_buy_weight(player, engine)
-	if not buys.is_empty() and rng.randf() < 0.45:
+	if not buys.is_empty() and dice.randf() < 0.45:
 		var buy: Variant = _weighted(buys)
 		if buy != null:
 			return buy
 	var reroll: Variant = options.reroll
-	if reroll != null and reroll.enabled and player.coins >= reroll.cost + 4 and rng.randf() < 0.08:
+	if reroll != null and reroll.enabled and player.coins >= reroll.cost + 4 and dice.randf() < 0.08:
 		return reroll
 
 	var plays := {}
@@ -133,7 +136,7 @@ func _doubt(play: Play, stakes: Array) -> Variant:
 		chance *= 0.4
 	elif player.coins - engine.config.doubt_cost < 2:
 		chance *= 0.5
-	return stake if engine.rng.randf() < chance else false
+	return stake if _dice().randf() < chance else false
 
 
 ## What a bot that isn't sure would put up, or &"" if nothing is worth it.
@@ -160,7 +163,7 @@ func _react(d: Decision) -> Variant:
 				chance *= 0.2
 		else:
 			chance = option.item.def.ai_react_weight(event, player, engine)
-		if engine.rng.randf() < chance:
+		if _dice().randf() < chance:
 			return option
 	return null
 
@@ -174,7 +177,11 @@ func _pick(d: Decision) -> int:
 	for i: int in d.options.size():
 		weights[i] = float(hints[i]) if i < hints.size() else 1.0
 	var choice: Variant = _weighted(weights)
-	return choice if choice != null else engine.rng.randi_range(0, d.options.size() - 1)
+	return choice if choice != null else _dice().randi_range(0, d.options.size() - 1)
+
+
+func _dice() -> RandomNumberGenerator:
+	return rng if rng != null else engine.rng
 
 
 func _weighted(weights: Dictionary) -> Variant:
@@ -183,7 +190,7 @@ func _weighted(weights: Dictionary) -> Variant:
 		total += maxf(weights[key], 0.0)
 	if total <= 0.0:
 		return null
-	var roll := engine.rng.randf() * total
+	var roll := _dice().randf() * total
 	for key in weights:
 		roll -= maxf(weights[key], 0.0)
 		if roll <= 0.0:

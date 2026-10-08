@@ -40,3 +40,34 @@ static func default_config() -> GameConfig:
 func min_copies(char_count: int) -> int:
 	var needed := seats.size() * hand_size + 2
 	return maxi(2, ceili(float(needed) / float(maxi(char_count, 1))))
+
+
+## What travels between the machines of a room (see to_wire).
+const WIRE_FIELDS := [
+	"seats", "character_count", "copies_per_character", "hand_size", "start_morale",
+	"start_coins", "income", "doubt_cost", "shop_slots", "reroll_cost",
+	"inventory_limit", "anim_speed", "max_turns", "rng_seed",
+]
+
+
+## The config as plain data, for the other machines of a room.
+func to_wire() -> Dictionary:
+	var out := {
+		"character_ids": character_ids.map(func(id: Variant) -> String: return String(id)),
+		"item_ids": item_ids.map(func(id: Variant) -> String: return String(id)),
+	}
+	for field: String in WIRE_FIELDS:
+		out[field] = get(field)
+	return out
+
+
+static func from_wire(data: Dictionary) -> GameConfig:
+	var c := GameConfig.new()
+	for field: String in WIRE_FIELDS:
+		if typeof(data.get(field)) == typeof(c.get(field)):
+			c.set(field, data[field])
+	for id: Variant in data.get("character_ids", []):
+		c.character_ids.append(StringName(str(id)))
+	for id: Variant in data.get("item_ids", []):
+		c.item_ids.append(StringName(str(id)))
+	return c

@@ -1,15 +1,15 @@
 extends Control
 ## The match screen. It owns a GameEngine and plays two roles for it:
-## observer (present: animate every event) and the human players' hands
+## observer (present: animate every event) and the hands of the player
 ## (request: turn a Decision into clickable things and return the answer).
 
 signal answered(value: Variant)
-signal doubt_answered(decision: Decision, value: Variant)
 
 const ARC_CENTER := Vector2(576, 322)
 const ARC_RADIUS := Vector2(450, 240)
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
+const Room := preload("res://scripts/net/room.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
 ## Loaded up front; the sound of each item ("item_<id>") is loaded on first use.
@@ -59,9 +59,8 @@ var engine: GameEngine
 var viewer: PlayerState  # whose hand is on screen; null while spectating
 
 var _speed := 1.0
-var _humans: Array = []
+var _room: Node  # the room the match is played in (room.gd); null offline
 var _pending: Decision
-var _open_doubts: Array = []  # Decision: humans asked about the same claim
 var _handoff: Dictionary = {}  # a picked card waiting for its animation: {veil, player, card, lifted}
 var _seats: Dictionary = {}  # player id -> SeatView
 var _hero: HeroPanel
@@ -113,20 +112,27 @@ func _ready() -> void:
 	engine.setup(config)
 	engine.tree = get_tree()
 	engine.observers.append(self)
+	_room = Room.current if Room.current != null and Room.current.in_match else null
+	var mine: int = _room.my_match_seat() if _room != null else -1
 	for p: PlayerState in engine.players:
 		var controller: Controller
 		if p.is_bot:
 			controller = BotController.new()
 		else:
 			controller = HumanController.new()
-			controller.table = self
-			_humans.append(p)
+			controller.room = _room
+			# Offline the one person at the table is whoever is not a bot.
+			if p.id == mine or (_room == null and viewer == null):
+				controller.table = self
+				viewer = p
+			if _room != null and _room.hosting:
+				controller.stand_in = _stand_in(p)
 		controller.engine = engine
 		controller.player = p
 		engine.controllers[p.id] = controller
-	# With several humans sharing the screen nobody's hand shows until the
-	# device is handed over.
-	viewer = _humans[0] if _humans.size() == 1 else null
+	if _room != null:
+		_room.seat_left.connect(_on_seat_left)
+		_room.out_of_step.connect(_on_out_of_step)
 
 	_build()
 	_hero.setup(engine)
@@ -136,11 +142,32 @@ func _ready() -> void:
 	engine.run.call_deferred()
 
 
+## The bot that plays `p` if they leave the room. It rolls dice of its own:
+## the match's have to stay the same on every machine.
+func _stand_in(p: PlayerState) -> BotController:
+	var bot := BotController.new()
+	bot.engine = engine
+	bot.player = p
+	bot.rng = RandomNumberGenerator.new()
+	bot.rng.randomize()
+	return bot
+
+
+func _on_seat_left(seat: int) -> void:
+	_log_line(Loc.t("%s left the room. A bot plays in their place.") % engine.players[seat].name, &"doubt_declared")
+
+
+func _on_out_of_step(turn: int) -> void:
+	_log_line(Loc.t("The machines stopped agreeing about this match (turn %d). The host should end it and deal again.") % turn, &"doubt_declared")
+
+
 func _exit_tree() -> void:
 	engine.abort()
 	# Wake whatever decision is pending so the engine coroutine can unwind.
 	_pending = null
 	answered.emit(null)
+	if _room != null and is_instance_valid(_room):
+		_room.release()
 
 
 func _notification(what: int) -> void:
@@ -161,7 +188,6 @@ func _retranslate() -> void:
 				_prompt_doubt(_pending)
 			Decision.Kind.REACT:
 				_prompt_react(_pending)
-	_prompt_shared_doubt()
 
 
 func _process(_delta: float) -> void:
@@ -543,10 +569,6 @@ func _layout_seats() -> void:
 # === decisions ================================================================
 
 func request(d: Decision) -> Variant:
-	if d.kind == Decision.Kind.DOUBT and d.context.get("shared", false):
-		return await _request_shared_doubt(d)
-	if d.player != viewer:
-		await _hand_over(d.player)
 	_pending = d
 	match d.kind:
 		Decision.Kind.TURN:
@@ -571,62 +593,8 @@ func request(d: Decision) -> Variant:
 
 ## The engine gave up on `d`: someone else called LIAR! first.
 func withdraw(d: Decision) -> void:
-	if _open_doubts.has(d):
-		_open_doubts.erase(d)
-		if _open_doubts.is_empty() and _pending == null:
-			_hide_prompt()
-		# Deferred: this runs inside the emission that carried the winning call.
-		doubt_answered.emit.call_deferred(d, false)
-	elif _pending == d:
+	if _pending == d:
 		_answer(false)
-
-
-## Several humans share the screen and are asked about a claim at once: one
-## prompt for all of them, and whoever presses LIAR! first takes the call.
-func _request_shared_doubt(d: Decision) -> Variant:
-	_open_doubts.append(d)
-	if _open_doubts.size() == 1:
-		_prompt_shared_doubt.call_deferred()
-	var value: Variant = false
-	while true:
-		var reply: Array = await doubt_answered
-		if reply[0] == d:
-			value = reply[1]
-			break
-	_open_doubts.erase(d)
-	if _open_doubts.is_empty() and _pending == null:
-		_hide_prompt()
-		if TipLayer.current != null:
-			TipLayer.current.hide_all()
-	elif value is Dictionary:
-		# This player reacted instead; the others are still being asked.
-		_prompt_shared_doubt()
-	return false if engine.aborted else value
-
-
-func _prompt_shared_doubt() -> void:
-	if _open_doubts.is_empty():
-		return
-	var play: Play = _open_doubts[0].context.play
-	var text := _claim_line(play)
-	if not play.actor.has_status(&"truth_bound"):
-		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("The first to call LIAR! takes it.")]
-	var buttons := []
-	for d: Decision in _open_doubts:
-		for spec: Dictionary in _doubt_buttons(d):
-			spec.text = "%s: %s" % [d.player.name, Loc.t(spec.text)]
-			spec.action = doubt_answered.emit.bind(d, spec.stake)
-			buttons.append(spec)
-		for option: Dictionary in d.context.get("reactions", []):
-			# Nothing here may tell the others what this player holds.
-			var spec := _reaction_button(option, false)
-			spec.text = "%s: %s" % [d.player.name, spec.text]
-			spec.action = doubt_answered.emit.bind(d, option)
-			buttons.append(spec)
-	buttons.append({"text": "Nobody", "action": func():
-		for d: Decision in _open_doubts.duplicate():
-			doubt_answered.emit(d, false)})
-	_show_prompt(text, buttons)
 
 
 func _answer(value: Variant) -> void:
@@ -793,7 +761,7 @@ func _prompt_doubt(d: Decision) -> void:
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You don't have the %d coins a wrong call costs: pick what you put on the line.") % engine.config.doubt_cost]
 	var buttons := _doubt_buttons(d)
 	for option: Dictionary in d.context.get("reactions", []):
-		buttons.append(_reaction_button(option, true))
+		buttons.append(_reaction_button(option))
 	buttons.append({"text": "Let it pass", "action": _answer.bind(false)})
 	_show_prompt(text, buttons)
 
@@ -845,9 +813,8 @@ func _doubt_buttons(d: Decision) -> Array:
 	return buttons
 
 
-## The button that answers a decision with reaction `option`. `private`: only
-## the player being asked is looking, so it may say whether it is a bluff.
-func _reaction_button(option: Dictionary, private: bool) -> Dictionary:
+## The button that answers a decision with reaction `option`.
+func _reaction_button(option: Dictionary) -> Dictionary:
 	if option.kind != &"ability":
 		var item: ItemDef = option.item.def
 		return {
@@ -858,12 +825,10 @@ func _reaction_button(option: Dictionary, private: bool) -> Dictionary:
 	var def := Content.character(ability.character_id)
 	var cost := "  ·  %d" % ability.cost if ability.cost > 0 else ""
 	var tip := UI.ability_tip(ability)
-	var accent := UI.GOLD
-	if private:
-		tip += Loc.t("You hold %s: this is the truth." if option.legit else "You don't hold %s: this is a bluff.") % def.display_name
-		accent = UI.GREEN if option.legit else UI.RED
-		if option.credit:
-			tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
+	var accent := UI.GREEN if option.legit else UI.RED
+	tip += Loc.t("You hold %s: this is the truth." if option.legit else "You don't hold %s: this is a bluff.") % def.display_name
+	if option.credit:
+		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
 	return {
 		"text": "%s: %s%s" % [def.display_name, ability.display_name, cost], "tip": tip,
 		"accent": accent, "action": _answer.bind(option),
@@ -876,7 +841,7 @@ func _prompt_react(d: Decision) -> void:
 	for option: Dictionary in d.options:
 		if option.kind == &"ability" and not triggers.has(option.ability.trigger_text):
 			triggers.append(option.ability.trigger_text)
-		buttons.append(_reaction_button(option, true))
+		buttons.append(_reaction_button(option))
 	buttons.append({"text": "Pass", "action": _answer.bind(null)})
 	var why := ". ".join(triggers)
 	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [
@@ -1094,37 +1059,6 @@ func _take_pick_handoff(p: PlayerState, card_id: StringName) -> bool:
 	return p != null and handoff.player == p and handoff.card == card_id
 
 
-## Hot-seat: hide everything until the next human confirms they hold the device.
-func _hand_over(next: PlayerState) -> void:
-	_close_popup()
-	var curtain := ColorRect.new()
-	curtain.color = UI.INK
-	curtain.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_modal.add_child(curtain)
-	var box := VBoxContainer.new()
-	box.set_anchors_preset(Control.PRESET_CENTER)
-	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	box.grow_vertical = Control.GROW_DIRECTION_BOTH
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 16)
-	curtain.add_child(box)
-	var title := UI.label("PASS THE DEVICE TO", 20, UI.MUTED, true)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(title)
-	var who := UI.label(next.name.to_upper(), 48, UI.GOLD, true)
-	who.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(who)
-	var ready := UI.button(Loc.t("I am %s") % next.name, UI.GOLD, 20)
-	ready.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	box.add_child(ready)
-	viewer = next
-	_hero.bind(viewer)
-	_layout_seats()
-	_sync()
-	await ready.pressed
-	UI.clear(_modal)
-
-
 # === prompt, popup, modal =====================================================
 
 func _show_prompt(bbcode: String, buttons: Array) -> void:
@@ -1336,8 +1270,18 @@ func _toggle_pause() -> void:
 		fullscreen.text = "Fullscreen: on" if UI.is_fullscreen(get_window()) else "Fullscreen: off")
 	TipLayer.attach(fullscreen, "Also F11 or Alt+Enter, on any screen.")
 	box.add_child(fullscreen)
+	if _room != null and _room.hosting:
+		var lobby := UI.button("End the match", UI.RED, 18)
+		lobby.pressed.connect(_room.to_lobby)
+		TipLayer.attach(lobby, "Stops the match for everyone and takes the whole room back to the lobby.")
+		box.add_child(lobby)
 	var quit := UI.button("Quit to menu", UI.RED, 18)
-	quit.pressed.connect(func(): get_tree().change_scene_to_file(MENU_SCENE))
+	quit.pressed.connect(func():
+		if Room.current != null:
+			Room.current.leave()
+		get_tree().change_scene_to_file(MENU_SCENE))
+	if _room != null:
+		TipLayer.attach(quit, "Closes the room for everyone." if _room.hosting else "Leaves the room. A bot plays the rest of the match for you.")
 	box.add_child(quit)
 
 
@@ -2196,15 +2140,14 @@ func _anim_cards_swapped(d: Dictionary) -> void:
 
 
 ## The card being peeked at leaves its hand and is held up next to whoever
-## peeks, then goes back the way it came. A human who peeks sees it turn face
-## up and keeps it there until they have looked. Everyone else only sees its
-## back, tipped towards the one it is being shown to.
+## peeks, then goes back the way it came. The player at this screen, when it
+## is them who peeks, sees it turn face up and keeps it there until they have
+## looked. Everyone else only sees its back, tipped towards the one it is
+## being shown to.
 func _anim_peek(d: Dictionary) -> void:
 	var peeker: PlayerState = d.viewer
 	var owner: PlayerState = d.owner
-	var asks := not peeker.is_bot
-	if asks and peeker != viewer:
-		await _hand_over(peeker)
+	var asks := peeker == viewer
 	var view := _card_view(owner, d.index)
 	var from := _card_center(owner, d.index)
 	var small: float = (view.size.x if view != null else 44.0) / CardView.BASE.x

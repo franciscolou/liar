@@ -9,8 +9,7 @@ extends RefCounted
 ##             or {kind = &"end"}
 ##   TARGET -> PlayerState from `options`, or null to cancel
 ##   DOUBT  -> one of the stakes in `options` (GameEngine.doubt_stakes) to
-##             call LIAR!, or false to let it pass (context.play is the claim;
-##             context.shared: other humans are being asked at the same time)
+##             call LIAR!, or false to let it pass (context.play is the claim)
 ##             or one of context.reactions (humans only): let it pass and
 ##             answer the claim's reaction window with that option right away
 ##   REACT  -> one of the option dictionaries, or null to pass

@@ -16,9 +16,9 @@ class HatTrick extends Ability:
 	func _init() -> void:
 		id = &"magician.hat_trick"
 		display_name = "Hat Trick"
-		description = "Pay 2 coins to pull a random item out of the hat."
+		description = "Pay 3 coins to pull a random item out of the hat."
 		on_turn = true
-		cost = 2
+		cost = 3
 
 	func can_use(player: PlayerState, engine: GameEngine) -> String:
 		if _hat(engine).is_empty():
@@ -45,13 +45,16 @@ class Counterfeit extends Ability:
 	func _init() -> void:
 		id = &"magician.counterfeit"
 		display_name = "Counterfeit"
-		description = "Copy an item from the shop or from another player, paying up to 3 coins less."
+		description = "Copy an item another player holds, paying up to 3 coins less."
 		on_turn = true
 
 	func can_use(player: PlayerState, engine: GameEngine) -> String:
 		if player.items.size() >= engine.config.inventory_limit:
 			return Loc.t("Inventory full")
-		for def: ItemDef in _copyable(player, engine):
+		var defs := _copyable(player, engine)
+		if defs.is_empty():
+			return Loc.t("Nobody holds an item to copy")
+		for def: ItemDef in defs:
 			if engine.can_pay(player, _price(def)):
 				return ""
 		return Loc.t("Nothing affordable to copy")
@@ -81,8 +84,10 @@ class Counterfeit extends Ability:
 	func _price(def: ItemDef) -> int:
 		return maxi(def.price - DISCOUNT, 0)
 
+	# Only what is in plain sight in somebody's inventory: the shop sells at
+	# full price.
 	func _copyable(player: PlayerState, engine: GameEngine) -> Array:
-		var defs := engine.items_on_sale()
+		var defs: Array = []
 		for p: PlayerState in engine.opponents(player):
 			for instance: ItemInstance in p.items:
 				if not instance.hidden and not defs.has(instance.def):

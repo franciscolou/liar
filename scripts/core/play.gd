@@ -7,6 +7,9 @@ var engine: GameEngine
 var actor: PlayerState
 var target: PlayerState
 var source: Playable
+## Who the play is about without being aimed at them: shields and mirrors
+## have no say, the table is still told (bard.gd).
+var mark: PlayerState
 var item: ItemInstance  # set when the source is an item
 var event: GameEvent  # the event this play reacts to, if any
 var params: Dictionary = {}
@@ -30,6 +33,11 @@ var reflected := false
 ## what the table should be told.
 func aimed() -> Play:
 	return params.get("repeat", self)
+
+
+## Who the table should point at: the target, or the mark of a play that has none.
+func whom() -> PlayerState:
+	return target if target != null else mark
 
 
 func is_claim() -> bool:

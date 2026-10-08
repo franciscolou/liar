@@ -452,7 +452,7 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 		for id: int in early.keys():
 			if early[id].answer == null:
 				early.erase(id)
-	# The ability itself may send the card away (Sold Out, Swindle...).
+	# The ability itself may send the card away (Sold Out...).
 	var copies := actor.cards.count(ability.character_id)
 
 	if not over and actor.alive:

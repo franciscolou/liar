@@ -40,7 +40,7 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 			if owner == null or not owner.alive or cut <= 0:
 				return
 			event.data.amount -= cut
-			await engine.change_coins(owner, cut, &"voodoo", victim)
+			await engine.gain_coins(owner, cut, &"voodoo", victim)
 		&"player_eliminated":
 			# A dead owner's doll goes with them. A dead victim already lost the
 			# status, which frees the doll with no recharge.

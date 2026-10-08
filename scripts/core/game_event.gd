@@ -11,7 +11,8 @@ extends RefCounted
 ##   game_started, game_over {winner}
 ##   turn_started / turn_ended {player}
 ##   income {player, amount}                    mutable amount
-##   before_gain {player, amount, reason}       mutable amount
+##   before_gain {player, amount, reason}       mutable amount (0: the coins
+##     went somewhere else, see bard.gd)
 ##   coins {player, delta, reason, other}       other = counterpart player or null (bank)
 ##   payment_short {player, amount, allowed}    set allowed to let the player go into debt
 ##   before_steal {thief, victim, amount, play} cancellable

@@ -8,6 +8,7 @@ const GROGGY := &"groggy"
 const MICKEY_FINN := &"bartender.mickey_finn"
 const LAST_CALL := &"bartender.last_call"
 const ANTIDOTE := &"doctor.antidote"
+const SWINDLE := &"bard.swindle"
 
 
 ## Plays every scene and prints how each one went. Returns how many failed.
@@ -30,6 +31,8 @@ static func run() -> int:
 		"a spiked drink is free and adds to every price": _groggy_pays_more,
 		"last call sends every copy back for a new card": _last_call,
 		"a disguise repeats the last action, at its price": _disguise_repeats,
+		"a swindle takes coins on their way to someone": _swindle,
+		"a swindle caught lying takes nothing": _swindle_caught,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -267,6 +270,48 @@ static func _last_call() -> String:
 	return "" if engine.players[0].cards[0] == &"bartender" else "the other card changed"
 
 
+## Any coins on their way to someone else, but not the income of a turn and
+## not what a Swindle already took.
+static func _swindle() -> String:
+	var table := Table.new(true, [&"bard"])
+	var engine := table.engine
+	var bard: PlayerState = engine.players[0]
+	bard.cards = [&"bard", &"judge"]
+	table.puppets[0].answers[Decision.Kind.REACT] = _swindles
+	await engine.gain_coins(engine.players[1], 1, &"income")
+	if not table.asked(0, Decision.Kind.REACT).is_empty():
+		return "offered against the income of a turn"
+	await engine.gain_coins(engine.players[1], 4, &"bounty")
+	if bard.coins != 24 or engine.players[1].coins != 21:
+		return "coins: %d / %d" % [bard.coins, engine.players[1].coins]
+	for d: Decision in table.asked(1, Decision.Kind.REACT) + table.asked(2, Decision.Kind.REACT):
+		if d.context.event.data.reason == &"swindle":
+			return "the haul was offered to %s" % d.player.name
+	await engine.gain_coins(bard, 4, &"bounty")
+	return "" if bard.coins == 28 else "the Bard swindled their own coins"
+
+
+static func _swindle_caught() -> String:
+	var table := Table.new(true, [&"bard"])
+	var engine := table.engine
+	table.puppets[2].answers[Decision.Kind.REACT] = _swindles
+	table.puppets[1].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if not d.options.is_empty() else false
+	await engine.gain_coins(engine.players[1], 4, &"bounty")
+	if engine.players[2].morale != engine.config.start_morale - 1:
+		return "the liar kept their Morale"
+	if engine.players[1].coins != 24 or engine.players[2].coins != 20:
+		return "coins: %d / %d" % [engine.players[1].coins, engine.players[2].coins]
+	return ""
+
+
+static func _swindles(d: Decision) -> Variant:
+	for option: Dictionary in d.options:
+		if option.kind == &"ability" and option.ability.id == SWINDLE:
+			return option
+	return null
+
+
 # --- the stage ------------------------------------------------------------------
 
 ## Three players with coins to spare. Player 0 holds the Bartender.
@@ -275,12 +320,14 @@ class Table extends RefCounted:
 	var puppets: Array = []
 
 	## `bots`: false seats player 1 as a human, who is asked first in a doubt
-	## window and may answer it with a reaction.
-	func _init(bots := true) -> void:
+	## window and may answer it with a reaction. `cast`: characters on top of
+	## the usual ones.
+	func _init(bots := true, cast: Array = []) -> void:
 		var config := GameConfig.new()
 		for i in 3:
 			config.seats.append({"name": "P%d" % i, "bot": bots or i != 1})
 		config.character_ids = [&"bartender", &"doctor", &"voodooist", &"judge", &"impostor"]
+		config.character_ids.append_array(cast)
 		config.rng_seed = 7
 		engine = GameEngine.new()
 		engine.setup(config)

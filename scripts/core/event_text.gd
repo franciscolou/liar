@@ -97,6 +97,8 @@ static func _coins(d: Dictionary) -> String:
 			return Loc.t("%s loses %d coins to %s.") % [who, -d.delta, d.other.name]
 		&"steal":
 			return ""
+		&"swindle":
+			return Loc.t("%s makes off with %d coins meant for %s.") % [who, d.delta, d.other.name]
 		&"voodoo":
 			return Loc.t("%s's doll siphons %d from %s.") % [who, d.delta, d.other.name]
 	if d.delta > 0:
@@ -118,9 +120,9 @@ static func title(play: Play) -> String:
 
 
 static func _on(play: Play) -> String:
-	if play == null or play.aimed().target == null:
+	if play == null or play.aimed().whom() == null:
 		return ""
-	return Loc.t(" on %s") % play.aimed().target.name
+	return Loc.t(" on %s") % play.aimed().whom().name
 
 
 static func _status(status_id: StringName) -> String:

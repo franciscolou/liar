@@ -22,6 +22,8 @@ var _status_fx: StatusFx
 var _dead_tag: Label
 var _items_shown := ""
 var _targetable := false
+var _revealed := false
+var _peekable := false
 var _active := false
 var _pulse: Tween
 
@@ -118,6 +120,8 @@ func sync() -> void:
 		card.position = Vector2(_cards.size() * 41, 0)
 		_card_row.add_child(card)
 		_cards.append(card)
+	for i in _cards.size():
+		_cards[i].set_card(player.cards[i] if _revealed else &"", _revealed)
 	var signature := ""
 	for instance: ItemInstance in player.items:
 		signature += "%s%s," % [instance.def.id, "?" if instance.hidden else ""]
@@ -144,8 +148,28 @@ func set_targetable(value: bool) -> void:
 	_targetable = value
 	if not value:
 		scale = Vector2.ONE
-	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if value else Control.CURSOR_ARROW
+	_set_cursor()
 	_restyle()
+
+
+## Whether this hand is face up on screen: only for someone who is out of the
+## match and looking on.
+func is_revealed() -> bool:
+	return _revealed
+
+
+func set_revealed(value: bool) -> void:
+	if _revealed == value:
+		return
+	_revealed = value
+	for i in mini(_cards.size(), player.cards.size()):
+		_cards[i].set_card(player.cards[i] if value else &"", value, true)
+
+
+## Lets a click on the box reach the table when nobody is being targeted.
+func set_peekable(value: bool) -> void:
+	_peekable = value
+	_set_cursor()
 
 
 func anchor() -> Vector2:
@@ -186,6 +210,10 @@ func card(index: int) -> CardView:
 	return _cards[index] if index >= 0 and index < _cards.size() else null
 
 
+func _set_cursor() -> void:
+	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _targetable or _peekable else Control.CURSOR_ARROW
+
+
 func _restyle() -> void:
 	var border := UI.BORDER
 	if _targetable:
@@ -210,5 +238,5 @@ func _hover(inside: bool) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	if _targetable and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if (_targetable or _peekable) and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		clicked.emit(player)

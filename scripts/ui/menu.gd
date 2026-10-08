@@ -1,46 +1,47 @@
 extends Control
-## Title screen. The buttons are painted on the artwork; the real ones sit
-## on top of them and only draw a highlight.
+## Title screen. The artwork fills the screen and keeps its right side dark and
+## empty; the buttons are a column of plates stacked there.
 
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
-# The look of the plates painted on the artwork.
-const PLATE := Color("3b2a20")
-const PLATE_BORDER := Color("86705a")
+# The plates, in the wood and brass of the room in the artwork.
+const PLATE := Color("21130c", 0.9)
+const PLATE_BORDER := Color("86603a")
 const PLATE_INK := Color("e8dcb8")
-
-@onready var play_button: Button = $Play
-@onready var quit_button: Button = $Quit
+# The column: where it starts, how wide it is and the gap between plates.
+const COLUMN := Vector2(794, 232)
+const WIDTH := 270.0
+const GAP := 12.0
+const MAIN_HEIGHT := 70.0
+const HEIGHT := 50.0
 
 
 func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
-	for b: Button in [play_button, quit_button]:
-		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		UI.juice(b, 1.04)
-	_relabel()
-	play_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/room.tscn"))
-	quit_button.pressed.connect(func(): get_tree().quit())
-	var settings := UI.button("SETTINGS", UI.BORDER, 16)
-	settings.position = Vector2(1000, 12)
-	settings.size = Vector2(140, 38)
-	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
-	add_child(settings)
-	var help := UI.button("HOW TO PLAY", UI.BORDER, 16)
-	help.position = Vector2(836, 12)
-	help.size = Vector2(154, 38)
-	help.pressed.connect(func(): add_child(HelpPanel.new()))
-	add_child(help)
+	var y := COLUMN.y
+	y = _plate("PLAY", y, MAIN_HEIGHT, 40,
+			func(): get_tree().change_scene_to_file("res://scenes/room.tscn"))
+	y = _plate("HOW TO PLAY", y, HEIGHT, 24, func(): add_child(HelpPanel.new()))
+	y = _plate("SETTINGS", y, HEIGHT, 24, func(): add_child(SettingsPanel.new()))
+	_plate("QUIT", y, HEIGHT, 24, func(): get_tree().quit())
 
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_TRANSLATION_CHANGED and is_node_ready():
-		_relabel()
-
-
-func _relabel() -> void:
-	UI.art_button(play_button, "PLAY", PLATE, PLATE_BORDER, PLATE_INK, 40)
-	UI.art_button(quit_button, "QUIT", PLATE, PLATE_BORDER, PLATE_INK, 40)
+## Adds one plate of the column at `y` and returns where the next one goes.
+func _plate(text: String, y: float, height: float, font_size: int, action: Callable) -> float:
+	var b := Button.new()
+	b.text = text
+	b.position = Vector2(COLUMN.x, y)
+	b.size = Vector2(WIDTH, height)
+	b.add_theme_font_size_override("font_size", roundi(font_size * UI.FONT_SCALE))
+	b.add_theme_color_override("font_color", PLATE_INK)
+	b.add_theme_stylebox_override("normal", UI.box(PLATE, PLATE_BORDER, 3, 4, 0))
+	b.add_theme_stylebox_override("hover", UI.box(PLATE.lightened(0.1), UI.GOLD, 3, 4, 0))
+	b.add_theme_stylebox_override("pressed", UI.box(PLATE.darkened(0.3), UI.GOLD, 3, 4, 0))
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	UI.juice(b, 1.04)
+	b.pressed.connect(action)
+	add_child(b)
+	return y + height + GAP
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

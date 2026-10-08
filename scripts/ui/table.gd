@@ -99,6 +99,7 @@ var _sfx: Dictionary = {}
 var _music: AudioStreamPlayer
 var _play_fx: PlayFx
 var _pause: Control
+var _peek_all: Button  # for a viewer who is out of the match (see _sync_peek)
 
 
 func _ready() -> void:
@@ -280,6 +281,13 @@ func _build() -> void:
 	menu.pressed.connect(_toggle_pause)
 	TipLayer.attach(menu, "Pause, settings and quit (Esc).")
 	add_child(menu)
+	_peek_all = UI.button("SHOW ALL HANDS", UI.BORDER, 13)
+	_peek_all.position = Vector2(862, 8)
+	_peek_all.size = Vector2(200, 28)
+	_peek_all.visible = false
+	_peek_all.pressed.connect(_on_peek_all_pressed)
+	TipLayer.attach(_peek_all, "You are out of the match: click a player to see their hand, or this to see them all.")
+	add_child(_peek_all)
 
 	_prompt = PanelContainer.new()
 	_prompt.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.96), UI.GOLD, 3, 6, 10))
@@ -741,6 +749,39 @@ func _on_item_clicked(instance: ItemInstance, _view: ItemView) -> void:
 func _on_seat_clicked(p: PlayerState) -> void:
 	if _pending != null and _pending.kind == Decision.Kind.TARGET and _pending.options.has(p):
 		_answer(p)
+	elif _looking_on() and p.alive:
+		var seat: SeatView = _seats[p.id]
+		seat.set_revealed(not seat.is_revealed())
+		_play_sfx("card_draw")
+		_sync_peek()
+
+
+## Whether the player at this screen was eliminated and may see the hands of
+## the others. It changes nothing in the match: the faces are only drawn here.
+func _looking_on() -> bool:
+	return viewer != null and not viewer.alive
+
+
+func _peekable_seats() -> Array:
+	return _seats.values().filter(func(seat: SeatView) -> bool: return seat.player.alive)
+
+
+func _on_peek_all_pressed() -> void:
+	var seats := _peekable_seats()
+	var reveal := not seats.all(func(seat: SeatView) -> bool: return seat.is_revealed())
+	for seat: SeatView in seats:
+		seat.set_revealed(reveal)
+	_play_sfx("card_draw")
+	_sync_peek()
+
+
+func _sync_peek() -> void:
+	var on := _looking_on()
+	var seats := _peekable_seats()
+	_peek_all.visible = on and not seats.is_empty()
+	_peek_all.text = "HIDE ALL HANDS" if seats.all(func(seat: SeatView) -> bool: return seat.is_revealed()) else "SHOW ALL HANDS"
+	for seat: SeatView in _seats.values():
+		seat.set_peekable(on and seat.player.alive)
 
 
 func _prompt_target(d: Decision) -> void:
@@ -849,6 +890,9 @@ func _prompt_react(d: Decision) -> void:
 		buttons.append(_reaction_button(option))
 	buttons.append({"text": "Pass", "action": _answer.bind(null)})
 	var why := ". ".join(triggers)
+	var event: GameEvent = d.context.get("event")
+	if event != null and event.type == &"before_gain":
+		why = Loc.t("%s is about to gain %d coins.") % [event.data.player.name, event.data.amount]
 	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [
 		Loc.t("%s, you may react.") % d.player.name, UI.hex(UI.MUTED),
 		why if why != "" else Loc.t("An opponent's ability is about to take effect.")], buttons)
@@ -1372,6 +1416,8 @@ func present(e: GameEvent) -> void:
 			_float("ELIMINATED", _anchor(d.player), UI.RED, 28)
 			_shake_screen(10.0)
 			await _wait(0.9)
+			if d.player == viewer:
+				_log_line(Loc.t("You are out. Click a player to see their hand."), &"coins")
 		&"cards_changed":
 			await _anim_card_traded(d)
 		&"card_lost":
@@ -1415,6 +1461,7 @@ func _sync() -> void:
 		seat.sync()
 	_hero.sync()
 	_sync_shop()
+	_sync_peek()
 
 
 func _sync_shop() -> void:
@@ -1610,12 +1657,13 @@ func _push_stage(entry: Dictionary) -> void:
 ## The arrow from the actor of `play` to its target, null if there is none to draw.
 func _stage_arrow(play: Play) -> ArrowFx:
 	play = play.aimed()
-	if play.target == null or play.target == play.actor:
+	var whom := play.whom()
+	if whom == null or whom == play.actor:
 		return null
 	var arrow := ArrowFx.new()
 	arrow.set_anchors_preset(Control.PRESET_FULL_RECT)
 	arrow.from = _anchor(play.actor)
-	arrow.to = _anchor(play.target)
+	arrow.to = _anchor(whom)
 	arrow.color = UI.RED if play.source.tags.has(&"damage") or play.source.tags.has(&"steal") else UI.GOLD
 	_arrows.add_child(arrow)
 	arrow.create_tween().tween_property(arrow, "progress", 1.0, 0.3 / _speed)
@@ -1692,12 +1740,12 @@ func _render_stage() -> void:
 
 
 func _on_target(play: Play) -> String:
-	play = play.aimed()
-	if play.target == null:
+	var whom := play.aimed().whom()
+	if whom == null:
 		return ""
-	if play.target == play.actor:
+	if whom == play.aimed().actor:
 		return Loc.t(" on themselves")
-	return Loc.t(" on you") if play.target == viewer else Loc.t(" on %s") % play.target.name
+	return Loc.t(" on you") if whom == viewer else Loc.t(" on %s") % whom.name
 
 
 func _anim_doubt(doubter: PlayerState) -> void:
@@ -1721,7 +1769,8 @@ func _anim_reveal(play: Play, truthful: bool) -> void:
 		_play_sfx("lie")
 		UI.shake(_stage, 12.0, 0.35)
 		await _stamp("LIE!", UI.RED)
-	if shown != null and is_instance_valid(shown):
+	# Someone looking on with that hand face up keeps it that way.
+	if shown != null and is_instance_valid(shown) and not _seats[play.actor.id].is_revealed():
 		shown.set_card(&"", false, true)
 
 
@@ -1773,6 +1822,10 @@ func _anim_coins(d: Dictionary) -> void:
 	await _wait(COIN_FLIGHT + coins * COIN_STAGGER)
 	if bar != null:
 		bar.coin_bias = 0
+	# Stolen coins that were swindled on the way: the thief's pile was shown
+	# ahead of a payment that is not coming.
+	if d.reason == &"swindle" and other_bar != null:
+		other_bar.coin_bias = 0
 	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
 
 

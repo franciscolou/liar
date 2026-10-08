@@ -137,7 +137,7 @@ func _stab(play: Play) -> void:
 ## A tune that walks over to the mark and picks their pocket.
 func _fx_bard_swindle(play: Play) -> void:
 	var here := _at(play.actor)
-	var there := _at(play.target)
+	var there := _at(play.whom())
 	_snd("fx_lute")
 	ring(here, UI.GOLD, 10.0, 60.0, 0.4)
 	stream(here, there, UI.GOLD, 10, 0.55, 0.4)
@@ -2221,17 +2221,22 @@ class TossedCard extends TextureRect:
 
 ## A lasso. The rope is a chain of points with weight and no stiffness: held
 ## at one end, tied to the loop at the other, it sags, trails behind whatever
-## the loop does and snaps about when it is pulled tight. It is drawn in the
-## chunky pixels of the other effects.
+## the loop does and snaps about when it is pulled tight. It is drawn in
+## blocks like the other effects, but in finer ones (those of the desk and the
+## shop stall), so that a rope a few pixels thick can show its twist.
 class RopeFx extends Control:
-	const PIXEL := 4.0
+	const PIXEL := 2.0
+	## How far the rope reaches to each side of its middle line.
+	const GIRTH := 1.0
 	const ROPE := Color("b98d54")
 	const EDGE := Color("2a1a10")
 	const KNOT := Color("6b4a2a")
 	## The twisted strands, as they come round one after the other along the
-	## rope, and how many pixels of rope each one shows for.
-	const STRANDS: Array[Color] = [Color("dcb87c"), Color("b98d54"), Color("8a6238"), Color("a67c48")]
+	## rope, how many pixels of rope each one shows for, and how much they
+	## lean across it.
+	const STRANDS: Array[Color] = [Color("b98d54"), Color("b08650"), Color("98723f"), Color("ab824c")]
 	const TWIST := 5.0
+	const LEAN := 1.5
 	const LINKS := 18
 	const GRAVITY := 1500.0
 	## How much of its speed a point of the rope keeps from one step to the next.
@@ -2329,8 +2334,8 @@ class RopeFx extends Control:
 			return
 		# The loop is rope too: it wobbles as it goes.
 		var ring := PackedVector2Array()
-		for i in 21:
-			var angle := TAU * i / 20.0
+		for i in 33:
+			var angle := TAU * i / 32.0
 			var wobble := 1.0 + 0.09 * sin(angle * 3.0 + _time * 9.0)
 			ring.append(tip + Vector2(cos(angle) * loop, sin(angle) * loop * squash) * wobble)
 		var cells := {}
@@ -2341,24 +2346,37 @@ class RopeFx extends Control:
 		for cell: Vector2i in cells:
 			var strand: Color = cells[cell]
 			draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), strand)
-		# The knot: a dark lump where the rope runs into the loop.
-		var knot := (_points[LINKS - 1] / PIXEL).floor() * PIXEL - Vector2(PIXEL, PIXEL) / 2.0
-		draw_rect(Rect2(knot - Vector2(2, 2), Vector2(PIXEL, PIXEL) * 2.0 + Vector2(4, 4)), EDGE)
-		draw_rect(Rect2(knot, Vector2(PIXEL, PIXEL) * 2.0), KNOT)
-		draw_rect(Rect2(knot, Vector2(PIXEL, PIXEL)), STRANDS[3])
+		# The knot: a dark lump with its corners off, where the rope runs
+		# into the loop.
+		var knot := (_points[LINKS - 1] / PIXEL).round() * PIXEL
+		draw_rect(Rect2(knot + Vector2(-8, -6), Vector2(16, 12)), EDGE)
+		draw_rect(Rect2(knot + Vector2(-6, -8), Vector2(12, 16)), EDGE)
+		draw_rect(Rect2(knot + Vector2(-6, -4), Vector2(12, 8)), KNOT)
+		draw_rect(Rect2(knot + Vector2(-4, -6), Vector2(8, 12)), KNOT)
+		draw_rect(Rect2(knot + Vector2(-4, -4), Vector2(4, 2)), STRANDS[3])
+		draw_rect(Rect2(knot + Vector2(-4, -2), Vector2(2, 2)), STRANDS[3])
+		draw_rect(Rect2(knot + Vector2(-2, 2), Vector2(6, 2)), KNOT.darkened(0.3))
 
-	## Marks in `cells` the pixels that the line through `path` goes over,
-	## each with the colour of the strand that is on top at that point.
+	## Marks in `cells` the pixels that a rope laid along `path` covers, each
+	## with the colour of the strand that is on top at that point: the strands
+	## go across the rope at a slant.
 	func _trace(path: PackedVector2Array, cells: Dictionary) -> void:
 		var run := 0.0
+		var across := Vector2.DOWN
 		for i in path.size() - 1:
 			var length := path[i].distance_to(path[i + 1])
-			var steps := maxi(ceili(length / 2.0), 1)
+			if length > 0.01:
+				across = (path[i + 1] - path[i]).orthogonal() / length
+			var steps := maxi(ceili(length), 1)
 			for step in steps + 1:
 				var along := step / float(steps)
-				var cell := Vector2i((path[i].lerp(path[i + 1], along) / PIXEL).floor())
-				if not cells.has(cell):
-					cells[cell] = STRANDS[int((run + length * along) / TWIST) % STRANDS.size()]
+				var at := path[i].lerp(path[i + 1], along)
+				for side: float in [0.0, -1.0, 1.0, -2.0, 2.0]:
+					var off := side * GIRTH / 2.0
+					var cell := Vector2i(((at + across * off) / PIXEL).floor())
+					if not cells.has(cell):
+						var turn := (run + length * along + off * LEAN) / TWIST
+						cells[cell] = STRANDS[posmod(floori(turn), STRANDS.size())]
 			run += length
 
 

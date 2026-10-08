@@ -4,6 +4,7 @@ extends Control
 
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
+const Transition := preload("res://scripts/ui/transition.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const LOBBY_SCENE := "res://scenes/setup.tscn"
 
@@ -121,7 +122,7 @@ func _on_create() -> void:
 	if problem != "":
 		_status.text = problem
 		return
-	get_tree().change_scene_to_file(LOBBY_SCENE)
+	Transition.go(LOBBY_SCENE, Transition.KEYHOLE)
 
 
 ## The lobby opens by itself once the host lets this machine in; if it never
@@ -145,7 +146,7 @@ func _on_join() -> void:
 func _on_back() -> void:
 	if Room.current != null:
 		Room.current.leave()
-	get_tree().change_scene_to_file(MENU_SCENE)
+	Transition.go(MENU_SCENE, Transition.DOORS)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

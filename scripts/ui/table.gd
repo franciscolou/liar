@@ -11,6 +11,7 @@ const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
+const Transition := preload("res://scripts/ui/transition.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
 ## How slow time runs while the blow that ends the match lands (see
@@ -1330,7 +1331,7 @@ func _toggle_pause() -> void:
 	quit.pressed.connect(func():
 		if Room.current != null:
 			Room.current.leave()
-		get_tree().change_scene_to_file(MENU_SCENE))
+		Transition.go(MENU_SCENE, Transition.DOORS, true))
 	if _room != null:
 		TipLayer.attach(quit, "Closes the room for everyone." if _room.hosting else "Leaves the room. A bot plays the rest of the match for you.")
 	box.add_child(quit)

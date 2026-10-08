@@ -10,6 +10,7 @@ extends Control
 
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
+const Transition := preload("res://scripts/ui/transition.gd")
 const ROOM_SCENE := "res://scenes/room.tscn"
 ## Width of the character grid, and the most cards it shows in a single row.
 const GRID_WIDTH := 690.0
@@ -575,7 +576,7 @@ func _on_start() -> void:
 
 func _on_leave() -> void:
 	_room.leave()
-	get_tree().change_scene_to_file(ROOM_SCENE)
+	Transition.go(ROOM_SCENE, Transition.KEYHOLE)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

@@ -26,6 +26,7 @@ signal seat_left(seat: int)
 ## The machines stopped agreeing about the match they are playing.
 signal out_of_step(turn: int)
 
+const Transition := preload("res://scripts/ui/transition.gd")
 const PATH := "res://scripts/net/room.gd"
 const SCREEN := "res://scenes/room.tscn"
 const LOBBY := "res://scenes/setup.tscn"
@@ -175,7 +176,7 @@ func _fail(reason: String) -> void:
 		return
 	notice = reason
 	leave()
-	get_tree().change_scene_to_file(SCREEN)
+	_show(SCREEN, Transition.KEYHOLE)
 
 
 func _on_join_timeout() -> void:
@@ -203,6 +204,13 @@ func _on_peer_disconnected(peer: int) -> void:
 			if ticket.decision.player.id == played:
 				ticket.controller.cover(ticket)
 	_push()
+
+
+## Takes this machine to another screen. A match still being played is cut
+## at once: it must not go on running behind the transition.
+func _show(scene: String, style: StringName) -> void:
+	var on := get_tree().current_scene
+	Transition.go(scene, style, on != null and on.scene_file_path == GAME)
 
 
 ## What has to match for two machines to play the same match.
@@ -322,7 +330,7 @@ func _lobby(state: Dictionary) -> void:
 	config = GameConfig.from_wire(state.config)
 	if not _joined:
 		_joined = true
-		get_tree().change_scene_to_file(LOBBY)
+		_show(LOBBY, Transition.KEYHOLE)
 	changed.emit()
 
 
@@ -358,7 +366,7 @@ func to_lobby() -> void:
 func _start(id: int, dealt: Dictionary, peers: Array) -> void:
 	_begin(id, peers)
 	GameConfig.current = GameConfig.from_wire(dealt)
-	get_tree().change_scene_to_file(GAME)
+	_show(GAME, Transition.DEAL)
 
 
 ## A new match: nothing of the last one may leak into it.
@@ -379,7 +387,7 @@ func _begin(id: int, peers: Array) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _to_lobby() -> void:
 	in_match = false
-	get_tree().change_scene_to_file(LOBBY)
+	_show(LOBBY, Transition.GATHER)
 
 
 @rpc("authority", "call_remote", "reliable")

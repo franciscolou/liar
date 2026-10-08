@@ -855,7 +855,120 @@ def fx_boom():
     return drive(out[:int(1.5 * RATE)], 3.5)
 
 
+def creak(seconds, low, high, seed):
+    """A hinge complaining: a reedy note that wavers as the door moves."""
+    rng = random.Random(seed)
+    wobble = [rng.uniform(0.0, TAU) for _ in range(3)]
+    def pitch(t):
+        along = t / seconds
+        return (low + (high - low) * along) * (1.0 + 0.05 * math.sin(31 * t + wobble[0]) + 0.03 * math.sin(77 * t + wobble[1]))
+    out = silence(seconds)
+    mix(out, tone(pitch, seconds, seconds * 0.3, seconds * 1.5, shape="saw"), 0.0, 0.5)
+    mix(out, tone(lambda t: pitch(t) * 2.02, seconds, seconds * 0.3, seconds * 1.2, shape="square"), 0.0, 0.18)
+    out = bandpass(out, 500, 2600)
+    # It catches and lets go: the note is chopped, not held.
+    return [s * (0.55 + 0.45 * math.sin(TAU * 23 * i / RATE + wobble[2]) ** 2) for i, s in enumerate(out)]
+
+
+def ui_doors_shut():
+    """The doors of the saloon swung shut: the rush of them, the hinges, and
+    the two leaves meeting 0.45 s in (the time the screen takes to close)."""
+    out = silence(1.1)
+    mix(out, lowpass(noise(0.45, 0.4, 0.2, 301), lambda t: 300 + 2500 * t), 0.0, 0.35)
+    mix(out, creak(0.32, 620, 880, 303), 0.08, 0.14)
+    at = 0.44
+    mix(out, lowpass(noise(0.09, 0.0005, 0.03, 305), 1400), at, 1.3)
+    for freq, gain, decay in ((62, 1.3, 0.22), (118, 0.9, 0.12), (233, 0.5, 0.06), (410, 0.25, 0.035)):
+        mix(out, tone(freq, 0.5, 0.001, decay, glide=0.8), at, gain)
+    # The second leaf, a moment behind, and the latch dropping.
+    mix(out, wood_knock(307), at + 0.035, 0.5)
+    mix(out, steel_click(1.6, 309), at + 0.07, 0.3)
+    mix(out, lowpass(noise(0.5, 0.01, 0.25, 311), 420), at, 0.3)
+    return drive(out, 1.6)
+
+
+def ui_doors_open():
+    """The latch lifted and the doors pushed open on their hinges."""
+    out = silence(0.85)
+    mix(out, steel_click(1.3, 313), 0.0, 0.5)
+    mix(out, creak(0.5, 520, 760, 315), 0.08, 0.22)
+    mix(out, creak(0.3, 700, 610, 317), 0.36, 0.1)
+    mix(out, lowpass(noise(0.6, 0.15, 0.3, 319), 1100), 0.06, 0.3)
+    return out
+
+
+def ui_lock():
+    """A key turned in a door: the wards, then the bolt going home."""
+    out = silence(0.75)
+    for i, at in enumerate((0.1, 0.17, 0.25)):
+        mix(out, steel_click(0.6 + 0.08 * i, 321 + i), at, 0.3)
+    mix(out, steel_click(1.5, 327), 0.47, 1.0)
+    mix(out, tone(95, 0.25, 0.001, 0.09, glide=0.7), 0.47, 0.6)
+    return out
+
+
+def ui_unlock():
+    """The bolt drawn back."""
+    out = silence(0.5)
+    mix(out, steel_click(1.4, 331), 0.0, 1.0)
+    mix(out, steel_click(0.7, 333), 0.09, 0.35)
+    mix(out, tone(120, 0.2, 0.001, 0.07, glide=1.3), 0.0, 0.4)
+    return out
+
+
+def card_flick(seed, pitch=1.0):
+    """One card leaving the deck in a hurry."""
+    out = silence(0.09)
+    mix(out, bandpass(noise(0.06, 0.008, 0.03, seed), 1800 * pitch, 7000 * pitch), 0.0, 0.8)
+    mix(out, highpass(noise(0.02, 0.0005, 0.007, seed + 1), 3000), 0.045, 0.7)
+    mix(out, tone(210 * pitch, 0.03, 0.001, 0.015), 0.045, 0.3)
+    return out
+
+
+def ui_deal():
+    """A whole table dealt at once: cards flicked out faster than the eye,
+    landing on the cloth all over."""
+    rng = random.Random(341)
+    out = silence(0.95)
+    for i in range(20):
+        at = 0.02 + 0.66 * i / 19 + rng.uniform(-0.008, 0.008)
+        mix(out, card_flick(343 + i * 2, rng.uniform(0.85, 1.2)), at, rng.uniform(0.6, 1.0))
+    return out
+
+
+def ui_flip():
+    """A row of cards turned over in one sweep of the hand."""
+    rng = random.Random(381)
+    out = silence(0.8)
+    mix(out, bandpass(noise(0.6, 0.2, 0.3, 383), 1500, lambda t: 2500 + 9000 * t), 0.0, 0.3)
+    for i in range(12):
+        at = 0.04 + 0.5 * i / 11
+        snap = highpass(noise(0.02, 0.0005, 0.008, 385 + i), 2600)
+        mix(out, snap, at, rng.uniform(0.35, 0.6))
+        mix(out, tone(rng.uniform(170, 230), 0.04, 0.001, 0.02), at, 0.2)
+    return out
+
+
+def ui_gather():
+    """The cards swept together across the cloth, squared with two taps on
+    the table and taken away."""
+    out = silence(0.95)
+    mix(out, bandpass(noise(0.5, 0.25, 0.22, 401), 1200, lambda t: 6000 - 5000 * t), 0.0, 0.6)
+    for i, at in enumerate((0.52, 0.64)):
+        mix(out, lowpass(noise(0.04, 0.0005, 0.012, 403 + i), 2200), at, 0.9 - 0.25 * i)
+        mix(out, tone(160, 0.08, 0.0005, 0.04), at, 0.6 - 0.2 * i)
+    mix(out, bandpass(noise(0.2, 0.05, 0.1, 407), 900, 3500), 0.74, 0.25)
+    return out
+
+
 SOUNDS = {
+    "ui_doors_shut": ui_doors_shut,
+    "ui_doors_open": ui_doors_open,
+    "ui_lock": ui_lock,
+    "ui_unlock": ui_unlock,
+    "ui_deal": ui_deal,
+    "ui_flip": ui_flip,
+    "ui_gather": ui_gather,
     "card_draw": card_draw,
     "truth": truth,
     "lie": lie,
@@ -927,6 +1040,8 @@ PEAKS = {
     "fx_scales_chain": 0.4, "fx_scales": 0.9,
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
+    "ui_doors_shut": 0.85, "ui_doors_open": 0.4, "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
+    "ui_gather": 0.5,
 }
 
 

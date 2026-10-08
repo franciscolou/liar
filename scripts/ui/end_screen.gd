@@ -15,6 +15,7 @@ const ROW_GAP := 14.0
 
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
+const Transition := preload("res://scripts/ui/transition.gd")
 const Mirror := preload("res://scripts/ui/shattered_mirror.gd")
 const ROOM_SCENE := "res://scenes/room.tscn"
 const LOBBY_SCENE := "res://scenes/setup.tscn"
@@ -121,7 +122,7 @@ func _on_again() -> void:
 	if Room.current != null:
 		Room.current.start()
 	else:
-		get_tree().change_scene_to_file("res://scenes/main.tscn")
+		Transition.go("res://scenes/main.tscn", Transition.DEAL)
 
 
 ## Back to the lobby, where the rules are as they were left. The host takes
@@ -129,17 +130,17 @@ func _on_again() -> void:
 func _on_lobby() -> void:
 	var room: Node = Room.current
 	if room == null:
-		get_tree().change_scene_to_file(ROOM_SCENE)
+		Transition.go(ROOM_SCENE, Transition.GATHER)
 	elif room.hosting:
 		room.to_lobby()
 	else:
-		get_tree().change_scene_to_file(LOBBY_SCENE)
+		Transition.go(LOBBY_SCENE, Transition.GATHER)
 
 
 func _on_quit() -> void:
 	if Room.current != null:
 		Room.current.leave()
-	get_tree().change_scene_to_file(MENU_SCENE)
+	Transition.go(MENU_SCENE, Transition.DOORS)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

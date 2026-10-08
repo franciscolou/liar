@@ -3,6 +3,7 @@ extends Control
 ## empty; the buttons are a column of plates stacked there.
 
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
+const Jukebox := preload("res://scripts/ui/jukebox.gd")
 # The plates, in the wood and brass of the room in the artwork.
 const PLATE := Color("21130c", 0.9)
 const PLATE_BORDER := Color("86603a")
@@ -18,6 +19,7 @@ const HEIGHT := 50.0
 func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
+	Jukebox.play(Jukebox.LOBBY)
 	var y := COLUMN.y
 	y = _plate("PLAY", y, MAIN_HEIGHT, 40,
 			func(): get_tree().change_scene_to_file("res://scenes/room.tscn"))

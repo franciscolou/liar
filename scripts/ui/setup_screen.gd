@@ -9,6 +9,7 @@ extends Control
 ## comes back.
 
 const Room := preload("res://scripts/net/room.gd")
+const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const ROOM_SCENE := "res://scenes/room.tscn"
 ## Width of the character grid, and the most cards it shows in a single row.
 const GRID_WIDTH := 690.0
@@ -52,6 +53,7 @@ var _problem: Label
 func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
+	Jukebox.play(Jukebox.LOBBY)
 	Content.ensure_loaded()
 	_room = Room.current
 	if _room == null:

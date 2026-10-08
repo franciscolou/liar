@@ -243,8 +243,6 @@ const MESSAGES := {
 	"PLAY AGAIN": "JOGAR DE NOVO",
 	"BACK TO LOBBY": "VOLTAR AO LOBBY",
 	"Only the host can deal again.": "Só o anfitrião pode dar as cartas de novo.",
-	"Deals a new match to the whole room, with the same rules.": "Dá uma nova partida para a sala toda, com as mesmas regras.",
-	"Takes the whole room back to the lobby, where the rules can be changed.": "Leva a sala toda de volta ao lobby, onde as regras podem ser mudadas.",
 	"SETTINGS": "CONFIGURAÇÕES",
 	"Settings": "Configurações",
 	"Music": "Música",

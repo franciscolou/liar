@@ -10,8 +10,15 @@ const ARC_RADIUS := Vector2(450, 240)
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const Room := preload("res://scripts/net/room.gd")
+const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
+## How slow time runs while the blow that ends the match lands (see
+## _last_blow), the seconds the music takes to drop out as it does, and the
+## seconds the table takes to go dark afterwards.
+const SLOW_MOTION := 0.375
+const MUSIC_DROP := 0.45
+const FADE_TO_BLACK := 2.0
 ## Loaded up front; the sound of each item ("item_<id>") is loaded on first use.
 const SOUNDS := ["doubt", "damage", "breaking", "spend", "coin_1", "coin_2", "coin_3", "card_draw", "truth", "lie", "cancel", "heal", "item_get", "item_use"]
 const SOUND_DIR := "res://assets/sounds/"
@@ -96,7 +103,8 @@ var _log_tween: Tween
 var _log_bottom := 470.0  # the log hangs from here, folded or not
 var _turn_label: Label
 var _sfx: Dictionary = {}
-var _music: AudioStreamPlayer
+var _slowed := false
+var _time_glide: Tween
 var _play_fx: PlayFx
 var _pause: Control
 var _peek_all: Button  # for a viewer who is out of the match (see _sync_peek)
@@ -165,6 +173,7 @@ func _on_out_of_step(turn: int) -> void:
 
 func _exit_tree() -> void:
 	engine.abort()
+	_set_time(1.0)
 	# Wake whatever decision is pending so the engine coroutine can unwind.
 	_pending = null
 	answered.emit(null)
@@ -306,14 +315,7 @@ func _build() -> void:
 		layer.z_index = 2
 	add_child(TipLayer.new())
 
-	_music = AudioStreamPlayer.new()
-	_music.stream = load("res://assets/sounds/background.mp3")
-	_music.volume_db = -10.0
-	_music.bus = Settings.MUSIC_BUS
-	add_child(_music)
-	if _music.stream is AudioStreamMP3:
-		_music.stream.loop = true
-	_music.play()
+	Jukebox.play(Jukebox.MATCH)
 	for sound: String in SOUNDS:
 		_load_sfx(sound)
 
@@ -1343,6 +1345,8 @@ func present(e: GameEvent) -> void:
 	var held_line: bool = e.type == &"item_used" and d.play.source.id == ROULETTE
 	if line != "" and not held_line:
 		_log_line(line, e.type)
+	if _last_blow(e):
+		_slow_time()
 	match e.type:
 		&"game_started":
 			_sync()
@@ -2318,8 +2322,71 @@ func _lean_card(lean: float, holder: Node2D, toward: Vector2) -> void:
 func _game_over(winner: PlayerState) -> void:
 	_sync()
 	GameConfig.last_winner = winner.name if winner != null else ""
-	await _banner(Loc.t("%s WINS") % winner.name.to_upper() if winner != null else "NO SURVIVORS", "Carcaj has a new boss", UI.GOLD, 2.2)
+	GameConfig.last_winner_cards = winner.cards.duplicate() if winner != null else []
+	if winner == null:
+		_resume_time()
+		await _banner("NO SURVIVORS", "Carcaj has a new boss", UI.GOLD, 2.2)
+	else:
+		await _go_dark()
+	_set_time(1.0)
 	get_tree().change_scene_to_file(END_SCENE)
+
+
+## The table goes dark slowly, in the silence the last blow left, and time
+## comes back to its pace on the way: the end screen opens on the winner's hand.
+func _go_dark() -> void:
+	Jukebox.play(Jukebox.SILENCE, FADE_TO_BLACK)
+	var dark := ColorRect.new()
+	dark.color = Color(0, 0, 0, 0)
+	dark.size = size
+	dark.z_index = 20
+	add_child(dark)
+	_resume_time(FADE_TO_BLACK)
+	var tween := create_tween()
+	tween.set_ignore_time_scale(true)
+	tween.tween_property(dark, "color:a", 1.0, FADE_TO_BLACK).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tween.tween_interval(0.3)
+	await tween.finished
+
+
+# --- the last blow ------------------------------------------------------------
+
+## Whether `e` is the blow that ends the match: the last Morale of one of the
+## last two players, already lost. Nothing earlier is sure (a reaction may
+## still save them, and slowing down before it would tell the table whether
+## they have one), so the play that did it has run at its own pace by now:
+## what is slowed is the hit and the fall.
+func _last_blow(e: GameEvent) -> bool:
+	return e.type == &"morale_lost" and not _slowed and e.data.target.morale <= 0 \
+			and engine.alive_players().size() == 2
+
+
+## Time slows and the music drops out, quickly but not at once.
+func _slow_time() -> void:
+	_slowed = true
+	Jukebox.play(Jukebox.SILENCE, MUSIC_DROP)
+	_glide_time(SLOW_MOTION, 0.25)
+
+
+func _resume_time(seconds := 0.5) -> void:
+	_slowed = false
+	_glide_time(1.0, seconds)
+
+
+## Takes the pace of the game to `pace` over `seconds` of real time.
+func _glide_time(pace: float, seconds: float) -> void:
+	if _time_glide != null:
+		_time_glide.kill()
+	_time_glide = create_tween()
+	_time_glide.set_ignore_time_scale(true)
+	_time_glide.tween_method(_set_time, Engine.time_scale, pace, seconds)
+
+
+## Slows (or restores) everything that moves and everything that sounds:
+## a sound played slower is longer and lower, like the picture.
+func _set_time(pace: float) -> void:
+	Engine.time_scale = pace
+	AudioServer.playback_speed_scale = pace
 
 
 # --- small fx helpers ---------------------------------------------------------

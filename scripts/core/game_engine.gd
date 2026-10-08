@@ -876,13 +876,17 @@ func deal_damage(source: PlayerState, target: PlayerState, play: Play = null) ->
 
 ## Any loss of Morale. `cause` is &"damage", &"lie" (caught bluffing) or
 ## &"doubt" (Morale staked on a wrong call, with no `source`).
+##
+## The match ends with the first fall that leaves one player standing, and
+## nobody loses Morale after that: whatever was still on its way to the
+## winner (the blow they were answering when the other one fell) is void.
 func lose_morale(target: PlayerState, amount: int, source: PlayerState, cause: StringName, play: Play = null) -> bool:
-	if not target.alive:
+	if not target.alive or over:
 		return false
 	var before := await fire(&"before_morale_loss", {
 		"target": target, "source": source, "amount": amount, "cause": cause, "play": play,
 	})
-	if before.cancelled or before.data.amount <= 0 or not target.alive:
+	if before.cancelled or before.data.amount <= 0 or not target.alive or over:
 		return false
 	target.morale = maxi(target.morale - before.data.amount, 0)
 	await fire(&"morale_lost", {

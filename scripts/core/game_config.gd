@@ -6,6 +6,9 @@ extends RefCounted
 static var current: GameConfig
 ## Name of the last winner, shown by the end screen.
 static var last_winner := ""
+## The hand the last winner was holding (character ids), for the end screen to
+## show once: it empties this as it reads it.
+static var last_winner_cards: Array = []
 
 var seats: Array = []  # [{name: String, bot: bool}]
 var character_ids: Array = []  # empty = pick `character_count` at random

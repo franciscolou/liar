@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://digf1ho5rajpc"
+path="res://.godot/imported/ES_Five Miles High - Guto Lucena.mp3-0f0dac16c5c1fd99e9828bd371714e73.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/ES_Five Miles High - Guto Lucena.mp3"
+dest_files=["res://.godot/imported/ES_Five Miles High - Guto Lucena.mp3-0f0dac16c5c1fd99e9828bd371714e73.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

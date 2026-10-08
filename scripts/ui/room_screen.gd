@@ -3,6 +3,7 @@ extends Control
 ## one a friend opened. Either way the next screen is the lobby (setup.tscn).
 
 const Room := preload("res://scripts/net/room.gd")
+const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const LOBBY_SCENE := "res://scenes/setup.tscn"
 
@@ -16,6 +17,7 @@ var _status: Label
 func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
+	Jukebox.play(Jukebox.LOBBY)
 
 	var bg := TextureRect.new()
 	bg.texture = UI.tex("res://assets/background.png")

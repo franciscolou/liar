@@ -33,6 +33,7 @@ static func run() -> int:
 		"a disguise repeats the last action, at its price": _disguise_repeats,
 		"a swindle takes coins on their way to someone": _swindle,
 		"a swindle caught lying takes nothing": _swindle_caught,
+		"the first to fall loses: the blow in the air is void": _first_to_fall,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -303,6 +304,34 @@ static func _swindle_caught() -> String:
 	if engine.players[1].coins != 24 or engine.players[2].coins != 20:
 		return "coins: %d / %d" % [engine.players[1].coins, engine.players[2].coins]
 	return ""
+
+
+## Two left, 1 Morale each. One is hit and bargains it away; the attacker
+## calls LIAR! with Morale, is wrong and falls. The match is over there: the
+## hit that was still to land takes nothing.
+static func _first_to_fall() -> String:
+	var table := Table.new(true, [&"vagabond"])
+	var engine := table.engine
+	var attacker: PlayerState = engine.players[0]
+	var target: PlayerState = engine.players[1]
+	engine.players[2].alive = false
+	attacker.morale = 1
+	attacker.coins = 0
+	target.morale = 1
+	target.cards = [&"vagabond"]
+	table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		for option: Dictionary in d.options:
+			if option.kind == &"ability" and option.ability.id == &"vagabond.street_bargain":
+				return option
+		return null
+	table.puppets[0].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return GameEngine.STAKE_MORALE if d.options.has(GameEngine.STAKE_MORALE) else false
+	await engine.deal_damage(attacker, target)
+	if attacker.alive:
+		return "the wrong call cost nothing"
+	if not target.alive or target.morale != 1:
+		return "the winner fell too (Morale %d)" % target.morale
+	return "" if engine.winner == target else "no winner"
 
 
 static func _swindles(d: Decision) -> Variant:

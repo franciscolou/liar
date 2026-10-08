@@ -90,7 +90,7 @@ func _turn(options: Dictionary) -> Dictionary:
 			continue
 		var weight: float = option.ability.ai_weight(player, engine)
 		if not option.legit:
-			weight *= boldness
+			weight *= boldness / oath_caution(player, engine)
 		if option.credit and not player.has_character(&"vagabond"):
 			weight *= 0.05
 		if saving and option.ability.cost > 0:
@@ -111,7 +111,7 @@ func _target(d: Decision) -> Variant:
 ## The stake to call LIAR! with, or false to let the claim pass.
 func _doubt(play: Play, stakes: Array) -> Variant:
 	var ability := play.ability()
-	if play.actor.has_status(&"truth_bound") or stakes.is_empty():
+	if stakes.is_empty():
 		return false
 	# Holding every copy of the character proves the claim is a lie.
 	if player.cards.count(ability.character_id) >= engine.copies_in_play():
@@ -132,11 +132,19 @@ func _doubt(play: Play, stakes: Array) -> Variant:
 	# Someone who has already claimed more characters than fit in a hand.
 	if _claims.get(play.actor.id, {}).size() > engine.config.hand_size:
 		chance += 0.15
+	# Few people bluff Under Oath, with their whole purse on the line.
+	chance /= oath_caution(play.actor, engine)
 	if stake == GameEngine.STAKE_MORALE:
 		chance *= 0.4
 	elif player.coins - engine.config.doubt_cost < 2:
 		chance *= 0.5
 	return stake if _dice().randf() < chance else false
+
+
+## How much less a bluff is worth to `who` right now, for the coins a lie
+## caught Under Oath would cost: 1 with nothing extra at stake.
+static func oath_caution(who: PlayerState, game: GameEngine) -> float:
+	return 1.0 + game.oath_stake(who) / 6.0
 
 
 ## What a bot that isn't sure would put up, or &"" if nothing is worth it.
@@ -158,7 +166,7 @@ func _react(d: Decision) -> Variant:
 		if option.kind == &"ability":
 			chance = option.ability.ai_react_weight(event, player, engine)
 			if not option.legit:
-				chance *= boldness * 0.8
+				chance *= boldness * 0.8 / oath_caution(player, engine)
 			if option.credit and not player.has_character(&"vagabond"):
 				chance *= 0.2
 		else:

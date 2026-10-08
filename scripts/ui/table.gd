@@ -74,6 +74,7 @@ var _shop_tab: Control  # what shows while folded
 var _shop_body: Control  # what shows while open
 var _shop_entries: Array = []  # {view, price, coin, mini, slot, def}; slot -1 = always on sale
 var _shop_reroll: Button
+var _shop_reroll_price: Label
 var _shop_hint: Label
 var _shop_width := 0.0
 var _shop_open := false
@@ -407,9 +408,9 @@ func _build_shop() -> void:
 	TipLayer.attach(_shop_reroll, _reroll_tip)
 	_shop_body.add_child(_shop_reroll)
 	_shop_body.add_child(_shop_icon("res://assets/ui/coin.png", Vector2(reroll_x + 18, 82), Vector2(16, 16)))
-	var reroll_price := UI.label(str(engine.config.reroll_cost), 15, UI.GOLD, true)
-	reroll_price.position = Vector2(reroll_x + 38, 79)
-	_shop_body.add_child(reroll_price)
+	_shop_reroll_price = UI.label(str(engine.config.reroll_cost), 15, UI.GOLD, true)
+	_shop_reroll_price.position = Vector2(reroll_x + 38, 79)
+	_shop_body.add_child(_shop_reroll_price)
 	_set_shop_open(false, true)
 
 
@@ -465,7 +466,8 @@ func _on_shop_bg_input(event: InputEvent) -> void:
 
 func _build_stage() -> void:
 	_stage = PanelContainer.new()
-	_stage.position = Vector2(356, 166)
+	# Clear of the seats on the far arc, and of whatever sits on their boxes.
+	_stage.position = Vector2(356, 206)
 	_stage.custom_minimum_size = Vector2(440, 132)
 	_stage.size = _stage.custom_minimum_size
 	_stage.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.93), UI.GOLD, 3, 6, 10))
@@ -634,8 +636,12 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 			rows.append({"info": UI.ability_tip(ability)})
 			continue
 		var text := ability.display_name
-		if ability.cost > 0:
-			text += "  ·  " + Loc.t("%d coins") % ability.cost
+		if option.get("detail", "") != "":
+			text += "  ·  " + option.detail
+		# What it costs right now: a status may have raised the price.
+		var cost: int = option.get("cost", ability.cost)
+		if cost > 0:
+			text += "  ·  " + Loc.t("%d coins") % cost
 		var tip := UI.ability_tip(ability)
 		if option.reason != "":
 			tip += "[color=%s]%s[/color]" % [UI.hex(UI.RED), option.reason]
@@ -676,7 +682,7 @@ func _on_shop_clicked(index: int) -> void:
 	elif option.credit:
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will claim Vagabond (On the Cuff).")]
 	_open_popup(entry.view.get_global_rect(), def.display_name.to_upper(), def.description, UI.MUTED, [{
-		"text": Loc.t("Buy  ·  %d coins") % def.price, "tip": tip, "enabled": option.enabled,
+		"text": Loc.t("Buy  ·  %d coins") % option.get("cost", def.price), "tip": tip, "enabled": option.enabled,
 		"accent": UI.GOLD, "action": _answer_turn.bind(option), "reason": option.reason,
 	}])
 
@@ -688,7 +694,7 @@ func _on_reroll_pressed() -> void:
 
 
 func _reroll_tip() -> String:
-	var cost := engine.config.reroll_cost
+	var cost := _price(engine.config.reroll_cost)
 	var tip := Loc.t("[b]Reroll[/b]\nPay %d coins to replace every item in the shop slots.") % cost
 	var kept := engine.fixed_items.map(func(def): return def.display_name)
 	if not kept.is_empty():
@@ -750,11 +756,9 @@ func _prompt_target(d: Decision) -> void:
 func _prompt_doubt(d: Decision) -> void:
 	var play: Play = d.context.play
 	var def := Content.character(play.ability().character_id)
-	var sworn := play.actor.has_status(&"truth_bound")
-	# Under Oath there is nothing to weigh up: the claim line says why.
-	var text := _claim_line(play, "" if sworn else "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
+	var text := _claim_line(play, "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED),
 		Loc.t("You hold %d of the %d %s cards. Is it a lie?") % [d.player.cards.count(def.id), engine.copies_in_play(), def.display_name]])
-	if d.options.is_empty() and not sworn:
+	if d.options.is_empty():
 		# Only here for what they may play instead (context.reactions).
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), engine.blocked_reason(d.player, [&"doubt"])]
 	elif not d.options.has(GameEngine.STAKE_COINS):
@@ -771,10 +775,10 @@ func _prompt_doubt(d: Decision) -> void:
 func _claim_line(play: Play, private := "") -> String:
 	var def := Content.character(play.ability().character_id)
 	var text := Loc.t("[b]%s[/b] claims [b][color=%s]%s[/color][/b]: %s%s.") % [
-		play.actor.name, UI.hex(UI.GOLD), def.display_name.to_upper(), play.source.display_name, _on_target(play)]
+		play.actor.name, UI.hex(UI.GOLD), def.display_name.to_upper(), EventText.title(play), _on_target(play)]
 	text += private
 	if play.actor.has_status(&"truth_bound"):
-		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.GOLD), Loc.t("%s is Under Oath and can't lie.") % play.actor.name]
+		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.GOLD), Loc.t("%s is Under Oath: a lie costs them every coin too.") % play.actor.name]
 	return text
 
 
@@ -823,7 +827,8 @@ func _reaction_button(option: Dictionary) -> Dictionary:
 		}
 	var ability: Ability = option.ability
 	var def := Content.character(ability.character_id)
-	var cost := "  ·  %d" % ability.cost if ability.cost > 0 else ""
+	var price: int = option.get("cost", ability.cost)
+	var cost := "  ·  %d" % price if price > 0 else ""
 	var tip := UI.ability_tip(ability)
 	var accent := UI.GREEN if option.legit else UI.RED
 	tip += Loc.t("You hold %s: this is the truth." if option.legit else "You don't hold %s: this is a bluff.") % def.display_name
@@ -1323,6 +1328,9 @@ func present(e: GameEvent) -> void:
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolved":
 			_play_fx.put_away()
+			if d.play.aimed() != d.play:
+				# The Impostor's borrowed action is over, and so is its look.
+				_play_fx.cleanse()
 			await _pop_stage(d.play)
 		&"item_buying":
 			_sync_shop()
@@ -1375,8 +1383,10 @@ func present(e: GameEvent) -> void:
 			await _anim_cards_swapped(d)
 		&"hand_redrawn":
 			await _anim_hand_redrawn(d)
+		&"cards_recalled":
+			await _play_fx.cards_binned(d)
 		&"coin_flipped":
-			await _play_fx.coin_flip(d.player, d.heads)
+			await _play_fx.coin_flip(d.player, d.heads, d.won)
 		&"note":
 			_float((Loc.t(d.text) % d.player.name).trim_suffix(".").to_upper(), _anchor(d.player) + Vector2(0, -24),
 					UI.GREEN.lightened(0.25) if d.good else UI.MUTED, 16)
@@ -1409,6 +1419,7 @@ func _sync() -> void:
 
 func _sync_shop() -> void:
 	var options: Variant = _turn_options()
+	_shop_reroll_price.text = str(_price(engine.config.reroll_cost))
 	for entry: Dictionary in _shop_entries:
 		var def := _entry_def(entry)
 		for node: Control in [entry.view, entry.price, entry.coin, entry.mini]:
@@ -1417,7 +1428,7 @@ func _sync_shop() -> void:
 			continue
 		entry.view.set_item(def)
 		entry.mini.texture = UI.tex(def.texture_path)
-		entry.price.text = str(def.price)
+		entry.price.text = str(_price(def.price))
 		var option: Variant = _buy_option(options, entry)
 		var buyable: bool = option == null or option.enabled
 		entry.view.set_enabled(buyable)
@@ -1598,6 +1609,7 @@ func _push_stage(entry: Dictionary) -> void:
 
 ## The arrow from the actor of `play` to its target, null if there is none to draw.
 func _stage_arrow(play: Play) -> ArrowFx:
+	play = play.aimed()
 	if play.target == null or play.target == play.actor:
 		return null
 	var arrow := ArrowFx.new()
@@ -1670,7 +1682,7 @@ func _render_stage() -> void:
 	row.add_child(text)
 	if play.is_claim():
 		var cost := "  (%s)" % (Loc.t("%d coins") % play.cost) if play.cost > 0 else ""
-		text.add_child(UI.label(play.source.display_name + _on_target(play) + cost, 17, UI.CREAM, true))
+		text.add_child(UI.label(EventText.title(play) + _on_target(play) + cost, 17, UI.CREAM, true))
 	elif play.target != null and not _stage_stack.back().get("concealed", false):
 		text.add_child(UI.label(_on_target(play).strip_edges().capitalize(), 17, UI.CREAM, true))
 	var description := UI.label(play.source.description, 12, UI.MUTED)
@@ -1680,6 +1692,7 @@ func _render_stage() -> void:
 
 
 func _on_target(play: Play) -> String:
+	play = play.aimed()
 	if play.target == null:
 		return ""
 	if play.target == play.actor:
@@ -2494,6 +2507,12 @@ func _card_center(p: PlayerState, index: int) -> Vector2:
 		return _hero.card_center(index)
 	var seat: SeatView = _seats.get(p.id)
 	return seat.card_center(index) if seat != null else _bank()
+
+
+## What the viewer pays right now for something priced at `amount` (a status
+## may have raised every price for them).
+func _price(amount: int) -> int:
+	return engine.price(viewer, amount) if viewer != null else amount
 
 
 func _bank() -> Vector2:

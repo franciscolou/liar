@@ -38,11 +38,15 @@ extends RefCounted
 ##   cards_changed {player, index, reason, old} / cards_swapped {a, a_index, b, b_index}
 ##     (old: the card that left, known to the table only when reason is
 ##     &"proven": it survived a doubt and was traded for a new one)
+##   cards_recalled {player, index, card, hands}  every copy of `card` went back to
+##     the deck for a new one, starting with the one `player` showed (at `index`
+##     of their hand); hands: [{player, index}], public
 ##   card_peeked {viewer, owner, index, card}   private to the viewer
 ##   card_lost {player, index, card}            the hand follows Morale; public
 ##   card_drawn {player, index}
 ##   hand_redrawn {player, count}               the whole hand went back for new cards
-##   coin_flipped {player, heads}               a coin tossed for everyone to see
+##   coin_flipped {player, heads, won}          a coin tossed for everyone to see;
+##     won: it fell on the side the player was hoping for
 ##   note {player, text, good}                  news from content that no other event
 ##     carries: `text` is an English key with one %s for the player's name
 ##   status_added / status_removed {player, status}

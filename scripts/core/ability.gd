@@ -17,6 +17,9 @@ var fresh_turn := false
 var info_only := false
 ## May react to an event produced by its own resolution (kill streaks).
 var self_chain := false
+## Once it goes through as the action of a turn, it is the table's last
+## action (GameEngine.last_action), there for the Impostor to repeat.
+var repeatable := true
 ## Short text telling the player when a reaction ability can be claimed.
 var trigger_text := "":
 	get:
@@ -28,6 +31,18 @@ var trigger_text := "":
 ## see coming (doctor.gd). It is still claimed when its own trigger comes.
 func foresees(_play: Play, _player: PlayerState, _engine: GameEngine) -> bool:
 	return false
+
+
+## What claiming it costs `player` before any surcharge: `cost`, unless the
+## price depends on the table (impostor.gd).
+func cost_for(_player: PlayerState, _engine: GameEngine) -> int:
+	return cost
+
+
+## A few words for the button of the ability about what it would do right
+## now, "" when its name says it all (impostor.gd: what would be repeated).
+func detail(_player: PlayerState, _engine: GameEngine) -> String:
+	return ""
 
 
 func kind_label() -> String:

@@ -10,16 +10,18 @@ signal end_turn_pressed
 signal extra_pressed(option: Dictionary)
 
 const StatusFx := preload("res://scripts/ui/status_fx.gd")
+const Desk := preload("res://scripts/ui/hero_desk.gd")
 const SIZE := Vector2(1152, 170)
 const MAX_EXTRAS := 3
 const STRIP_SCALE := 0.92
 ## Room for the strip, from its left edge to the END TURN button.
 const STRIP_WIDTH := 572.0
+const BRASS := Color("b98a2e")
 
 var player: PlayerState
 var engine: GameEngine
 
-var _bg: Panel
+var _bg: Desk
 var _name: Label
 var _stats: StatBar
 var _chips: StatusChips
@@ -42,63 +44,64 @@ var _active := false
 func _init() -> void:
 	size = SIZE
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_bg = Panel.new()
+	_bg = Desk.new()
 	_bg.size = SIZE + Vector2(0, 8)
-	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_bg)
 	# The far side of the ring of stars: over the band, under what is written on it.
 	_status_fx = StatusFx.new()
 	add_child(_status_fx.back)
 
 	_name = UI.label("", 20, UI.CREAM, true)
-	_name.position = Vector2(14, 6)
-	_name.size = Vector2(178, 26)  # the dynamite stands to its right
+	_name.position = Desk.PLATE.position + Vector2(10, 0)
+	_name.size = Desk.PLATE.size - Vector2(20, 0)  # the dynamite stands to its right
+	_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_name.clip_text = true
 	_name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	add_child(_name)
 	_stats = StatBar.new(22, 20)
-	_stats.position = Vector2(14, 34)
+	_stats.position = Desk.LEDGER.position + Vector2(6, 2)
 	add_child(_stats)
 	_chips = StatusChips.new()
-	_chips.position = Vector2(14, 64)
-	_chips.size = Vector2(210, 34)
+	_chips.position = Vector2(10, 71)
+	_chips.size = Vector2(214, 32)
 	add_child(_chips)
 	_inventory = HBoxContainer.new()
-	_inventory.position = Vector2(14, 104)
-	_inventory.add_theme_constant_override("separation", 6)
+	_inventory.position = Desk.SOCKETS_AT
+	_inventory.add_theme_constant_override("separation", int(Desk.SOCKET_STEP - Desk.SOCKET.x))
 	add_child(_inventory)
 
 	_hand = Control.new()
-	_hand.position = Vector2(238, 8)
+	_hand.position = Vector2(241, 10)
 	_hand.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_hand)
 
 	_strip_hint = UI.label("", 12, UI.MUTED)
-	_strip_hint.position = Vector2(440, 6)
+	_strip_hint.position = Vector2(438, 9)
 	add_child(_strip_hint)
 	_strip = Control.new()
-	_strip.position = Vector2(440, 28)
+	_strip.position = Vector2(440, Desk.RACK.position.y + Desk.SHELF - CardView.BASE.y * STRIP_SCALE)
 	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_strip)
 
 	_end_turn = UI.button("END TURN", UI.GOLD, 16)
-	_end_turn.position = Vector2(1024, 28)
-	_end_turn.size = Vector2(116, 42)
+	_end_turn.position = Vector2(1028, 28)
+	_end_turn.size = Vector2(116, 44)
+	_brass(_end_turn)
 	_end_turn.pressed.connect(func(): end_turn_pressed.emit())
 	TipLayer.attach(_end_turn, "Finish your turn without using a character ability.")
 	add_child(_end_turn)
 	_extras = VBoxContainer.new()
-	_extras.position = Vector2(1024, 78)
+	_extras.position = Vector2(1028, 80)
 	_extras.size = Vector2(116, 80)
 	add_child(_extras)
 	# The player's own box is the block on the left: the stars circle the
 	# name and the hearts, the doll sits on the top edge of the band where the
 	# block ends (a leg along it, a leg hanging into the gap before the hand)
 	# and the dynamite stands beside the name.
-	_status_fx.ring_centre = Vector2(116, 44)
+	_status_fx.ring_centre = Vector2(116, 50)
 	_status_fx.ring_reach = Vector2(110, 20)
 	_status_fx.doll_foot = Vector2(232, 1)
-	_status_fx.bomb_foot = Vector2(203, 46)
+	_status_fx.bomb_foot = Vector2(209, 40)
 	add_child(_status_fx)
 	_restyle()
 
@@ -145,7 +148,7 @@ func _sync_strip() -> void:
 		# narrower than its text, and a long name would be centred in a wider box.
 		caption.clip_text = true
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		caption.position = Vector2(i * step - 6, 94)
+		caption.position = Vector2(i * step - 6, CardView.BASE.y * STRIP_SCALE + 10)
 		caption.size = Vector2(step + 12 - 4, 14)
 		_strip.add_child(caption)
 
@@ -189,6 +192,7 @@ func sync() -> void:
 	_status_fx.sync(player, engine)
 	_sync_hand()
 	_sync_strip()
+	_bg.sockets = engine.config.inventory_limit
 	_sync_inventory()
 
 	var my_turn := _options != null
@@ -260,7 +264,7 @@ func stat_bar() -> StatBar:
 
 ## The middle of the inventory slot at `index`.
 func item_spot(index: int) -> Vector2:
-	return _inventory.global_position + Vector2(maxi(index, 0) * 64.0 + 29.0, 29.0)
+	return _inventory.global_position + Vector2(maxi(index, 0) * Desk.SOCKET_STEP, 0) + Desk.SOCKET / 2.0
 
 
 func card_center(index: int) -> Vector2:
@@ -316,9 +320,10 @@ func _sync_inventory() -> void:
 	_items_shown = signature
 	UI.clear(_inventory)
 	for slot in engine.config.inventory_limit:
+		# The socket itself is part of the counter (see hero_desk.gd).
 		var frame := PanelContainer.new()
-		frame.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.75), UI.BORDER.darkened(0.3), 2, 4, 3))
-		frame.custom_minimum_size = Vector2(58, 58)
+		frame.add_theme_stylebox_override("panel", UI.box(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0, 3))
+		frame.custom_minimum_size = Desk.SOCKET
 		frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_inventory.add_child(frame)
 		if slot >= player.items.size():
@@ -341,6 +346,24 @@ func _sync_inventory() -> void:
 
 
 func _restyle() -> void:
-	var sb := UI.box(Color(UI.INK, 0.9), UI.GOLD if _active else UI.BORDER, 0, 0, 0)
-	sb.border_width_top = 3
-	_bg.add_theme_stylebox_override("panel", sb)
+	_bg.active = _active
+
+
+## Makes `b` a brass plate standing out of the counter, pushed in when pressed.
+func _brass(b: Button) -> void:
+	var looks := {
+		"normal": [BRASS, 0, 4],
+		"hover": [BRASS.lightened(0.18), 0, 4],
+		"pressed": [BRASS.darkened(0.15), 4, 0],
+	}
+	for state: String in looks:
+		var sb := UI.box(looks[state][0], Desk.BRASS_DARK.darkened(0.35), 2, 2, 6)
+		sb.border_width_top = 2 + looks[state][1]
+		sb.border_width_bottom = 2 + looks[state][2]
+		b.add_theme_stylebox_override(state, sb)
+	var off := UI.box(Desk.FRAME_DARK, Desk.SEAM, 2, 2, 6)
+	off.border_width_bottom = 6
+	b.add_theme_stylebox_override("disabled", off)
+	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(state, UI.INK)
+	b.add_theme_font_override("font", UI.bold())

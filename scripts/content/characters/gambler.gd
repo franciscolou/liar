@@ -43,12 +43,12 @@ class DoubleDown extends Ability:
 	func _init() -> void:
 		id = &"gambler.double_down"
 		display_name = "Double Down"
-		description = "Pay %d coins and flip a coin. Heads: gain %d coins. Tails: nothing." % [ANTE, JACKPOT]
+		description = "Pay %d coins and flip a coin. Tails: gain %d coins. Heads: nothing." % [ANTE, JACKPOT]
 		on_turn = true
 		cost = ANTE
 
 	func resolve(play: Play) -> void:
-		if await play.engine.flip_coin(play.actor):
+		if not await play.engine.flip_coin(play.actor, false):
 			await play.engine.gain_coins(play.actor, JACKPOT, &"double_down")
 
 	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
@@ -92,13 +92,12 @@ class SideBet extends Ability:
 
 	## What a bot makes of the claim, as PICK weights for [lied, told the truth].
 	func _hunch(player: PlayerState, doubted: Play, engine: GameEngine) -> Array:
-		if doubted.actor.has_status(&"truth_bound"):
-			return [0.0, 1.0]
 		# Every copy in this hand is one the claimant can't be holding.
 		var held := player.cards.count(doubted.ability().character_id)
 		if held >= engine.copies_in_play():
 			return [1.0, 0.0]
-		return [0.8 + held, 1.2]
+		# Few people bluff with their whole purse on the line.
+		return [0.8 + held, 1.2 * BotController.oath_caution(doubted.actor, engine)]
 
 	func ai_react_weight(_event: GameEvent, player: PlayerState, _engine: GameEngine) -> float:
 		return 0.4 if player.coins >= STAKE + 2 else 0.1

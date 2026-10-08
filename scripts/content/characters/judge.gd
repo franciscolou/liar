@@ -11,7 +11,7 @@ func _init() -> void:
 	status_defs = {
 		&"truth_bound": {
 			"name": "Under Oath",
-			"description": "Can't lie: may only use abilities of characters actually held, and nobody can call LIAR! on them. Lasts until the end of this player's next turn.",
+			"description": "Caught lying, loses every coin on top of the Morale. Lasts until the end of this player's next turn.",
 			"color": Color("c9a24a"),
 		},
 	}
@@ -23,7 +23,7 @@ class UnderOath extends Ability:
 	func _init() -> void:
 		id = &"judge.under_oath"
 		display_name = "Under Oath"
-		description = "Choose a player. They can't lie until the end of their next turn."
+		description = "Choose a player. Until the end of their next turn, being caught in a lie costs them all their coins on top of the Morale."
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		inflicts = true

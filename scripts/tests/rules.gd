@@ -6,6 +6,7 @@ extends RefCounted
 
 const GROGGY := &"groggy"
 const MICKEY_FINN := &"bartender.mickey_finn"
+const LAST_CALL := &"bartender.last_call"
 const ANTIDOTE := &"doctor.antidote"
 
 
@@ -24,7 +25,11 @@ static func run() -> int:
 		"antidote answered in the doubt window": _antidote_early,
 		"antidote let through is not asked again": _antidote_declined,
 		"a doll can't be doubted once pinned": _doll_stands,
-		"nobody calls LIAR! on a claim under oath": _oath_stands,
+		"a lie under oath costs every coin too": _oath_doubles.bind(false),
+		"the truth under oath costs nothing": _oath_doubles.bind(true),
+		"a spiked drink is free and adds to every price": _groggy_pays_more,
+		"last call sends every copy back for a new card": _last_call,
+		"a disguise repeats the last action, at its price": _disguise_repeats,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -110,6 +115,7 @@ static func _antidote_after_wrong_doubt(bot: bool) -> String:
 				return option
 		return null
 	await table.spike(0, 1)
+	# The fine and nothing else: the Antidote is free, drink or no drink.
 	if target.coins != coins - table.engine.config.doubt_cost:
 		return "paid %d for the wrong call" % (coins - target.coins)
 	if offers[0] != 1:
@@ -157,27 +163,108 @@ static func _doll_stands() -> String:
 	return ""
 
 
-## A claim made Under Oath can only be true: nobody is offered the call, but
-## whoever can answer the claim with a reaction is still asked about that.
-static func _oath_stands() -> String:
-	var table := Table.new(false)
+## Under Oath anyone may still lie and anyone may still call it: a lie caught
+## costs every coin on top of the Morale, and the truth is as safe as ever.
+static func _oath_doubles(truthful: bool) -> String:
+	var table := Table.new()
 	var engine := table.engine
-	engine.players[1].cards = [&"doctor", &"judge"]
-	await engine.add_status(engine.players[0], &"truth_bound", {"expires": &"own_turn_end", "by": 2})
-	await table.spike(0, 1)
-	var doubts: Array = table.asked(1, Decision.Kind.DOUBT)
-	if doubts.size() != 1 or doubts[0].context.reactions.size() != 1:
-		return "the target was asked %d times" % doubts.size()
-	if not doubts[0].options.is_empty():
-		return "the target may stake %s" % [doubts[0].options]
-	if not table.asked(2, Decision.Kind.DOUBT).is_empty():
-		return "a bystander was asked"
-	return table.expect_groggy(1, 0)
+	var sworn: PlayerState = engine.players[0 if truthful else 1]
+	var other := 1 if truthful else 0
+	await engine.add_status(sworn, &"truth_bound", {"expires": &"own_turn_end", "by": 2})
+	table.puppets[2].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if not d.options.is_empty() else false
+	await table.spike(sworn.id, other)
+	if table.asked(2, Decision.Kind.DOUBT).is_empty():
+		return "nobody was offered the call"
+	var lost := engine.config.start_morale - sworn.morale
+	if lost != (0 if truthful else 1):
+		return "the sworn player lost %d Morale" % lost
+	# The drink is free: the truth leaves the 20 coins alone.
+	if sworn.coins != (20 if truthful else 0):
+		return "the sworn player has %d coins left" % sworn.coins
+	return table.expect_groggy(other if truthful else -1, sworn.id if truthful else -1)
 
 
 static func _offers_antidote(d: Decision) -> bool:
 	return d.options.any(func(option: Dictionary) -> bool:
 		return option.kind == &"ability" and option.ability.id == ANTIDOTE)
+
+
+static func _groggy_pays_more() -> String:
+	var table := Table.new()
+	await table.spike(0, 1)
+	if table.engine.players[0].coins != 20:
+		return "the drink cost %d" % (20 - table.engine.players[0].coins)
+	var engine := table.engine
+	var groggy: PlayerState = engine.players[1]
+	# What is free stays free.
+	if engine.ability_option(groggy, table.ability(MICKEY_FINN)).cost != 0:
+		return "a free ability is offered for %d" % engine.ability_option(groggy, table.ability(MICKEY_FINN)).cost
+	await table.spike(1, 2)
+	table.give(1, [&"potion"])
+	await engine.use_item(groggy, groggy.items[0])
+	if groggy.coins != 20:
+		return "free things cost the groggy %d" % (20 - groggy.coins)
+	# What has a price has a higher one.
+	var patch_up := table.ability(&"doctor.patch_up")
+	if engine.ability_option(groggy, patch_up).cost != patch_up.cost + 2:
+		return "a paid ability is offered for %d" % engine.ability_option(groggy, patch_up).cost
+	if engine.price(groggy, engine.config.reroll_cost) != engine.config.reroll_cost + 2:
+		return "reroll for %d" % engine.price(groggy, engine.config.reroll_cost)
+	if engine.price(engine.players[0], 3) != 3:
+		return "the sober pay more too"
+	groggy.morale = 1
+	await engine.claim(groggy, patch_up)
+	return "" if groggy.coins == 20 - patch_up.cost - 2 else "a paid ability left %d coins" % groggy.coins
+
+
+static func _disguise_repeats() -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var disguise := table.ability(&"impostor.perfect_disguise")
+	if disguise.can_use(engine.players[2], engine) == "":
+		return "offered with nothing to repeat"
+	await table.spike(0, 1)
+	if engine.ability_option(engine.players[2], disguise).detail != table.ability(MICKEY_FINN).display_name:
+		return "would repeat '%s'" % engine.ability_option(engine.players[2], disguise).detail
+	table.puppets[2].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[0]
+	await engine.claim(engine.players[2], disguise)
+	if not engine.players[0].has_status(GROGGY) or engine.players[0].statuses[GROGGY].get("by", -1) != 2:
+		return "the drink was not repeated"
+	if engine.players[2].coins != 20:
+		return "a free action cost %d" % (20 - engine.players[2].coins)
+	if engine.last_action != table.ability(MICKEY_FINN):
+		return "the disguise became the last action"
+	# A paid action costs the same through the disguise.
+	var patch_up := table.ability(&"doctor.patch_up")
+	engine.last_action = patch_up
+	engine.players[2].morale = 1
+	await engine.claim(engine.players[2], disguise)
+	if engine.players[2].morale != 2:
+		return "the cure was not repeated"
+	return "" if engine.players[2].coins == 20 - patch_up.cost else "paid %d" % (20 - engine.players[2].coins)
+
+
+static func _last_call() -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var total := engine.deck.size()
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	await engine.claim(engine.players[0], table.ability(LAST_CALL))
+	var recalled: Array = seen.of(&"cards_recalled")
+	if recalled.size() != 1:
+		return "recalled %d times" % recalled.size()
+	var d: Dictionary = recalled[0].data
+	if d.card != &"judge" or d.hands.size() != 5:
+		return "%d copies of %s went back" % [d.hands.size(), d.card]
+	if engine.deck.size() != total:
+		return "deck went from %d to %d" % [total, engine.deck.size()]
+	for p: PlayerState in engine.players:
+		if p.cards.size() != 2:
+			return "%s holds %d cards" % [p.name, p.cards.size()]
+	return "" if engine.players[0].cards[0] == &"bartender" else "the other card changed"
 
 
 # --- the stage ------------------------------------------------------------------
@@ -193,7 +280,7 @@ class Table extends RefCounted:
 		var config := GameConfig.new()
 		for i in 3:
 			config.seats.append({"name": "P%d" % i, "bot": bots or i != 1})
-		config.character_ids = [&"bartender", &"doctor", &"voodooist", &"judge"]
+		config.character_ids = [&"bartender", &"doctor", &"voodooist", &"judge", &"impostor"]
 		config.rng_seed = 7
 		engine = GameEngine.new()
 		engine.setup(config)
@@ -238,6 +325,17 @@ class Table extends RefCounted:
 		if who >= 0 and engine.players[who].statuses[GROGGY].get("by", -1) != by:
 			return "spiked by %d" % engine.players[who].statuses[GROGGY].get("by", -1)
 		return ""
+
+
+## Keeps every event the table was shown.
+class Witness extends RefCounted:
+	var events: Array = []
+
+	func present(event: GameEvent) -> void:
+		events.append(event)
+
+	func of(type: StringName) -> Array:
+		return events.filter(func(event: GameEvent) -> bool: return event.type == type)
 
 
 ## Answers what the scene set for each kind of decision, and nothing (let it

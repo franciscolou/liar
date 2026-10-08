@@ -53,12 +53,13 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 	var out := []
 	if player.has_status(&"hexed"):
-		var affordable := engine.can_pay(player, BREAK_COST)
+		var cost := engine.price(player, BREAK_COST)
+		var affordable := engine.can_pay(player, cost)
 		out.append({
 			"id": &"voodooist.break",
 			"label": Loc.t("Break the Hex"),
 			"description": Loc.t("Pay %d coins to destroy the Voodoo doll pinned on you.") % BREAK_COST,
-			"cost": BREAK_COST,
+			"cost": cost,
 			"enabled": affordable,
 			"reason": "" if affordable else Loc.t("Not enough coins"),
 			"run": _break_hex,
@@ -68,7 +69,7 @@ func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 
 
 func _break_hex(player: PlayerState, engine: GameEngine) -> void:
-	if not player.has_status(&"hexed") or not await engine.pay(player, BREAK_COST):
+	if not player.has_status(&"hexed") or not await engine.pay(player, engine.price(player, BREAK_COST)):
 		return
 	# Paying on a tab is a claim of its own: by the time it settles the doll
 	# may be gone (its owner lost their last Morale on a wrong call).

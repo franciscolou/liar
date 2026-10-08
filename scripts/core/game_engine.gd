@@ -39,6 +39,8 @@ var turn_count := 0
 var over := false
 var winner: PlayerState
 var aborted := false
+## The last ability that went through as the action of somebody's turn.
+var last_action: Ability
 ## Set by the table so bots can take a breath; null in headless runs.
 var tree: SceneTree
 
@@ -285,10 +287,11 @@ func turn_options(player: PlayerState) -> Dictionary:
 		if shop[slot] != null:
 			out.buy.append(_buy_option(player, shop[slot], slot))
 	if not item_pool.is_empty():
-		var reason := "" if can_pay(player, config.reroll_cost) else Loc.t("Not enough coins")
+		var cost := price(player, config.reroll_cost)
+		var reason := "" if can_pay(player, cost) else Loc.t("Not enough coins")
 		out.reroll = {
-			"kind": &"reroll", "cost": config.reroll_cost, "enabled": reason == "",
-			"reason": reason, "credit": config.reroll_cost > player.coins,
+			"kind": &"reroll", "cost": cost, "enabled": reason == "",
+			"reason": reason, "credit": cost > player.coins,
 		}
 	for instance: ItemInstance in player.items:
 		var def := instance.def
@@ -308,35 +311,60 @@ func turn_options(player: PlayerState) -> Dictionary:
 ## `slot` is the shop slot, or -1 for an item that is always on sale.
 func _buy_option(player: PlayerState, def: ItemDef, slot: int) -> Dictionary:
 	var reason := ""
+	var cost := price(player, def.price)
 	if player.items.size() >= config.inventory_limit:
 		reason = Loc.t("Inventory full")
-	elif not can_pay(player, def.price):
+	elif not can_pay(player, cost):
 		reason = Loc.t("Not enough coins")
 	return {
 		"kind": &"buy", "slot": slot, "item": def, "enabled": reason == "",
-		"reason": reason, "credit": def.price > player.coins,
+		"reason": reason, "credit": cost > player.coins, "cost": cost,
 	}
 
 
+## `cost` is what the ability would cost right now (see claim_cost).
 func ability_option(player: PlayerState, ability: Ability) -> Dictionary:
 	var reason := claim_block_reason(player, ability)
+	var cost := claim_cost(player, ability)
 	return {
 		"kind": &"ability", "ability": ability, "enabled": reason == "", "reason": reason,
-		"legit": player.has_character(ability.character_id), "credit": ability.cost > player.coins,
+		"legit": player.has_character(ability.character_id), "credit": cost > player.coins,
+		"cost": cost, "detail": ability.detail(player, self),
 	}
+
+
+## What statuses add to every price `player` pays (the `surcharge` of a
+## status: see bartender.gd).
+func surcharge(player: PlayerState) -> int:
+	var extra := 0
+	for status_id: StringName in player.statuses:
+		extra += int(player.statuses[status_id].get("surcharge", 0))
+	return extra
+
+
+## What `player` pays right now for something priced at `amount`: a claim,
+## an item bought, a reroll, a turn extra. Whatever has a price pays the
+## surcharge() on top of it; what is free stays free. The fine of a wrong
+## LIAR! is not a purchase and does not go through here.
+func price(player: PlayerState, amount: int) -> int:
+	return amount + surcharge(player) if amount > 0 else amount
+
+
+## What claiming `ability` costs `player` right now.
+func claim_cost(player: PlayerState, ability: Ability) -> int:
+	return price(player, ability.cost_for(player, self))
 
 
 func claim_block_reason(player: PlayerState, ability: Ability) -> String:
 	if ability.info_only:
 		return Loc.t("Always active")
-	if player.has_status(&"truth_bound") and not player.has_character(ability.character_id):
-		return Loc.t("Under Oath: you can't lie")
 	var reason := blocked_reason(player, ability.tags)
 	if reason != "":
 		return reason
 	if ability.fresh_turn and player.turn.get("busy", false):
 		return Loc.t("Takes the whole turn")
-	if ability.cost > 0 and not can_pay(player, ability.cost):
+	var cost := claim_cost(player, ability)
+	if cost > 0 and not can_pay(player, cost):
 		return Loc.t("Not enough coins")
 	reason = ability.can_use(player, self)
 	if reason == "" and ability.targeting != Playable.Targeting.NONE and _candidates_for(player, ability).is_empty():
@@ -402,7 +430,7 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 	play.actor = actor
 	play.source = ability
 	play.event = trigger
-	play.cost = ability.cost
+	play.cost = claim_cost(actor, ability)
 	play.truthful = actor.has_character(ability.character_id)
 	if not await _choose_target(play):
 		return null
@@ -437,12 +465,20 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 				await fire(&"claim_cancelled", {"play": play})
 			else:
 				await _resolve(play)
+				if trigger == null and ability.on_turn and ability.repeatable:
+					last_action = ability
 	if proven and not play.stand_in and actor.cards.count(ability.character_id) >= copies:
 		await renew_proven_card(actor, ability.character_id)
 	await fire(&"claim_resolved", {"play": play})
 	if not play.truthful and doubter == null and not play.failed and not over and actor.alive:
 		await fire(&"lie_succeeded", {"play": play, "player": actor})
 	return play
+
+
+## The coins `player` would forfeit, on top of the Morale, if caught lying
+## right now: every one of them Under Oath (see judge.gd), none otherwise.
+func oath_stake(player: PlayerState) -> int:
+	return maxi(player.coins, 0) if player.has_status(&"truth_bound") else 0
 
 
 ## `doubter` calls LIAR! on `play`, whose `truthful` must be up to date.
@@ -463,7 +499,12 @@ func challenge(doubter: PlayerState, play: Play, stake: StringName = STAKE_COINS
 		await fire(&"doubt_failed", {"play": play, "doubter": doubter, "defender": actor})
 		return false
 	play.failed = true
+	# Sworn when the lie was told, whatever becomes of the oath meanwhile.
+	var sworn := actor.has_status(&"truth_bound")
 	await lose_morale(actor, 1, doubter, &"lie", play)
+	# Perjury: the purse goes to the bank, whether or not the Morale was saved.
+	if sworn and actor.alive and not over and actor.coins > 0:
+		await change_coins(actor, -actor.coins, &"oath")
 	if not over and doubter.alive:
 		await fire(&"doubt_succeeded", {"play": play, "doubter": doubter, "liar": actor})
 	return true
@@ -507,7 +548,7 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
 		return
 	if def == null or player.items.size() >= config.inventory_limit:
 		return
-	if not await pay(player, def.price, &"shop"):
+	if not await pay(player, price(player, def.price), &"shop"):
 		return
 	player.turn["busy"] = true
 	if stocked:
@@ -524,7 +565,7 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
 
 ## Pays to replace everything in the slots. Items always on sale stay.
 func reroll_shop(player: PlayerState) -> void:
-	if item_pool.is_empty() or not await pay(player, config.reroll_cost, &"shop"):
+	if item_pool.is_empty() or not await pay(player, price(player, config.reroll_cost), &"shop"):
 		return
 	player.turn["busy"] = true
 	for slot in shop.size():
@@ -561,6 +602,12 @@ func take_item(thief: PlayerState, victim: PlayerState, instance: ItemInstance) 
 	return true
 
 
+## Has the actor of `play` pick who it is aimed at, if its source asks for
+## a target. False if there is nobody to aim at or they backed out.
+func choose_target(play: Play) -> bool:
+	return await _choose_target(play)
+
+
 func _choose_target(play: Play) -> bool:
 	var source := play.source
 	if source.targeting == Playable.Targeting.NONE:
@@ -583,12 +630,9 @@ func _choose_target(play: Play) -> bool:
 ## What `player` may put up for a LIAR! call, lost if the claim was true.
 ## With the coins for the fine there is nothing to choose. Without them it is
 ## a debt (only if something lets them go that far into the red) or 1 Morale.
-## Empty for someone who can't call LIAR! at all, and for everyone when `play`
-## is a claim made Under Oath: it can only be true, there is nothing to call.
-func doubt_stakes(player: PlayerState, play: Play = null) -> Array[StringName]:
+## Empty for someone who can't call LIAR! at all.
+func doubt_stakes(player: PlayerState, _play: Play = null) -> Array[StringName]:
 	var out: Array[StringName] = []
-	if play != null and play.actor.has_status(&"truth_bound"):
-		return out
 	# A status may take the call away altogether (it blocks the tag &"doubt").
 	if not player.alive or blocked_reason(player, [&"doubt"]) != "":
 		return out
@@ -795,10 +839,11 @@ func steal_coins(thief: PlayerState, victim: PlayerState, amount: int, play: Pla
 	return amount
 
 
-## A coin tossed in front of the whole table. True for heads.
-func flip_coin(player: PlayerState) -> bool:
+## A coin tossed in front of the whole table. True for heads. `lucky_heads`
+## says which side `player` is hoping for: the table cheers or sighs by it.
+func flip_coin(player: PlayerState, lucky_heads := true) -> bool:
 	var heads := rng.randf() < 0.5
-	await fire(&"coin_flipped", {"player": player, "heads": heads})
+	await fire(&"coin_flipped", {"player": player, "heads": heads, "won": heads == lucky_heads})
 	return heads
 
 
@@ -947,6 +992,32 @@ func renew_proven_card(player: PlayerState, character_id: StringName) -> void:
 	await replace_card(player, player.cards.find(character_id), &"proven")
 
 
+## Every copy of the card at `index` of the hand of `by`, in whatever hand it
+## is, goes back to the deck, and each of those places gets a new card.
+func recall_cards(by: PlayerState, index: int) -> void:
+	if index < 0 or index >= by.cards.size():
+		return
+	var card: StringName = by.cards[index]
+	var hands: Array = []
+	for p: PlayerState in seat_order(by):
+		for i: int in p.cards.size():
+			if p.cards[i] == card:
+				hands.append({"player": p, "index": i})
+	# The new cards come out first: as far as the deck goes, nobody draws
+	# back what was just handed in.
+	var drawn: Array = []
+	while drawn.size() < hands.size() and not deck.is_empty():
+		drawn.append(deck.pop_back())
+	for i: int in hands.size():
+		deck.append(card)
+	_shuffle(deck)
+	while drawn.size() < hands.size():
+		drawn.append(deck.pop_back())
+	for i: int in hands.size():
+		hands[i].player.cards[hands[i].index] = drawn[i]
+	await fire(&"cards_recalled", {"player": by, "index": index, "card": card, "hands": hands})
+
+
 func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int) -> void:
 	if a_index < 0 or a_index >= a.cards.size() or b_index < 0 or b_index >= b.cards.size():
 		return
@@ -989,7 +1060,8 @@ func random_card_index(player: PlayerState) -> int:
 
 ## options: expires (&"own_turn_start" | &"own_turn_end" | &"never"),
 ## turns (how many of those boundaries it survives, default 1),
-## by (player id that applied it), blocks (tags the player can't use).
+## by (player id that applied it), blocks (tags the player can't use),
+## surcharge (coins added to every price the player pays: see price()).
 func add_status(player: PlayerState, status_id: StringName, options: Dictionary = {}) -> void:
 	if not player.alive:
 		return

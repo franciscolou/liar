@@ -1,11 +1,12 @@
 extends CharacterDef
 ## Rosie Malone. Pours the drinks at the Quiver and hears every word.
 ##
-## A spiked drink is a status that blocks the tag &"doubt" (see
-## GameEngine.doubt_stakes). It wears off with the turns of whoever poured
-## it, not of whoever drank it, so it is ticked here.
+## A spiked drink is a status with a `surcharge` (see GameEngine.price):
+## whatever has a price costs whoever drank it more. It wears off with the
+## turns of whoever poured it, not of whoever drank it, so it is ticked here.
 
 const GROGGY := &"groggy"
+const SURCHARGE := 2
 
 
 func _init() -> void:
@@ -17,12 +18,12 @@ func _init() -> void:
 	status_defs = {
 		GROGGY: {
 			"name": "Groggy",
-			"description": "Can't call LIAR! on anyone. Wears off at the end of the next turn of whoever spiked the drink.",
+			"description": "Whatever costs coins costs %d more: abilities, items, rerolls. Wears off at the end of the next turn of whoever spiked the drink." % SURCHARGE,
 			"color": Color("7f9a3c"),
 		},
 	}
 	_add(MickeyFinn.new())
-	_add(LiquidCourage.new())
+	_add(LastCall.new())
 
 
 func on_event(event: GameEvent, engine: GameEngine) -> void:
@@ -47,9 +48,8 @@ class MickeyFinn extends Ability:
 	func _init() -> void:
 		id = &"bartender.mickey_finn"
 		display_name = "Mickey Finn"
-		description = "Pay 3 coins to spike a player's drink. They can't call LIAR! until the end of your next turn."
+		description = "Spike a player's drink. Whatever costs them coins costs %d more until the end of your next turn." % SURCHARGE
 		on_turn = true
-		cost = 3
 		targeting = Targeting.OPPONENT
 		inflicts = true
 
@@ -59,32 +59,31 @@ class MickeyFinn extends Ability:
 
 	func resolve(play: Play) -> void:
 		await play.engine.add_status(play.target, GROGGY, {
-			"by": play.actor.id, "blocks": [&"doubt"], "poured": play.engine.turn_count,
+			"by": play.actor.id, "surcharge": SURCHARGE, "poured": play.engine.turn_count,
 		})
 
-	# Wasted on a table too broke to doubt anyone.
-	func ai_weight(player: PlayerState, engine: GameEngine) -> float:
-		for p: PlayerState in engine.opponents(player):
-			if p.coins >= engine.config.doubt_cost and not p.has_status(GROGGY):
-				return 0.9
-		return 0.15
+	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
+		return 0.7
 
-	# Whoever can afford a wrong call is the one doing the calling.
-	func ai_target_weight(play: Play, candidate: PlayerState) -> float:
-		return 3.0 if candidate.coins >= play.engine.config.doubt_cost else 1.0
+	# A thin purse feels it the most: two coins may be the whole turn.
+	func ai_target_weight(_play: Play, candidate: PlayerState) -> float:
+		return 2.5 if candidate.coins < 6 else 1.0
 
 
-class LiquidCourage extends Ability:
-	const REFUND := 4
-
+class LastCall extends Ability:
 	func _init() -> void:
-		id = &"bartender.liquid_courage"
-		display_name = "Liquid Courage"
-		description = "Gain %d coins: the wrong call is on the house." % REFUND
-		trigger_text = "When you call LIAR! and were wrong"
-
-	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		return event.type == &"doubt_failed" and event.data.doubter == player
+		id = &"bartender.last_call"
+		display_name = "Last Call"
+		description = "Show a card from your hand. Everyone holding that character, you included, discards it and draws a new card."
+		on_turn = true
 
 	func resolve(play: Play) -> void:
-		await play.engine.gain_coins(play.actor, REFUND, &"liquid_courage")
+		var engine := play.engine
+		var actor := play.actor
+		var index := await engine.pick_own_card(actor, Loc.t("%s, last call: which card goes on the tray?") % actor.name)
+		if index < 0 or engine.over or not actor.alive:
+			return
+		await engine.recall_cards(actor, index)
+
+	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
+		return 0.5

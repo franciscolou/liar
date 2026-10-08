@@ -55,27 +55,27 @@ class Counterfeit extends Ability:
 		if defs.is_empty():
 			return Loc.t("Nobody holds an item to copy")
 		for def: ItemDef in defs:
-			if engine.can_pay(player, _price(def)):
+			if engine.can_pay(player, engine.price(player, _price(def))):
 				return ""
 		return Loc.t("Nothing affordable to copy")
 
 	func prepare(play: Play) -> bool:
 		var engine := play.engine
 		var defs := _copyable(play.actor, engine).filter(
-			func(def): return engine.can_pay(play.actor, _price(def)))
+			func(def): return engine.can_pay(play.actor, engine.price(play.actor, _price(def))))
 		var d := Decision.new(Decision.Kind.PICK, play.actor)
 		d.prompt = Loc.t("Which item do you copy?")
 		d.cancellable = true
 		d.context = {"play": play}
 		d.options = defs.map(func(def): return {
-			"label": "%s (%d)" % [def.display_name, _price(def)],
+			"label": "%s (%d)" % [def.display_name, engine.price(play.actor, _price(def))],
 			"description": def.description, "item": def,
 		})
 		var index: int = await engine.ask(d)
 		if index < 0 or index >= defs.size():
 			return false
 		play.params["item"] = defs[index]
-		play.cost = _price(defs[index])
+		play.cost = engine.price(play.actor, _price(defs[index]))
 		return true
 
 	func resolve(play: Play) -> void:

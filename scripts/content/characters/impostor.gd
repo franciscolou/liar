@@ -34,27 +34,67 @@ class PerfectDisguise extends Ability:
 	func _init() -> void:
 		id = &"impostor.perfect_disguise"
 		display_name = "Perfect Disguise"
-		description = "Pay 2 coins: the lie stands as the truth and the doubter pays for a wrong call. Then discard this card for a new one."
-		trigger_text = "When someone calls LIAR! on a lie of yours"
-		cost = 2
+		description = "Repeat the last action taken at the table as if it were yours, for what it costs and nothing more."
+		on_turn = true
+		repeatable = false
 
-	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		if event.type != &"doubt_declared":
+	func can_use(player: PlayerState, engine: GameEngine) -> String:
+		var last := engine.last_action
+		if last == null:
+			return Loc.t("Nothing to repeat yet")
+		var reason := engine.blocked_reason(player, last.tags)
+		if reason != "":
+			return reason
+		if last.fresh_turn and player.turn.get("busy", false):
+			return Loc.t("Takes the whole turn")
+		reason = last.can_use(player, engine)
+		if reason == "" and last.targeting != Targeting.NONE and last.target_candidates(_repeat(player, engine)).is_empty():
+			reason = Loc.t("No valid target")
+		return reason
+
+	func cost_for(player: PlayerState, engine: GameEngine) -> int:
+		return engine.last_action.cost_for(player, engine) if engine.last_action != null else 0
+
+	func detail(_player: PlayerState, engine: GameEngine) -> String:
+		return engine.last_action.display_name if engine.last_action != null else ""
+
+	# Everything the action asks for is settled before the disguise is
+	# announced: the table hears what is being repeated, and on whom.
+	func prepare(play: Play) -> bool:
+		var engine := play.engine
+		if engine.last_action == null:
 			return false
-		var doubted: Play = event.data.play
-		return doubted.actor == player and not doubted.truthful
+		var repeat := _repeat(play.actor, engine)
+		repeat.cost = play.cost
+		if not await engine.choose_target(repeat):
+			return false
+		if not await repeat.source.prepare(repeat):
+			return false
+		play.params["repeat"] = repeat
+		# The action may have named its own price (a Counterfeit).
+		play.cost = repeat.cost
+		return true
 
+	# The repeated action is a play of its own: it can be silenced, shields
+	# and mirrors answer it, and whatever reacts to the original reacts to it.
 	func resolve(play: Play) -> void:
 		var engine := play.engine
-		var doubted: Play = play.event.data.play
-		# The reveal that follows reads this: the table sees the truth.
-		doubted.truthful = true
-		doubted.stand_in = true
-		var index := play.actor.cards.find(character_id)
-		if index == -1:
-			index = await engine.pick_own_card(play.actor, Loc.t("%s, you don't hold the %s: choose the card to swap") % [play.actor.name, Content.character(character_id).display_name])
-		await engine.replace_card(play.actor, index, &"disguise")
+		var repeat: Play = play.params.get("repeat")
+		if repeat == null:
+			return
+		var resolving := await engine.fire(&"claim_resolving", {"play": repeat})
+		if resolving.cancelled:
+			repeat.cancelled = true
+			await engine.fire(&"claim_cancelled", {"play": repeat})
+			return
+		await engine.carry_out(repeat)
 
-	# Whoever was just caught has every reason to try it.
-	func ai_suspicion(_play: Play, _doubter: PlayerState) -> float:
-		return 0.3
+	func _repeat(player: PlayerState, engine: GameEngine) -> Play:
+		var repeat := Play.new()
+		repeat.engine = engine
+		repeat.actor = player
+		repeat.source = engine.last_action
+		return repeat
+
+	func ai_weight(player: PlayerState, engine: GameEngine) -> float:
+		return engine.last_action.ai_weight(player, engine) * 0.9 if engine.last_action != null else 0.0

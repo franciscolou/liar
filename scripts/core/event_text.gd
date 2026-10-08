@@ -29,7 +29,7 @@ static func describe(e: GameEvent) -> String:
 			var play: Play = d.play
 			return Loc.t("%s claims %s: %s%s.") % [
 				play.actor.name, Content.character(play.ability().character_id).display_name,
-				play.source.display_name, _on(play)]
+				title(play), _on(play)]
 		&"claim_cancelled":
 			return Loc.t("%s is silenced.") % d.play.source.display_name
 		&"doubt_declared":
@@ -55,10 +55,17 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s gives up the %s.") % [d.player.name, Content.character(d.card).display_name]
 		&"card_drawn":
 			return Loc.t("%s draws a card.") % d.player.name
+		&"cards_recalled":
+			var names: Array = []
+			for hand: Dictionary in d.hands:
+				if not names.has(hand.player.name):
+					names.append(hand.player.name)
+			return Loc.t("Last call for the %s: new cards for %s.") % [
+				Content.character(d.card).display_name, ", ".join(names)]
 		&"hand_redrawn":
 			return Loc.t("%s trades the whole hand for new cards.") % d.player.name
 		&"coin_flipped":
-			return Loc.t("%s flips a coin: heads!" if d.heads else "%s flips a coin: tails.") % d.player.name
+			return Loc.t("%s flips a coin: heads" if d.heads else "%s flips a coin: tails") % d.player.name + ("!" if d.won else ".")
 		&"note":
 			return Loc.t(d.text) % d.player.name
 		&"cards_swapped":
@@ -101,8 +108,19 @@ static func _item(instance: ItemInstance) -> String:
 	return Loc.t("a hidden item") if instance.hidden else instance.def.display_name
 
 
+## The name of what `play` puts into play, and of what it repeats if it is
+## standing in for something else.
+static func title(play: Play) -> String:
+	var aimed := play.aimed()
+	if aimed == play:
+		return play.source.display_name
+	return "%s → %s" % [play.source.display_name, aimed.source.display_name]
+
+
 static func _on(play: Play) -> String:
-	return Loc.t(" on %s") % play.target.name if play != null and play.target != null else ""
+	if play == null or play.aimed().target == null:
+		return ""
+	return Loc.t(" on %s") % play.aimed().target.name
 
 
 static func _status(status_id: StringName) -> String:

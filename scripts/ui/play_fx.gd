@@ -40,6 +40,12 @@ const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
 ## How long an item takes to be printed out of the hat.
 const PRINT_TIME := 0.85
+## A card thrown on the tray of a Last Call, and where one is held up to be
+## seen before it goes in (from the middle of the tray).
+const TOSSED := Vector2(44, 80)
+const TOSS_SHOWN := Vector2(0, -112)
+const TOSS_SHOWN_ZOOM := 2.2
+const TOSS_STYLES := 6
 
 ## The match screen (table.gd): untyped, it has no class name.
 var table: Variant
@@ -61,6 +67,10 @@ var _hat_owner: PlayerState
 ## The wand of a Counterfeit, out and pointing until the copy is made.
 var _wand: WandFx
 var _wand_owner: PlayerState
+## The tray of a Last Call, on the table until the cards are in.
+var _tray: TrayFx
+## What makes a borrowed action look and sound wrong (see corrupt).
+var _glitch: GlitchFx
 
 
 func _init(match_table: Variant) -> void:
@@ -364,7 +374,7 @@ func item_conjured(texture: Texture2D, home: Vector2, label: String) -> void:
 	# The last row lands: it is a real thing now.
 	var middle := hat.position + hat.item_middle()
 	hat.set_item(null)
-	var item: TextureRect = table._sprite(texture, middle, HatFx.ITEM)
+	var item: TextureRect = _sprite(texture, middle, HatFx.ITEM)
 	flash(Color(0.8, 0.65, 1.0, 0.12), 0.15)
 	ring(middle, Color.WHITE, 12.0, 76.0, 0.3, 4.0)
 	burst(middle, UI.GOLD, 14, 180.0, 0.45, 220.0)
@@ -407,6 +417,7 @@ func put_away() -> void:
 	drop_lasso()
 	drop_hat()
 	drop_wand()
+	drop_tray()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -529,7 +540,7 @@ func item_copied(texture: Texture2D, home: Vector2, item_size: Vector2, label: S
 		return
 	if not await _zap(wand, home):
 		return
-	var item: TextureRect = table._sprite(texture, home, item_size)
+	var item: TextureRect = _sprite(texture, home, item_size)
 	item.scale = Vector2.ONE * 0.2
 	item.create_tween().tween_property(item, "scale", Vector2.ONE, 0.24 / speed) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -680,7 +691,24 @@ func _fx_impostor_perfect_disguise(play: Play) -> void:
 	flash(Color(1.0, 1.0, 1.0, 0.22), 0.2)
 	burst(here, PORCELAIN, 18, 150.0, 0.5, -30.0, 9.0)
 	ring(here, UI.GOLD, 20.0, 96.0, 0.35, 4.0)
+	if play.aimed() != play:
+		corrupt()
 	await _wait(0.5)
+
+
+## From here on every effect is seen and heard wrong, until cleanse(): what
+## the Impostor does behind the mask is somebody else's action, badly copied.
+func corrupt() -> void:
+	cleanse()
+	_glitch = GlitchFx.new(self)
+	add_child(_glitch)
+
+
+## The table as it is again.
+func cleanse() -> void:
+	if _glitch != null and is_instance_valid(_glitch):
+		_glitch.fade()
+	_glitch = null
 
 
 ## Chips pushed forward; the coin itself is flown by coin_flip.
@@ -743,13 +771,223 @@ func _fx_bartender_mickey_finn(play: Play) -> void:
 	await _wait(0.5)
 
 
-func _fx_bartender_liquid_courage(play: Play) -> void:
-	var here := _at(play.actor)
+## The tray is slid out to the middle of the table and waits there: the
+## cards only go on it once one was shown (cards_binned).
+func _fx_bartender_last_call(play: Play) -> void:
+	drop_tray()
+	var speed: float = table._speed
+	var tray := TrayFx.new()
+	tray.position = _at(play.actor)
+	tray.scale = Vector2(0.35, 0.35)
+	tray.modulate.a = 0.0
+	add_child(tray)
+	_tray = tray
 	_snd("fx_pour")
-	rise(here, Color("d99a2e"), 12, 40.0)
+	var slide := tray.create_tween().set_parallel()
+	slide.tween_property(tray, "modulate:a", 1.0, 0.12 / speed)
+	slide.tween_property(tray, "position", POT, 0.42 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	slide.tween_property(tray, "scale", Vector2.ONE, 0.42 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.42)
+	if not is_instance_valid(tray):
+		return
+	_snd("fx_tin")
+	ring(POT, STEEL, 30.0, 150.0, 0.3, 3.0)
+	await _wait(0.2)
+
+
+## Takes away a tray nothing was put on.
+func drop_tray() -> void:
+	if _tray != null and is_instance_valid(_tray):
+		var leave := _tray.create_tween()
+		leave.tween_property(_tray, "modulate:a", 0.0, 0.15 / table._speed)
+		leave.tween_callback(_tray.queue_free)
+	_tray = null
+
+
+## The cards of a Last Call (the data of cards_recalled): the one that was
+## shown is held up over the tray and dropped on it, every other copy at the
+## table is thrown in after it, each in its own way, the tray is carried off
+## to the deck and the deck deals a new card to each place left empty.
+func cards_binned(d: Dictionary) -> void:
+	var speed: float = table._speed
+	var tray := _tray
+	_tray = null
+	if tray == null or not is_instance_valid(tray):
+		# Nobody brought one (a play carried out unannounced): it just shows up.
+		tray = TrayFx.new()
+		tray.position = POT
+		tray.modulate.a = 0.0
+		add_child(tray)
+		tray.create_tween().tween_property(tray, "modulate:a", 1.0, 0.15 / speed)
+	var def := Content.character(d.card)
+	var face := UI.card_face(def.texture_path)
+	var views: Array = []
+	var spots: Array = []
+	var cards: Array = []
+	for hand: Dictionary in d.hands:
+		var view: CardView = table._card_view(hand.player, hand.index)
+		var card := TossedCard.new(face, UI.tex(UI.CARD_BACK))
+		card.spot = table._card_center(hand.player, hand.index) - tray.position
+		card.zoom = (view.size.x if view != null else 33.0) / TOSSED.x
+		card.flip_y = PI
+		card.visible = false
+		tray.add_child(card)
+		views.append(view)
+		spots.append(table._card_center(hand.player, hand.index))
+		cards.append(card)
+
+	# The card that was shown. A viewer who just picked it has it in the
+	# middle of the screen already, face up.
+	var shown: TossedCard = cards[0]
+	shown.visible = true
+	table._set_cards_shown([views[0]], false)
+	if table._take_pick_handoff(d.player, d.card):
+		shown.spot = table.SHOWN_CENTRE - tray.position
+		shown.zoom = CardView.BASE.x * table.SHOWN_SCALE / TOSSED.x
+		shown.flip_y = 0.0
+	else:
+		_snd("card_draw")
+	var lift := shown.create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	lift.tween_property(shown, "spot", TOSS_SHOWN, 0.4 / speed)
+	lift.tween_property(shown, "zoom", TOSS_SHOWN_ZOOM, 0.4 / speed)
+	lift.chain().tween_property(shown, "flip_y", 0.0, 0.22 / speed)
+	await _wait(0.66)
+	if not is_instance_valid(tray):
+		return
+	_snd("fx_glint")
+	ring(tray.position + TOSS_SHOWN, UI.GOLD, 40.0, 130.0, 0.35, 4.0)
+	table._float(Loc.t("LAST CALL: %s") % def.display_name.to_upper(),
+			tray.position + TOSS_SHOWN + Vector2(0, -TOSSED.y * TOSS_SHOWN_ZOOM / 2.0 - 16.0), UI.GOLD, 24)
+	await _wait(0.85)
+	if not is_instance_valid(tray):
+		return
+	var rest := _tray_rest()
+	var drop := shown.create_tween().set_parallel().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	drop.tween_property(shown, "spot", rest, 0.24 / speed)
+	drop.tween_property(shown, "zoom", 1.0, 0.24 / speed)
+	drop.tween_property(shown, "rotation", randf_range(-0.35, 0.35), 0.24 / speed)
+	drop.chain().tween_callback(_card_landed.bind(tray, rest))
+	await _wait(0.4)
+
+	# Everybody else's, one after the other and no two alike.
+	var style := randi() % TOSS_STYLES
+	for i: int in range(1, cards.size()):
+		style = (style + 1 + randi() % (TOSS_STYLES - 1)) % TOSS_STYLES
+		var wait: Tween = cards[i].create_tween()
+		wait.tween_interval(maxf((i - 1) * 0.17, 0.01) / speed)
+		wait.tween_callback(_toss.bind(tray, cards[i], views[i], style))
+	if cards.size() > 1:
+		await _wait((cards.size() - 2) * 0.17 + 1.0)
+	if not is_instance_valid(tray):
+		return
+
+	# Off to the deck with all of it.
+	await _wait(0.2)
+	_snd("fx_tin")
+	var deck: Vector2 = table._bank()
+	var away := tray.create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	away.tween_property(tray, "position", deck, 0.45 / speed)
+	away.tween_property(tray, "scale", Vector2(0.22, 0.22), 0.45 / speed)
+	away.tween_property(tray, "modulate:a", 0.0, 0.14 / speed).set_delay(0.31 / speed)
+	away.chain().tween_callback(tray.queue_free)
+	await _wait(0.5)
+	ring(deck, STEEL, 10.0, 46.0, 0.25, 3.0)
+
+	# And the deck deals, fast.
+	for i: int in views.size():
+		var view: CardView = views[i]
+		var landing: Vector2 = view.size if view != null and is_instance_valid(view) else Vector2(33, 60)
+		_snd("card_draw")
+		table._fly_card(deck, spots[i], Vector2(33, 60), landing, 0.2)
+		get_tree().create_timer(0.2 / speed).timeout.connect(_card_dealt.bind(view))
+		await _wait(0.08)
 	await _wait(0.3)
-	ring(here, UI.GOLD, 14.0, 76.0, 0.3, 4.0)
-	await _wait(0.3)
+
+
+## Throws `card` from where it is onto `tray`, in one of TOSS_STYLES ways.
+## It leaves the hand face down and is face up by the time it lands.
+func _toss(tray: TrayFx, card: TossedCard, view: CardView, style: int) -> void:
+	if not is_instance_valid(tray):
+		return
+	var speed: float = table._speed
+	var rest := _tray_rest()
+	var lean := randf_range(-0.5, 0.5)
+	var side := 1.0 if randf() < 0.5 else -1.0
+	var time := 0.5
+	var arc := 60.0
+	var path := Tween.TRANS_QUAD
+	card.visible = true
+	table._set_cards_shown([view], false)
+	_snd("card_draw")
+	var fly := card.create_tween().set_parallel()
+	match style:
+		0:
+			# Spinning about its upright axis, like a coin on a counter.
+			card.flip_y = PI + TAU * 2.0
+			fly.tween_property(card, "flip_y", 0.0, time / speed).set_ease(Tween.EASE_OUT)
+		1:
+			# End over end.
+			card.flip_y = 0.0
+			card.flip_x = PI + TAU * 2.0
+			fly.tween_property(card, "flip_x", 0.0, time / speed).set_ease(Tween.EASE_OUT)
+		2:
+			# Tumbling every way at once.
+			time = 0.6
+			arc = 95.0
+			card.flip_y = PI + TAU
+			card.flip_x = TAU * 2.0
+			card.rotation = lean + side * TAU
+			fly.tween_property(card, "flip_y", 0.0, time / speed)
+			fly.tween_property(card, "flip_x", 0.0, time / speed).set_ease(Tween.EASE_OUT)
+		3:
+			# Flat and fast, turning like a thrown plate.
+			time = 0.4
+			arc = 12.0
+			card.rotation = lean + side * TAU * 3.0
+			fly.tween_property(card, "flip_y", 0.0, time * 0.3 / speed)
+		4:
+			# Lobbed high, one lazy turn on the way down.
+			time = 0.7
+			arc = 175.0
+			path = Tween.TRANS_SINE
+			card.flip_y = 0.0
+			card.flip_x = PI + TAU
+			fly.tween_property(card, "flip_x", 0.0, time / speed)
+		_:
+			# Chucked any old way: it skids past its place and ends up crooked.
+			time = 0.36
+			arc = 24.0
+			path = Tween.TRANS_BACK
+			lean = side * randf_range(0.8, 1.4)
+			card.rotation = lean - side * 2.4
+			fly.tween_property(card, "flip_y", 0.0, time * 0.45 / speed)
+	card.from = card.spot
+	card.to = rest
+	card.arc = arc
+	fly.tween_property(card, "along", 1.0, time / speed).set_trans(path).set_ease(Tween.EASE_OUT)
+	fly.tween_property(card, "zoom", 1.0, time / speed)
+	fly.tween_property(card, "rotation", lean, time / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	fly.chain().tween_callback(_card_landed.bind(tray, rest))
+
+
+## Somewhere on the tray for a card to end up, from its middle.
+func _tray_rest() -> Vector2:
+	return Vector2(randf_range(-56.0, 56.0), randf_range(-14.0, 12.0))
+
+
+func _card_landed(tray: TrayFx, at: Vector2) -> void:
+	if not is_instance_valid(tray):
+		return
+	burst(tray.position + at, PORCELAIN, 4, 80.0, 0.25, 260.0, 6.0)
+
+
+## A card from the deck reaches its place in a hand, face down.
+func _card_dealt(view: CardView) -> void:
+	if view == null or not is_instance_valid(view):
+		return
+	view.set_card(&"", false)
+	table._set_cards_shown([view], true)
+	UI.pop(view, 1.15, 0.2)
 
 
 ## The badge comes out spinning, catches the light, and then the whole room
@@ -1043,10 +1281,10 @@ func _fx_bomber_blast(play: Play) -> void:
 
 
 ## A coin thumbed into the air in front of `who`; it lands on its answer.
-func coin_flip(who: PlayerState, heads: bool) -> void:
+func coin_flip(who: PlayerState, heads: bool, won: bool) -> void:
 	var here := _at(who)
 	var speed: float = table._speed
-	var coin: TextureRect = table._sprite(UI.tex(COIN_ART), here, Vector2(44, 44))
+	var coin: TextureRect = _sprite(UI.tex(COIN_ART), here, Vector2(44, 44))
 	var ground := coin.position.y - 56.0
 	_snd("fx_coin_flip")
 	var toss := coin.create_tween()
@@ -1061,7 +1299,7 @@ func coin_flip(who: PlayerState, heads: bool) -> void:
 	if not is_instance_valid(coin):
 		return
 	var at := here + Vector2(0, -56)
-	if heads:
+	if won:
 		_snd("coin_2")
 		ring(at, UI.GOLD, 10.0, 76.0, 0.35, 5.0)
 		burst(at, UI.GOLD, 16, 200.0, 0.5, 420.0)
@@ -1070,7 +1308,7 @@ func coin_flip(who: PlayerState, heads: bool) -> void:
 		_snd("coin_3")
 		coin.modulate = Color(0.5, 0.46, 0.42)
 		burst(at, SMOKE.lightened(0.2), 8, 90.0, 0.4, -20.0, 9.0)
-	table._float("HEADS!" if heads else "TAILS", at + Vector2(0, -40), UI.GOLD if heads else UI.MUTED, 28)
+	table._float(Loc.t("HEADS" if heads else "TAILS") + ("!" if won else ""), at + Vector2(0, -40), UI.GOLD if won else UI.MUTED, 28)
 	await _wait(0.6)
 	if not is_instance_valid(coin):
 		return
@@ -1094,7 +1332,7 @@ func _fx_potion(play: Play) -> void:
 	var frames := _drained(play.source.texture_path)
 	if not frames.is_empty():
 		var speed: float = table._speed
-		var flask: TextureRect = table._sprite(frames[0], here + Vector2(0, -34), Vector2(84, 88))
+		var flask: TextureRect = _sprite(frames[0], here + Vector2(0, -34), Vector2(84, 88))
 		flask.scale = Vector2.ONE * 0.4
 		flask.modulate.a = 0.0
 		var lift := flask.create_tween().set_parallel()
@@ -1125,7 +1363,7 @@ func _fx_death(play: Play) -> void:
 	var there := _at(play.target)
 	var aim := (there - here).normalized()
 	# The art points its barrel to the left; flipped, the grip stays down.
-	var gun: TextureRect = table._sprite(UI.tex(play.source.texture_path), here + aim * 80.0, Vector2(92, 96))
+	var gun: TextureRect = _sprite(UI.tex(play.source.texture_path), here + aim * 80.0, Vector2(92, 96))
 	gun.flip_v = aim.x > 0.0
 	var aimed := aim.angle() - PI
 	# Positive rotation is clockwise: the muzzle must climb, whichever way it points.
@@ -1336,6 +1574,15 @@ func _veil(color: Color) -> ColorRect:
 	return rect
 
 
+## A picture the effect puts on the table. It is kept under the effects, not
+## on the table's own layer, so that whatever is done to them is done to it
+## (see GlitchFx).
+func _sprite(texture: Texture2D, center: Vector2, sprite_size: Vector2) -> TextureRect:
+	var sprite: TextureRect = table._sprite(texture, center, sprite_size)
+	sprite.reparent(self)
+	return sprite
+
+
 func _at(p: PlayerState) -> Vector2:
 	return table._anchor(p)
 
@@ -1354,6 +1601,18 @@ func _wake() -> void:
 
 func _ready() -> void:
 	set_process(false)
+	child_entered_tree.connect(_share_look)
+
+
+## Whatever is put under the effects is drawn with their material, so that
+## what spoils them (see GlitchFx) spoils all of it.
+func _share_look(node: Node) -> void:
+	if node is CanvasItem:
+		node.use_parent_material = true
+	if not node.child_entered_tree.is_connected(_share_look):
+		node.child_entered_tree.connect(_share_look)
+	for child: Node in node.get_children():
+		_share_look(child)
 
 
 func _process(delta: float) -> void:
@@ -1722,6 +1981,242 @@ class ScaleFx extends Control:
 			draw_rect(Rect2(Vector2(cell) * PIXEL - Vector2(rim, rim), Vector2(PIXEL + rim * 2.0, PIXEL + rim * 2.0)), EDGE)
 		for cell: Vector2i in cells:
 			draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), cells[cell])
+
+
+## What a borrowed action looks and sounds like, for as long as this is in
+## the tree. It is the material of the PlayFx and of everything under it, so
+## it touches only what the effects themselves draw: strips of them jump
+## sideways, lines of them drop out, and all of it is drained to a dark
+## purple. Every sound of the table is bent out of tune meanwhile, over a
+## slowed-down toll. Nothing in it knows what effect it is spoiling.
+class GlitchFx extends Node:
+	const CODE := """
+shader_type canvas_item;
+
+uniform float amount = 0.0;
+uniform float beat = 0.0;
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void vertex() {
+	float strip = floor(VERTEX.y / 10.0);
+	float torn = step(1.0 - 0.3 * amount, hash(vec2(strip, beat)));
+	VERTEX.x += torn * (hash(vec2(strip, beat + 7.0)) - 0.5) * 30.0 * amount;
+}
+
+void fragment() {
+	vec4 c = COLOR;
+	float grey = dot(c.rgb, vec3(0.3, 0.59, 0.11));
+	vec3 purple = mix(vec3(0.06, 0.0, 0.11), vec3(0.6, 0.3, 0.86), grey);
+	c.rgb = mix(c.rgb, purple, 0.8 * amount);
+	float row = floor(FRAGCOORD.y / 4.0);
+	c.a *= 1.0 - 0.7 * amount * step(0.88, hash(vec2(row, beat + 3.0)));
+	c.rgb += vec3(0.35, 0.1, 0.5) * amount * step(0.97, hash(vec2(row, beat + 5.0)));
+	COLOR = c;
+}
+"""
+	## How many times a second the picture breaks in a new way.
+	const BEATS := 12.0
+	## How far down the sounds of the table are bent, and how it wavers.
+	const PITCH := 0.8
+	const WAVER := 0.09
+
+	## 0 to 1: how much of it shows.
+	var strength := 0.0
+
+	var _host: PlayFx
+	var _look := ShaderMaterial.new()
+	var _time := 0.0
+	var _leaving := false
+	var _bent: Array = []  # AudioEffect put on the SFX bus, taken off on the way out
+	var _pitch: AudioEffectPitchShift
+
+	func _init(host: PlayFx) -> void:
+		_host = host
+		var shader := Shader.new()
+		shader.code = CODE
+		_look.shader = shader
+		_look.set_shader_parameter("amount", 0.0)
+
+	func _ready() -> void:
+		_host.material = _look
+		create_tween().tween_property(self, "strength", 1.0, 0.18 / _host.table._speed)
+		_bend_sounds()
+		_toll("fx_bell", 0.4, -7.0)
+		_toll("fx_hex", 0.55, -9.0)
+
+	func _exit_tree() -> void:
+		_straighten_sounds()
+		if _host.material == _look:
+			_host.material = null
+
+	## Fades out and frees itself.
+	func fade() -> void:
+		if _leaving:
+			return
+		_leaving = true
+		_straighten_sounds()
+		var leave := create_tween()
+		leave.tween_property(self, "strength", 0.0, 0.3 / _host.table._speed)
+		leave.tween_callback(queue_free)
+
+	func _process(delta: float) -> void:
+		_time += delta
+		# It comes in fits: nearly steady for a moment, then torn again.
+		var fit := 0.5 + 0.5 * absf(sin(_time * 5.3) * sin(_time * 1.9 + 1.0))
+		_look.set_shader_parameter("amount", strength * fit)
+		_look.set_shader_parameter("beat", floorf(_time * BEATS))
+		if _pitch != null:
+			_pitch.pitch_scale = PITCH + WAVER * sin(_time * 7.0) * sin(_time * 2.3)
+
+	# Everything on the SFX bus comes out lower, wavering and doubled a
+	# little off: the sounds of the effect itself, played wrong.
+	func _bend_sounds() -> void:
+		var bus := AudioServer.get_bus_index(Settings.SFX_BUS)
+		if bus < 0:
+			return
+		_pitch = AudioEffectPitchShift.new()
+		_pitch.pitch_scale = PITCH
+		var chorus := AudioEffectChorus.new()
+		chorus.voice_count = 2
+		chorus.dry = 0.7
+		chorus.wet = 0.6
+		chorus.set_voice_rate_hz(0, 1.3)
+		chorus.set_voice_depth_ms(0, 5.0)
+		chorus.set_voice_rate_hz(1, 2.1)
+		chorus.set_voice_depth_ms(1, 7.0)
+		var crush := AudioEffectDistortion.new()
+		crush.mode = AudioEffectDistortion.MODE_LOFI
+		crush.drive = 0.35
+		for effect: AudioEffect in [_pitch, chorus, crush]:
+			AudioServer.add_bus_effect(bus, effect)
+			_bent.append(effect)
+
+	func _straighten_sounds() -> void:
+		var bus := AudioServer.get_bus_index(Settings.SFX_BUS)
+		if bus >= 0:
+			for i in range(AudioServer.get_bus_effect_count(bus) - 1, -1, -1):
+				if _bent.has(AudioServer.get_bus_effect(bus, i)):
+					AudioServer.remove_bus_effect(bus, i)
+		_bent.clear()
+		_pitch = null
+
+	# A sound of the game dragged out far below its pitch, under the rest.
+	func _toll(sound: String, pitch: float, volume: float) -> void:
+		var sounds: Dictionary = _host.table._sfx
+		var known: AudioStreamPlayer = sounds[sound] if sounds.has(sound) else _host.table._load_sfx(sound)
+		if known == null:
+			return
+		var player := AudioStreamPlayer.new()
+		player.stream = known.stream
+		player.pitch_scale = pitch
+		player.volume_db = volume
+		player.bus = Settings.SFX_BUS
+		add_child(player)
+		player.play()
+
+
+## A serving tray seen from above, in the chunky pixels of the other effects:
+## a silver oval with a handle at each end and a cork bottom. Its origin is
+## its middle; the cards thrown on it are its children.
+class TrayFx extends Control:
+	const PIXEL := 4.0
+	## Half the tray, in its own pixels, and how wide the rim is (as a share
+	## of the way out from the middle).
+	const HALF := Vector2i(31, 18)
+	const RIM := 0.74
+	const EDGE := Color("1c1a22")
+	const LIGHT := Color("f1f5fa")
+	const MID := Color("b7c2d1")
+	const DARK := Color("76808f")
+	const CORK := Color("9a6a3c")
+	const CORK_DARK := Color("7d5230")
+	const SHADOW := Color(0, 0, 0, 0.3)
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var cells := {}
+		for y in range(-HALF.y, HALF.y + 1):
+			for x in range(-HALF.x, HALF.x + 1):
+				var out := Vector2(x / float(HALF.x), y / float(HALF.y)).length_squared()
+				if out > 1.0:
+					continue
+				if out > RIM:
+					# Lit from the top left.
+					var lit := -x / float(HALF.x) * 0.5 - y / float(HALF.y)
+					cells[Vector2i(x, y)] = LIGHT if lit > 0.35 else (DARK if lit < -0.35 else MID)
+				elif out > RIM - 0.07:
+					cells[Vector2i(x, y)] = CORK_DARK
+				else:
+					cells[Vector2i(x, y)] = CORK_DARK if (x * 7 + y * 13) % 11 == 0 else CORK
+		for side: int in [-1, 1]:
+			for y in range(-4, 5):
+				for step in 3:
+					var x := side * (HALF.x + 1 + step)
+					cells[Vector2i(x, y)] = MID if absi(y) < 4 and step < 2 else DARK
+			for y in range(-2, 3):
+				cells.erase(Vector2i(side * (HALF.x + 1), y))
+		for cell: Vector2i in cells:
+			draw_rect(Rect2((Vector2(cell) + Vector2(1.5, 2.5)) * PIXEL, Vector2(PIXEL, PIXEL)), SHADOW)
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * PIXEL - Vector2(2, 2), Vector2(PIXEL + 4, PIXEL + 4)), EDGE)
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), cells[cell])
+
+
+## A card in the air. It is flat: turning it about its upright axis (flip_y)
+## or end over end (flip_x) squeezes it, and shows its back for the half of
+## each turn it faces away. `along` carries it from `from` to `to` over an
+## arc; `spot` is its middle, in its parent.
+class TossedCard extends TextureRect:
+	var face: Texture2D
+	var back: Texture2D
+	var from := Vector2.ZERO
+	var to := Vector2.ZERO
+	var arc := 0.0
+	var spot := Vector2.ZERO:
+		set(value):
+			spot = value
+			position = spot - size / 2.0
+	var along := 0.0:
+		set(value):
+			along = value
+			spot = from.lerp(to, along) + Vector2(0, -arc * sin(PI * clampf(along, 0.0, 1.0)))
+	var zoom := 1.0:
+		set(value):
+			zoom = value
+			_pose()
+	var flip_x := 0.0:
+		set(value):
+			flip_x = value
+			_pose()
+	var flip_y := 0.0:
+		set(value):
+			flip_y = value
+			_pose()
+
+	func _init(card_face: Texture2D, card_back: Texture2D) -> void:
+		face = card_face
+		back = card_back
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		stretch_mode = TextureRect.STRETCH_SCALE
+		size = PlayFx.TOSSED
+		pivot_offset = size / 2.0
+		_pose()
+
+	func _pose() -> void:
+		var across := cos(flip_y)
+		var down := cos(flip_x)
+		scale = Vector2(maxf(absf(across), 0.06), maxf(absf(down), 0.06)) * zoom
+		var side := face if across * down >= 0.0 else back
+		if texture != side:
+			texture = side
+			texture_filter = UI.card_filter(side)
 
 
 ## A lasso. The rope is a chain of points with weight and no stiffness: held

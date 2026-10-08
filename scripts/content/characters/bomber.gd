@@ -63,12 +63,13 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 	if not player.has_status(TICKING):
 		return []
-	var affordable := engine.can_pay(player, DEFUSE_COST)
+	var cost := engine.price(player, DEFUSE_COST)
+	var affordable := engine.can_pay(player, cost)
 	return [{
 		"id": &"bomber.defuse",
 		"label": Loc.t("Defuse the Bomb"),
 		"description": Loc.t("Pay %d coins to defuse the bomb planted on you. If you don't, it goes off when this turn ends and you lose 1 Morale.") % DEFUSE_COST,
-		"cost": DEFUSE_COST,
+		"cost": cost,
 		"enabled": affordable,
 		"reason": "" if affordable else Loc.t("Not enough coins"),
 		"run": _defuse,
@@ -78,7 +79,7 @@ func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 
 
 func _defuse(player: PlayerState, engine: GameEngine) -> void:
-	if not player.has_status(TICKING) or not await engine.pay(player, DEFUSE_COST):
+	if not player.has_status(TICKING) or not await engine.pay(player, engine.price(player, DEFUSE_COST)):
 		return
 	await engine.remove_status(player, TICKING)
 	await engine.note(player, "%s defuses the bomb.")

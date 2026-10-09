@@ -27,8 +27,8 @@ func _init() -> void:
 	# Never claimed: it is what the bomb does when it goes off.
 	_blast = Blast.new()
 	_blast.character_id = id
-	_add(ShortFuse.new())
 	_add(TimeBomb.new())
+	_add(Demolition.new())
 
 
 func on_event(event: GameEvent, engine: GameEngine) -> void:
@@ -85,19 +85,11 @@ func _defuse(player: PlayerState, engine: GameEngine) -> void:
 	await engine.note(player, "%s defuses the bomb.")
 
 
-class ShortFuse extends Ability:
-	func _init() -> void:
-		id = &"bomber.short_fuse"
-		display_name = "Short Fuse"
-		description = "Your bomb goes off at the end of its carrier's next turn: they lose 1 Morale, unless they pay %d coins to defuse it first. Shields and Mirrors work against the blast." % DEFUSE_COST
-		info_only = true
-
-
 class TimeBomb extends Ability:
 	func _init() -> void:
 		id = &"bomber.time_bomb"
 		display_name = "Time Bomb"
-		description = "Pay 3 coins to plant a bomb on a player. A player can only carry one bomb."
+		description = "Pay 3 coins to plant a bomb on a player. It goes off at the end of their next turn: they lose 1 Morale, unless they pay %d coins to defuse it first. Shields and Mirrors work against the blast. A player can only carry one bomb." % DEFUSE_COST
 		on_turn = true
 		cost = 3
 		targeting = Targeting.OPPONENT
@@ -124,6 +116,51 @@ class TimeBomb extends Ability:
 
 
 ## The explosion itself, carried out by on_event.
+## A round black bomb rolled at something a player holds. Nothing stops it:
+## it is not the player it is after.
+class Demolition extends Ability:
+	func _init() -> void:
+		id = &"bomber.demolition"
+		display_name = "Demolition"
+		description = "Blow up an item a player holds. You choose which; a hidden item is picked blind. Shields and Mirrors don't stop it."
+		on_turn = true
+		targeting = Targeting.OPPONENT
+		unstoppable = true
+
+	func target_candidates(play: Play) -> Array:
+		return play.engine.targetable_opponents(play.actor).filter(
+			func(p): return not p.items.is_empty())
+
+	func resolve(play: Play) -> void:
+		var engine := play.engine
+		var target := play.target
+		if target.items.is_empty():
+			return
+		var index := 0
+		if target.items.size() > 1:
+			var d := Decision.new(Decision.Kind.PICK, play.actor)
+			d.prompt = Loc.t("Which of %s's items do you blow up?") % target.name
+			# Picked where they lie, in the target's own box (see table._open_pick).
+			d.context = {"play": play, "held_by": target}
+			d.options = target.items.map(_option)
+			index = await engine.ask(d)
+			if index < 0 or index >= target.items.size():
+				index = engine.rng.randi_range(0, target.items.size() - 1)
+		if not engine.over and target.alive and index < target.items.size():
+			await engine.break_item(target, target.items[index])
+
+	func _option(instance: ItemInstance) -> Dictionary:
+		if instance.hidden:
+			return {"label": Loc.t("Hidden item"), "description": "", "item": null, "hidden": true}
+		return {"label": instance.def.display_name, "description": instance.def.description, "item": instance.def}
+
+	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
+		return 1.1
+
+	func ai_target_weight(_play: Play, candidate: PlayerState) -> float:
+		return float(candidate.items.size())
+
+
 class Blast extends Ability:
 	func _init() -> void:
 		id = &"bomber.blast"

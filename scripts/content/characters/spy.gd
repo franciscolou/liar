@@ -28,7 +28,7 @@ class LowProfile extends Ability:
 	func _init() -> void:
 		id = &"spy.low_profile"
 		display_name = "Low Profile"
-		description = "Hide the item you just bought from the other players."
+		description = "Hide the item you just bought from the other players. The shop keeps it on sale, so nobody can tell what you took."
 		trigger_text = "When you buy an item"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:

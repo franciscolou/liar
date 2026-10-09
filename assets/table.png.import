@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bm6mtjx578chr"
-path="res://.godot/imported/cloak.png-06a194b9b10d409f5fa4b711bf6589c5.ctex"
+uid="uid://cfcugqdkeousm"
+path="res://.godot/imported/table.png-14b755b19e8ff9a139cf951e8fcb8e14.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/items/cloak.png"
-dest_files=["res://.godot/imported/cloak.png-06a194b9b10d409f5fa4b711bf6589c5.ctex"]
+source_file="res://assets/table.png"
+dest_files=["res://.godot/imported/table.png-14b755b19e8ff9a139cf951e8fcb8e14.ctex"]
 
 [params]
 

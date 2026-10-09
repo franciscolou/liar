@@ -19,11 +19,6 @@ func _init() -> void:
 			"description": "Can't deal damage or heal. Half of every coin gain goes to the doll's owner. Break it for %d coins." % BREAK_COST,
 			"color": Color("8e4fb5"),
 		},
-		&"voodoo_cooldown": {
-			"name": "Doll recharging",
-			"description": "The Voodoo doll was broken and can't be used until this player's next turn is over.",
-			"color": Color("6b6470"),
-		},
 	}
 	_add(PuppetStrings.new())
 	_add(Hex.new())
@@ -43,7 +38,7 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 			await engine.gain_coins(owner, cut, &"voodoo", victim)
 		&"player_eliminated":
 			# A dead owner's doll goes with them. A dead victim already lost the
-			# status, which frees the doll with no recharge.
+			# status, which frees the doll.
 			var dead: PlayerState = event.data.player
 			for p: PlayerState in engine.players:
 				if p.alive and p.has_status(&"hexed") and p.statuses[&"hexed"].get("by", -1) == dead.id:
@@ -75,17 +70,15 @@ func _break_hex(player: PlayerState, engine: GameEngine) -> void:
 	# may be gone (its owner lost their last Morale on a wrong call).
 	if not player.has_status(&"hexed"):
 		return
-	var owner := engine.player_by_id(player.statuses[&"hexed"].get("by", -1))
+	# A broken doll is ready to be thrown again at once.
 	await engine.remove_status(player, &"hexed")
-	if owner != null and owner.alive:
-		await engine.add_status(owner, &"voodoo_cooldown", {"expires": &"own_turn_end"})
 
 
 class PuppetStrings extends Ability:
 	func _init() -> void:
 		id = &"voodooist.puppet_strings"
 		display_name = "Puppet Strings"
-		description = "Your Voodoo victim can't deal damage or heal, and half of the coins they gain are yours. They can break the doll for 4 coins; it then recharges for a turn."
+		description = "Your Voodoo victim can't deal damage or heal, and half of the coins they gain are yours. They can break the doll for 4 coins."
 		info_only = true
 
 
@@ -97,9 +90,6 @@ class Hex extends Ability:
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		inflicts = true
-
-	func can_use(player: PlayerState, _engine: GameEngine) -> String:
-		return Loc.t("Doll recharging") if player.has_status(&"voodoo_cooldown") else ""
 
 	func target_candidates(play: Play) -> Array:
 		return play.engine.targetable_opponents(play.actor).filter(

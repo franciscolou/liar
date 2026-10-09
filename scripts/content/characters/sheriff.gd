@@ -70,7 +70,8 @@ class Confiscate extends Ability:
 		if target.items.size() > 1:
 			var d := Decision.new(Decision.Kind.PICK, play.actor)
 			d.prompt = Loc.t("Which of %s's items do you seize?") % target.name
-			d.context = {"play": play}
+			# Picked where they lie, in the target's own box (see table._open_pick).
+			d.context = {"play": play, "held_by": target}
 			d.options = target.items.map(_option)
 			index = await engine.ask(d)
 			if index < 0 or index >= target.items.size():

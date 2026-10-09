@@ -23,6 +23,9 @@ var targeting := Targeting.NONE
 var tags: Array = []
 ## Puts a status on its target, with the user as its `by`.
 var inflicts := false
+## Nothing its target holds answers it: shields and mirrors stay as they are
+## (see GameEngine.guards).
+var unstoppable := false
 
 
 ## "" when usable, otherwise the reason shown to the player.

@@ -25,6 +25,7 @@ const CHIP_RED := Color("c8402f")
 const CHIP_GREEN := Color("3f8a5a")
 ## The middle of the table, where a bet is pushed to.
 const POT := Vector2(576, 322)
+const VoodooDoll := preload("res://scripts/ui/voodoo_doll.gd")
 const COIN_ART := "res://assets/ui/coin.png"
 ## The potion going down: how many steps, over how long, and what is left
 ## where the liquid was.
@@ -35,6 +36,21 @@ const SCALES_Y := 266.0  # where the pivot of the scales of the court stands
 const ROCKET_RISE := 0.5
 const ROCKET_TAIL := 0.3
 const BOLT := Color("ffd84a")
+## A Demolition: how far in front of the Bomber the bomb is set down, and
+## the hops it gets to the item in. For each one: how much of the way it has
+## covered when it comes down, how far off to the side (in BOMB_STRAY), how
+## high it goes and how long it is in the air.
+const BOMB_REST := 74.0
+const BOMB_FLOOR := 430.0
+const BOMB_STRAY := 22.0
+const BOMB_HOPS: Array = [[0.6, 1.0, 96.0, 0.54], [0.84, 0.5, 38.0, 0.36], [0.95, 0.15, 15.0, 0.24], [1.0, 0.0, 5.0, 0.14]]
+## Radians a second it spins at as it is thrown; each bounce takes some off.
+const BOMB_SPIN := 9.0
+## When each note of the Bard's tune is played, in seconds from its start
+## (fx_serenade in gen_sfx.py): the lute is plucked on every one of them.
+const SERENADE: Array[float] = [0.0, 0.4, 1.2, 1.4, 1.6, 1.8, 2.2, 2.4, 2.8]
+## How long the lute stays out: the tune and what rings on after it.
+const SERENADE_LENGTH := 5.0
 const DRAIN_FRAMES := 12
 const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
@@ -69,6 +85,14 @@ var _wand: WandFx
 var _wand_owner: PlayerState
 ## The tray of a Last Call, on the table until the cards are in.
 var _tray: TrayFx
+## The vault of a Cash Out, open until the coins are out.
+var _vault: VaultFx
+var _vault_owner: PlayerState
+## The doll of a Hex, lying where it landed until the hex takes hold.
+var _doll: VoodooDoll
+var _doll_target: PlayerState
+## The bomb of a Demolition, lit and waiting to be told which item it is for.
+var _bomb: BombFx
 ## What makes a borrowed action look and sound wrong (see corrupt).
 var _glitch: GlitchFx
 
@@ -113,18 +137,47 @@ func _method(id: StringName) -> String:
 # --- characters ---------------------------------------------------------------
 
 func _fx_assassin_blood_count(play: Play) -> void:
-	await _stab(play)
+	await _stab(play, play.actor)
 
 
 func _fx_assassin_streak_thirst(play: Play) -> void:
-	await _stab(play)
+	# Straight on from the one who has just fallen to the next, if that is
+	# where the shade is: if the Assassin's own blow felled them. Whoever
+	# got the kill some other way (catching a liar) starts from their own box.
+	var from := play.actor
+	if play.event != null:
+		var fallen: Variant = play.event.data.get("player")
+		var blow: Variant = play.event.data.get("play")
+		if fallen is PlayerState and fallen != play.target and blow is Play and blow.actor == play.actor:
+			from = fallen
+	await _stab(play, from)
 
 
-## The blade comes out, then one clean cut across the target.
-func _stab(play: Play) -> void:
+## The table goes dark and a shade slips out of the box of `from`, crosses to
+## the target and goes in behind their box: from the edge on, it is out of
+## sight. Then one clean cut across them.
+func _stab(play: Play, from: PlayerState) -> void:
+	var speed: float = table._speed
+	var here := _at(from)
 	var there := _at(play.target)
+	dim(0.55, 1.35)
+	var shade := ShadeFx.new()
+	shade.speed = speed
+	shade.run(here, there, POT)
+	var cover: Control = table._node_of(play.target)
+	if cover != null:
+		shade.behind = cover.get_global_rect()
+	add_child(shade)
+	_snd("fx_shade")
+	burst(here, ShadeFx.HOOD_LIT, 6, 90.0, 0.3, 0.0, 6.0)
+	var move := shade.create_tween()
+	move.tween_property(shade, "sunk", 0.0, 0.16 / speed)
+	move.tween_property(shade, "travel", 1.0, 0.4 / speed).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN_OUT)
+	move.tween_property(shade, "sunk", 1.0, 0.12 / speed)
+	move.tween_interval(ShadeFx.GHOST_LIFE / speed)
+	move.tween_callback(shade.queue_free)
+	await _wait(0.56)
 	_snd("fx_blade")
-	dim(0.45, 0.75)
 	await _wait(0.2)
 	line(there + Vector2(-80, -56), there + Vector2(80, 56), Color.WHITE, 7.0, 0.3, 0.06)
 	await _wait(0.07)
@@ -134,17 +187,57 @@ func _stab(play: Play) -> void:
 	await _wait(0.4)
 
 
-## A tune that walks over to the mark and picks their pocket.
+## A tune worth stopping for. The Bard's lute comes out beside him and is
+## played, its strings shaking and notes drifting up from it, while the coins
+## dance over to the tune (table._dance_coins): nobody waits for any of it,
+## the match goes on under the music.
 func _fx_bard_swindle(play: Play) -> void:
+	var speed: float = table._speed
 	var here := _at(play.actor)
-	var there := _at(play.whom())
-	_snd("fx_lute")
-	ring(here, UI.GOLD, 10.0, 60.0, 0.4)
-	stream(here, there, UI.GOLD, 10, 0.55, 0.4)
-	stream(here, there, UI.PURPLE.lightened(0.3), 6, 0.6, 0.45)
-	await _wait(0.7)
-	ring(there, UI.GOLD, 70.0, 16.0, 0.3)
+	var lute := LuteFx.new()
+	lute.position = here + (POT - here).limit_length(84.0)
+	lute.rotation = -0.5
+	lute.scale = Vector2(0.5, 0.5)
+	lute.modulate.a = 0.0
+	add_child(lute)
+	_snd("fx_serenade")
+	ring(lute.position, UI.GOLD, 10.0, 60.0, 0.4)
+	var played := lute.create_tween()
+	played.tween_property(lute, "modulate:a", 1.0, 0.12 / speed)
+	played.parallel().tween_property(lute, "scale", Vector2.ONE, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# It is put away once the tune has rung out.
+	played.tween_interval(SERENADE_LENGTH / speed)
+	played.tween_property(lute, "modulate:a", 0.0, 0.4 / speed)
+	played.tween_callback(lute.queue_free)
+	# Plucked on every note of the tune, and a note of music let go with it.
+	for i in SERENADE.size():
+		var strike := get_tree().create_timer(maxf(SERENADE[i], 0.01) / speed)
+		strike.timeout.connect(_pluck.bind(lute, i))
 	await _wait(0.25)
+
+
+## The lute is plucked for note `index` of the tune: its strings shake, it
+## tips a little the other way, and a note drifts up from it.
+func _pluck(lute: LuteFx, index: int) -> void:
+	if not is_instance_valid(lute):
+		return
+	lute.pluck()
+	lute.create_tween().tween_property(lute, "rotation", -0.5 + (0.07 if index % 2 == 0 else -0.07), 0.18 / table._speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_note(lute.position, index)
+
+
+## One note of the tune, let go over `at`.
+func _note(at: Vector2, index: int) -> void:
+	var note := NoteFx.new()
+	note.ink = UI.GOLD if index % 2 == 0 else UI.PURPLE.lightened(0.4)
+	note.sway = 1.0 if index % 2 == 0 else -1.0
+	note.home = at + Vector2(randf_range(-46.0, 46.0), randf_range(-34.0, -10.0))
+	add_child(note)
+	var up := note.create_tween().set_parallel()
+	up.tween_property(note, "risen", 1.0, 1.1 / table._speed)
+	up.tween_property(note, "modulate:a", 0.0, 0.4 / table._speed).set_delay(0.7 / table._speed)
+	up.chain().tween_callback(note.queue_free)
 
 
 func _fx_bard_silver_tongue(play: Play) -> void:
@@ -418,6 +511,9 @@ func put_away() -> void:
 	drop_hat()
 	drop_wand()
 	drop_tray()
+	drop_vault()
+	drop_doll()
+	drop_bomb()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -584,34 +680,131 @@ func _fx_mercenary_bounty(play: Play) -> void:
 	await _wait(0.45)
 
 
-## A burst that does not stop at the first body.
+## A long rifle comes out by the Mercenary with its laser still on whoever
+## was just hit. It swings over, slowly, to the next one, settles there, and
+## only then fires: one round, and a loud one.
 func _fx_mercenary_collateral(play: Play) -> void:
+	var speed: float = table._speed
 	var here := _at(play.actor)
 	var there := _at(play.target)
-	_snd("fx_burst_fire")
-	for i in 3:
-		var spread := Vector2(randf_range(-22, 22), randf_range(-16, 16))
-		line(here, there + spread, Color("ffe9a0"), 4.0, 0.1, 0.04)
-		burst(here, Color("ffd060"), 4, 150.0, 0.15)
-		burst(there + spread, BLOOD if i == 2 else STEEL, 7, 190.0, 0.35, 400.0)
-		flash(Color(1.0, 0.95, 0.8, 0.14), 0.07)
-		table._shake_screen(5.0)
-		await _wait(0.09)
+	var first := POT
+	if play.event != null and play.event.data.get("target") is PlayerState and play.event.data.target != play.target:
+		first = _at(play.event.data.target)
+	# Out of whichever edge of the box faces the middle of the table.
+	var way := Vector2.DOWN if here.y < POT.y else Vector2.UP
+	var rest := here
+	var box: Control = table._node_of(play.actor)
+	if box != null:
+		var rect := box.get_global_rect()
+		rest = Vector2(clampf(here.x, rect.position.x + 20.0, rect.end.x - 20.0),
+				rect.end.y if way == Vector2.DOWN else rect.position.y)
+	var rifle := SniperFx.new()
+	rifle.position = rest
+	rifle.aim = first
+	rifle.modulate.a = 0.0
+	add_child(rifle)
+	_snd("item_roulette_cock")
+	var out := rifle.create_tween().set_parallel()
+	out.tween_property(rifle, "modulate:a", 1.0, 0.15 / speed)
+	out.tween_property(rifle, "position", rest + way * 30.0, 0.3 / speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.4)
+	if not is_instance_valid(rifle):
+		return
+	# The sound lasts as long as the laser takes to find its target.
+	_snd("fx_sniper_aim")
+	rifle.create_tween().tween_property(rifle, "beam", 1.0, 0.1 / speed)
 	await _wait(0.35)
+	if not is_instance_valid(rifle):
+		return
+	rifle.swing_to(there, POT)
+	rifle.create_tween().tween_property(rifle, "swing", 1.0, 0.9 / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await _wait(0.9)
+	ring(there, SniperFx.LASER, 70.0, 8.0, 0.28, 3.0)
+	await _wait(0.3)
+	if not is_instance_valid(rifle):
+		return
+
+	_snd("fx_sniper")
+	var muzzle := rifle.muzzle()
+	rifle.beam = 0.0
+	flash(Color(1.0, 0.97, 0.85, 0.45), 0.18)
+	line(muzzle, there, Color.WHITE, 10.0, 0.16)
+	line(muzzle, there, Color("ffe9a0"), 4.0, 0.45)
+	burst(muzzle, Color("ffd060"), 14, 260.0, 0.3)
+	ring(muzzle, Color("ffe9a0"), 8.0, 60.0, 0.2, 6.0)
+	burst(there, BLOOD, 22, 320.0, 0.6, 500.0)
+	burst(there, STEEL, 8, 240.0, 0.4, 400.0)
+	ring(there, Color.WHITE, 10.0, 150.0, 0.35, 6.0)
+	ring(there, BLOOD, 10.0, 90.0, 0.5, 4.0)
+	table._shake_screen(14.0)
+	# The rifle is thrown back and its barrel up, and comes down again.
+	var home := rifle.position
+	var recoil := rifle.create_tween()
+	recoil.tween_property(rifle, "position", home - Vector2.from_angle(rifle.rotation) * 22.0, 0.05 / speed)
+	recoil.tween_property(rifle, "position", home, 0.4 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	rifle.kick = 0.3
+	rifle.create_tween().tween_property(rifle, "kick", 0.0, 0.45 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await _wait(0.8)
+	if not is_instance_valid(rifle):
+		return
+	var away := rifle.create_tween()
+	away.tween_property(rifle, "modulate:a", 0.0, 0.2 / speed)
+	away.tween_callback(rifle.queue_free)
+	await _wait(0.2)
 
 
-## The door of the vault swings open on everything nobody caught.
+## The vault is set down by the Mythomaniac, its wheel is spun and the door
+## swings open on everything nobody caught. It stays open: the coins of the
+## Cash Out fly out of it (table._anim_coins asks vault_mouth), and it is
+## shut and taken away when the play is over (put_away).
 func _fx_mythomaniac_cash_out(play: Play) -> void:
+	drop_vault()
+	var speed: float = table._speed
 	var here := _at(play.actor)
+	var vault := VaultFx.new()
+	vault.position = here + (POT - here).limit_length(100.0)
+	vault.scale = Vector2(0.6, 0.6)
+	vault.modulate.a = 0.0
+	add_child(vault)
+	_vault = vault
+	_vault_owner = play.actor
 	_snd("fx_vault")
-	ring(here, STEEL, 54.0, 54.0, 0.5, 12.0)
-	ring(here, STEEL.darkened(0.3), 34.0, 34.0, 0.5, 4.0)
-	await _wait(0.5)
-	ring(here, UI.GOLD, 30.0, 130.0, 0.4, 5.0)
-	for i in 3:
-		burst(here, UI.GOLD, 12, 240.0, 0.7, 520.0)
-		await _wait(0.1)
-	await _wait(0.25)
+	var down := vault.create_tween().set_parallel()
+	down.tween_property(vault, "modulate:a", 1.0, 0.12 / speed)
+	down.tween_property(vault, "scale", Vector2.ONE, 0.2 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# The wheel turns with the clicks of the sound, slower and slower.
+	down.tween_property(vault, "spin", 7.0, 0.5 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await _wait(0.52)
+	if not is_instance_valid(vault):
+		return
+	vault.create_tween().tween_property(vault, "open", 1.0, 0.4 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	await _wait(0.34)
+	if not is_instance_valid(vault):
+		return
+	ring(vault.mouth(), UI.GOLD, 10.0, 80.0, 0.35, 5.0)
+	burst(vault.mouth(), UI.GOLD, 12, 190.0, 0.5, 420.0)
+	await _wait(0.2)
+
+
+## Where coins come out of the vault `who` has open, Vector2.INF if none.
+func vault_mouth(who: PlayerState) -> Vector2:
+	if _vault != null and is_instance_valid(_vault) and _vault_owner == who:
+		return _vault.mouth()
+	return Vector2.INF
+
+
+## Shuts the vault and takes it away.
+func drop_vault() -> void:
+	if _vault != null and is_instance_valid(_vault):
+		var speed: float = table._speed
+		var shut := _vault.create_tween()
+		shut.tween_property(_vault, "open", 0.0, 0.16 / speed)
+		shut.tween_property(_vault, "modulate:a", 0.0, 0.18 / speed)
+		shut.tween_callback(_vault.queue_free)
+	_vault = null
+	_vault_owner = null
 
 
 ## A lens finds its subject; the shutter does the rest.
@@ -655,21 +848,101 @@ func _fx_vagabond_on_the_cuff(play: Play) -> void:
 	await _wait(0.2)
 
 
-## The needle goes in slowly. Nobody at the table likes how long it takes.
+## The doll is held up in front of the Voodooist while the purple gathers on
+## it; then the magic lets go and it is flung at the target, dead straight
+## and fast. It strikes the top corner of their box, slides down the side and
+## stays slumped there, feeding, until the hex takes hold (the table then
+## swaps it for the player's own: doll_thrown_at).
 func _fx_voodooist_hex(play: Play) -> void:
+	drop_doll()
+	var speed: float = table._speed
 	var here := _at(play.actor)
 	var there := _at(play.target)
+	# It strikes the top corner of the box and slides down to where it sits.
+	var hit := there + Vector2(70, -50)
+	var rest := there + Vector2(70, 50)
+	var box: Control = table._node_of(play.target)
+	if box != null and box.has_method("doll_way"):
+		var way: Array[Vector2] = box.doll_way()
+		hit = way[0]
+		rest = way[1]
+	var held := here + (POT - here).limit_length(64.0)
+	var doll := VoodooDoll.new()
+	if box != null and box.has_method("doll_facing"):
+		doll.facing = box.doll_facing()
+		doll.hangs = box.doll_hangs()
+	doll.position = held + Vector2(0, 14)
+	doll.scale = Vector2(0.4, 0.4)
+	doll.modulate.a = 0.0
+	add_child(doll)
+	_doll = doll
+	_doll_target = play.target
 	_snd("fx_hex")
-	dim(0.55, 1.25)
-	rise(here, UI.PURPLE, 10, 50.0)
-	line(here, there, UI.PURPLE, 4.0, 0.75, 0.55)
-	await _wait(0.6)
-	burst(there, UI.PURPLE, 20, 170.0, 0.6, -60.0)
-	burst(there, Color("1a0f1e"), 10, 110.0, 0.7, -30.0, 11.0)
-	ring(there, UI.PURPLE.lightened(0.3), 90.0, 12.0, 0.35, 5.0)
-	flash(Color(0.4, 0.1, 0.6, 0.25), 0.35)
+	dim(0.5, 1.7)
+	var show := doll.create_tween().set_parallel()
+	show.tween_property(doll, "modulate:a", 1.0, 0.12 / speed)
+	show.tween_property(doll, "position", held, 0.3 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	show.tween_property(doll, "scale", Vector2(1.2, 1.2), 0.3 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	rise(held, UI.PURPLE, 10, 50.0)
+	await _wait(0.35)
+	# The spell winds up: the light closes in on it, twice.
+	ring(held + doll.heart(), UI.PURPLE.lightened(0.3), 90.0, 12.0, 0.3, 4.0)
+	await _wait(0.22)
+	ring(held + doll.heart(), Color.WHITE, 70.0, 8.0, 0.22, 4.0)
+	await _wait(0.24)
+	if not is_instance_valid(doll):
+		return
+	# And lets go: one straight line, too fast to follow.
+	_snd("fx_zap")
+	doll.thrown = true
+	flash(Color(0.6, 0.3, 0.9, 0.22), 0.2)
+	burst(held, UI.PURPLE.lightened(0.3), 14, 220.0, 0.35, 0.0)
+	ring(held, UI.PURPLE, 10.0, 80.0, 0.25, 5.0)
+	line(held, hit, UI.PURPLE.lightened(0.4), 8.0, 0.3)
+	line(held, hit, Color.WHITE, 3.0, 0.18)
+	var fly := doll.create_tween().set_parallel()
+	fly.tween_property(doll, "position", hit, 0.13 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	fly.tween_property(doll, "scale", Vector2.ONE, 0.13 / speed)
+	await _wait(0.13)
+	if not is_instance_valid(doll):
+		return
+	_snd("fx_doll_hit")
+	burst(hit, UI.PURPLE, 14, 190.0, 0.45, -40.0)
+	ring(hit, UI.PURPLE.lightened(0.3), 8.0, 56.0, 0.25, 4.0)
 	table._shake_screen(6.0)
-	await _wait(0.55)
+	# And down the side of the box, coming to rest slumped against it.
+	doll.thrown = false
+	doll.create_tween().tween_property(doll, "position", rest, 0.55 / speed) \
+			.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	await _wait(0.6)
+	if not is_instance_valid(doll):
+		return
+	if box != null:
+		doll.drain = box.get_global_rect().get_center() - rest
+	flash(Color(0.4, 0.1, 0.6, 0.2), 0.35)
+	ring(rest + doll.heart(), UI.PURPLE.lightened(0.3), 70.0, 10.0, 0.35, 4.0)
+	await _wait(0.4)
+
+
+## Whether the doll thrown at `who` is lying where it landed. The table asks
+## when the hex takes hold: the player's own doll (StatusFx) is then shown in
+## its place, and this one is taken away with drop_doll(true).
+func doll_thrown_at(who: PlayerState) -> bool:
+	return _doll != null and is_instance_valid(_doll) and _doll_target == who
+
+
+## Takes the thrown doll away: at once (`swapped`, another is in its place)
+## or fading, if the hex never took hold.
+func drop_doll(swapped := false) -> void:
+	if _doll != null and is_instance_valid(_doll):
+		if swapped:
+			_doll.queue_free()
+		else:
+			var leave := _doll.create_tween()
+			leave.tween_property(_doll, "modulate:a", 0.0, 0.2 / table._speed)
+			leave.tween_callback(_doll.queue_free)
+	_doll = null
+	_doll_target = null
 
 
 ## Every paper in her pockets goes up in smoke; someone else walks out of it.
@@ -758,16 +1031,48 @@ func _fx_gravedigger_last_rites(play: Play) -> void:
 	await _wait(0.45)
 
 
-## A glass slid down the bar. Whatever was in it starts working at once.
+## A drink is poured in front of the Bartender and slid down the bar, going
+## green on the way; whoever it is for knocks it back in one, a moment later,
+## and it starts working at once.
 func _fx_bartender_mickey_finn(play: Play) -> void:
-	var here := _at(play.actor)
-	var there := _at(play.target)
-	_snd("fx_pour")
-	await _wait(0.4)
-	line(here, there, Color("cfe6ea"), 4.0, 0.25, 0.3)
-	await _wait(0.32)
-	rise(there, Color("9fd24a"), 14, 44.0)
-	ring(there, Color("7f9a3c"), 90.0, 18.0, 0.45, 5.0)
+	var speed: float = table._speed
+	var bar := _at(play.actor)
+	var mouth := _at(play.target)
+	var here := bar + (POT - bar).limit_length(70.0)
+	var there := mouth + (POT - mouth).limit_length(64.0)
+	var glass := GlassFx.new()
+	glass.position = here
+	glass.modulate.a = 0.0
+	glass.pouring = true
+	add_child(glass)
+	_snd("fx_mickey_pour")
+	var pour := glass.create_tween()
+	pour.tween_property(glass, "modulate:a", 1.0, 0.1 / speed)
+	pour.tween_property(glass, "fill", 1.0, 0.55 / speed)
+	pour.tween_callback(glass.set.bind("pouring", false))
+	await _wait(0.75)
+	if not is_instance_valid(glass):
+		return
+	var slide := glass.create_tween().set_parallel()
+	slide.tween_property(glass, "position", there, 0.32 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	slide.tween_property(glass, "spiked", 1.0, 0.32 / speed)
+	# It stands there for a moment before it is picked up.
+	await _wait(0.55)
+	if not is_instance_valid(glass):
+		return
+	_snd("fx_gulp")
+	var side := -1.0 if mouth.x < there.x else 1.0
+	var tip := glass.create_tween().set_parallel()
+	tip.tween_property(glass, "position", there.lerp(mouth, 0.35) + Vector2(0, -10), 0.16 / speed)
+	tip.tween_property(glass, "rotation", side * 2.0, 0.24 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tip.tween_property(glass, "fill", 0.0, 0.3 / speed).set_delay(0.08 / speed)
+	await _wait(0.45)
+	rise(mouth, Color("9fd24a"), 14, 44.0)
+	ring(mouth, Color("7f9a3c"), 90.0, 18.0, 0.45, 5.0)
+	if is_instance_valid(glass):
+		var away := glass.create_tween()
+		away.tween_property(glass, "modulate:a", 0.0, 0.2 / speed)
+		away.tween_callback(glass.queue_free)
 	await _wait(0.5)
 
 
@@ -840,8 +1145,11 @@ func cards_binned(d: Dictionary) -> void:
 	# middle of the screen already, face up.
 	var shown: TossedCard = cards[0]
 	shown.visible = true
+	# The handoff gives the picked card back to its place in the hand, so the
+	# place is emptied only after it.
+	var held: bool = table._take_pick_handoff(d.player, d.card)
 	table._set_cards_shown([views[0]], false)
-	if table._take_pick_handoff(d.player, d.card):
+	if held:
 		shown.spot = table.SHOWN_CENTRE - tray.position
 		shown.zoom = CardView.BASE.x * table.SHOWN_SCALE / TOSSED.x
 		shown.flip_y = 0.0
@@ -1280,6 +1588,110 @@ func _fx_bomber_blast(play: Play) -> void:
 	await _wait(0.75)
 
 
+## A round black bomb is set down in front of the Bomber and its fuse lit. It
+## waits there: which item it is for is only chosen as the play resolves
+## (item_bombed), and a bomb nothing was chosen for is taken back (put_away).
+func _fx_bomber_demolition(play: Play) -> void:
+	drop_bomb()
+	var here := _at(play.actor)
+	var speed: float = table._speed
+	var bomb := BombFx.new()
+	bomb.position = here + (POT - here).normalized() * BOMB_REST
+	# On the table, never on the player's own panel.
+	bomb.position.y = minf(bomb.position.y, BOMB_FLOOR)
+	bomb.scale = Vector2(0.3, 0.3)
+	bomb.modulate.a = 0.0
+	bomb.blinked.connect(_snd.bind("item_roulette_tick"))
+	add_child(bomb)
+	_bomb = bomb
+	var land := bomb.create_tween().set_parallel()
+	land.tween_property(bomb, "modulate:a", 1.0, 0.1 / speed)
+	land.tween_property(bomb, "scale", Vector2.ONE, 0.2 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.22)
+	if not is_instance_valid(bomb):
+		return
+	_snd("fx_fuse")
+	bomb.lit = true
+	burst(bomb.position + bomb.fuse_tip(), EMBER, 6, 90.0, 0.3, -60.0, 5.0)
+	await _wait(0.35)
+
+
+## True while a bomb is out with no item picked for it yet.
+func bombing() -> bool:
+	return _bomb != null and is_instance_valid(_bomb)
+
+
+## The bomb is tossed at the item at `at`, and not well: it comes down short
+## and to a side, and bounces the rest of the way there, blinking red faster
+## and faster. Then the two go up together. `gone` is called as it blows:
+## from then on the item is not in the inventory.
+func item_bombed(texture: Texture2D, at: Vector2, item_size: Vector2, gone: Callable) -> void:
+	var bomb := _bomb
+	_bomb = null
+	if bomb == null or not is_instance_valid(bomb):
+		gone.call()
+		return
+	var speed: float = table._speed
+	var from := bomb.position
+	var way := at - from
+	var side := way.orthogonal().normalized() * BOMB_STRAY * (1.0 if randf() < 0.5 else -1.0)
+	var spin := BOMB_SPIN * signf(way.x if way.x != 0.0 else 1.0)
+	var whole := 0.0
+	for hop: Array in BOMB_HOPS:
+		whole += hop[3]
+	bomb.create_tween().tween_property(bomb, "hurry", 1.0, whole / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_snd("card_draw")
+	var left := from
+	for hop: Array in BOMB_HOPS:
+		var lands: Vector2 = from + way * hop[0] + side * hop[1]
+		var high: float = hop[2]
+		var fly := bomb.create_tween().set_parallel()
+		fly.tween_method(func(along: float) -> void:
+			bomb.lift = high * 4.0 * along * (1.0 - along)
+			bomb.position = left.lerp(lands, along) + Vector2(0, -bomb.lift), 0.0, 1.0, hop[3] / speed)
+		fly.tween_property(bomb, "turn", bomb.turn + spin * hop[3], hop[3] / speed)
+		await _wait(hop[3])
+		if not is_instance_valid(bomb):
+			gone.call()
+			return
+		# Iron on wood.
+		_snd("fx_gavel")
+		burst(lands + Vector2(0, BombFx.RADIUS), EARTH.lightened(0.35), 4, 70.0, 0.25, 120.0, 4.0)
+		left = lands
+		spin *= 0.6
+	# It has got there: a last breath of frantic blinking.
+	UI.shake(bomb, 2.0, 0.3 / speed)
+	await _wait(0.3)
+	if is_instance_valid(bomb):
+		bomb.queue_free()
+	gone.call()
+	_snd("fx_boom")
+	flash(Color(1.0, 0.85, 0.5, 0.4), 0.25)
+	var wreck: TextureRect = _sprite(texture, at, item_size)
+	wreck.pivot_offset = item_size / 2.0
+	var apart := wreck.create_tween().set_parallel()
+	apart.tween_property(wreck, "scale", Vector2.ONE * 2.2, 0.22 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	apart.tween_property(wreck, "rotation", 0.6, 0.22 / speed)
+	apart.tween_property(wreck, "modulate", Color(1.0, 0.5, 0.2, 0.0), 0.22 / speed)
+	apart.chain().tween_callback(wreck.queue_free)
+	burst(at, EMBER, 26, 380.0, 0.6, 300.0, 10.0)
+	burst(at, Color("ffd98a"), 14, 280.0, 0.45, 200.0, 8.0)
+	burst(at, SMOKE, 14, 140.0, 0.9, -60.0, 12.0)
+	ring(at, Color.WHITE, 8.0, 120.0, 0.35, 6.0)
+	table._float("BOOM!", at + Vector2(0, -30), EMBER, 30)
+	UI.shake(table._table, 18.0, 0.4)
+	await _wait(0.7)
+
+
+## Takes back a bomb that was never thrown.
+func drop_bomb() -> void:
+	if _bomb != null and is_instance_valid(_bomb):
+		var leave := _bomb.create_tween()
+		leave.tween_property(_bomb, "modulate:a", 0.0, 0.15 / table._speed)
+		leave.tween_callback(_bomb.queue_free)
+	_bomb = null
+
+
 ## A coin thumbed into the air in front of `who`; it lands on its answer.
 func coin_flip(who: PlayerState, heads: bool, won: bool) -> void:
 	var here := _at(who)
@@ -1402,14 +1814,6 @@ func _fx_death(play: Play) -> void:
 	var leave := gun.create_tween()
 	leave.tween_property(gun, "modulate:a", 0.0, 0.2 / speed)
 	leave.tween_callback(gun.queue_free)
-
-
-func _fx_cloak(play: Play) -> void:
-	var here := _at(play.actor)
-	_snd("item_cloak")
-	ring(here, SMOKE.lightened(0.3), 100.0, 16.0, 0.4, 5.0)
-	burst(here, SMOKE.lightened(0.15), 20, 90.0, 0.7, -30.0, 12.0)
-	await _wait(0.5)
 
 
 ## One muffled shot, and whoever was talking stops.
@@ -2546,3 +2950,726 @@ class HatFx extends Control:
 
 	func _dot(at: Vector2, ink: Color) -> void:
 		draw_rect(Rect2((at / PIXEL).floor() * PIXEL, Vector2(PIXEL, PIXEL)), ink)
+
+
+## The glass of a Mickey Finn, the one the Bartender holds up on her card: a
+## hurricane glass on a short stem, with a drink that goes from red at the
+## bottom to yellow at the top and, once it is full, a wedge of pineapple, a
+## cherry, a sprig and a straw. `fill` is how much is in it, `spiked` how far
+## the drink has turned green (it starts to fizz), and `pouring` draws the
+## stream that fills it.
+class GlassFx extends Control:
+	const PIXEL := 2.0
+	const EDGE := Color("0d0b12")
+	const GLASS := Color("cfe6ea")
+	const RIM := Color("f4fbfc")
+	## The drink from the bottom of the bowl to the top of it, and spiked.
+	const DRINK: Array[Color] = [Color("c9322a"), Color("f08a2a"), Color("f6c445")]
+	const SPIKED: Array[Color] = [Color("4f8a2a"), Color("9fd24a"), Color("d8f07a")]
+	const PINEAPPLE := Color("f4c93a")
+	const CHERRY := Color("d2222a")
+	const LEAF := Color("4f9a3a")
+	const STRAW := Color("f0803a")
+	## Half the width of the bowl, row by row from the lip down: it flares,
+	## draws in and swells before it closes on the stem.
+	const BOWL: Array[int] = [7, 7, 7, 6, 6, 6, 6, 7, 7, 8, 8, 8, 8, 8, 7, 7, 6, 5, 4, 3]
+	const TOP := -16
+	const STEM := 5
+	## Rows of the bowl the drink never reaches: the lip.
+	const HEADROOM := 3
+
+	var fill := 0.0:
+		set(value):
+			fill = value
+			# Dressed once it is full, and it stays dressed as it is drunk.
+			_dressed = _dressed or fill >= 0.98
+			queue_redraw()
+	var spiked := 0.0:
+		set(value):
+			spiked = value
+			queue_redraw()
+	var pouring := false:
+		set(value):
+			pouring = value
+			queue_redraw()
+	var _dressed := false
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## The colour of the drink `depth` of the way down the bowl (0 top, 1 bottom).
+	func _drink(depth: float) -> Color:
+		var up := (1.0 - depth) * 2.0
+		var plain := DRINK[0].lerp(DRINK[1], up) if up < 1.0 else DRINK[1].lerp(DRINK[2], up - 1.0)
+		var green := SPIKED[0].lerp(SPIKED[1], up) if up < 1.0 else SPIKED[1].lerp(SPIKED[2], up - 1.0)
+		return plain.lerp(green, spiked)
+
+	func _draw() -> void:
+		var bowl := BOWL.size()
+		var bottom := TOP + bowl
+		var rows := roundi(fill * (bowl - HEADROOM))
+		var surface := bottom - rows
+		var foot := bottom + STEM
+		if pouring:
+			# The stream, and the splash where it lands.
+			_cells(-1, TOP - 14, 2, surface - TOP + 14, _drink(0.3).lightened(0.2))
+			_cells(-3, surface - 1, 1, 1, _drink(0.0).lightened(0.3))
+			_cells(2, surface - 2, 1, 1, _drink(0.0).lightened(0.3))
+		# Outlines: the bowl, the stem and the foot, a pixel bigger all round.
+		for y in range(TOP - 1, bottom + 1):
+			var h := BOWL[clampi(y - TOP, 0, bowl - 1)]
+			_cells(-h - 1, y, h * 2 + 2, 1, EDGE)
+		_cells(-2, bottom, 4, STEM, EDGE)
+		_cells(-6, foot - 1, 12, 3, EDGE)
+		_cells(-7, foot, 14, 2, EDGE)
+		for y in range(TOP, bottom):
+			var h := BOWL[y - TOP]
+			var inside := Color(GLASS, 0.16)
+			if rows > 0 and y == surface:
+				inside = _drink(float(y - TOP) / bowl).lightened(0.35)
+			elif y > surface:
+				inside = _drink(float(y - TOP) / bowl)
+			_cells(-h + 1, y, h * 2 - 2, 1, inside)
+			_cells(-h, y, 1, 1, GLASS)
+			_cells(h - 1, y, 1, 1, GLASS.darkened(0.3))
+		# What is in it fizzes once it has been spiked.
+		if spiked > 0.3:
+			for bubble: Vector2i in [Vector2i(-4, 3), Vector2i(2, 5), Vector2i(-1, 8), Vector2i(4, 9), Vector2i(-3, 11), Vector2i(1, 13)]:
+				if bottom - bubble.y > surface:
+					_cells(bubble.x, bottom - bubble.y, 1, 1, Color(RIM, spiked * 0.85))
+		# The lip, the light down the left of the bowl, the stem and the foot.
+		_cells(-BOWL[0], TOP, BOWL[0] * 2, 1, RIM)
+		for y in range(TOP + 2, bottom - 4):
+			_cells(-BOWL[y - TOP] + 2, y, 1, 1, Color(1, 1, 1, 0.5 if y < TOP + 12 else 0.25))
+		_cells(-1, bottom, 2, STEM, GLASS)
+		_cells(-1, bottom, 1, STEM, RIM)
+		_cells(-5, foot, 10, 1, GLASS)
+		_cells(-6, foot + 1, 12, 1, GLASS.darkened(0.25))
+		_cells(-4, foot, 4, 1, RIM)
+		if not _dressed:
+			return
+		# On the lip: a wedge of pineapple, a cherry, a sprig, and the straw.
+		_cells(2, TOP - 6, 1, 8, EDGE)
+		_cells(3, TOP - 7, 2, 9, EDGE)
+		_cells(3, TOP - 6, 1, 8, STRAW)
+		_cells(4, TOP - 6, 1, 3, STRAW.lightened(0.3))
+		_cells(-10, TOP - 4, 7, 5, EDGE)
+		_cells(-9, TOP - 3, 5, 3, PINEAPPLE)
+		_cells(-9, TOP - 3, 5, 1, PINEAPPLE.lightened(0.35))
+		_cells(-8, TOP - 1, 1, 1, PINEAPPLE.darkened(0.3))
+		_cells(-6, TOP - 2, 1, 1, PINEAPPLE.darkened(0.3))
+		_cells(-4, TOP - 5, 4, 4, EDGE)
+		_cells(-3, TOP - 4, 2, 2, CHERRY)
+		_cells(-3, TOP - 4, 1, 1, CHERRY.lightened(0.4))
+		for leaf in 4:
+			_cells(-1 + leaf, TOP - 5 - leaf, 2, 1, LEAF if leaf % 2 == 0 else LEAF.darkened(0.25))
+
+	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
+		if w > 0 and h > 0:
+			draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
+
+
+## The rifle of a Collateral, seen from the side with its barrel along +x. It
+## turns about where it is held to keep pointing at `aim`, wherever the two
+## of them go. `beam` lights the laser under the barrel, all the way to the
+## aim; `kick` throws the barrel up (in radians) when it fires.
+class SniperFx extends Control:
+	const PIXEL := 4.0
+	const EDGE := Color("0d0b12")
+	const STEEL_DARK := Color("3a4048")
+	const STEEL_LIT := Color("7b8591")
+	const WOOD := Color("7a4a24")
+	const WOOD_DARK := Color("4f2e14")
+	const LENS := Color("7fd6ff")
+	const LASER := Color("ff2a2a")
+	## Where the barrel ends and where the laser starts, in pixels of the rifle.
+	const MUZZLE := 27
+	const SIGHT := 19
+
+	var aim := Vector2.ZERO
+	var beam := 0.0
+	var kick := 0.0
+	## How far round it is from where it pointed to the aim given to swing_to().
+	var swing := 0.0:
+		set(value):
+			swing = value
+			var way := Vector2.from_angle(_swing_over + lerpf(_swing_from.x, _swing_to.x, swing))
+			aim = position + way * lerpf(_swing_from.y, _swing_to.y, swing)
+	## The two ends of a swing as (angle from _swing_over, distance).
+	var _swing_from := Vector2.ZERO
+	var _swing_to := Vector2.ZERO
+	var _swing_over := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_point()
+
+	## Gets it ready to be turned on `target` by `swing`. The barrel goes
+	## round (an aim that slid across could pass through the rifle), and by
+	## the side `over` is on: across the table, not behind whoever holds it.
+	func swing_to(target: Vector2, over: Vector2) -> void:
+		_swing_over = (over - position).angle()
+		_swing_from = Vector2(angle_difference(_swing_over, (aim - position).angle()), position.distance_to(aim))
+		_swing_to = Vector2(angle_difference(_swing_over, (target - position).angle()), position.distance_to(target))
+		swing = 0.0
+
+	func muzzle() -> Vector2:
+		return position + Vector2.from_angle(rotation) * MUZZLE * PIXEL
+
+	func _process(_delta: float) -> void:
+		_point()
+		queue_redraw()
+
+	## Aiming left, the rifle is turned over so that the scope stays on top.
+	func _point() -> void:
+		var angle := (aim - position).angle()
+		var turned := absf(angle) > PI / 2.0
+		scale.y = -1.0 if turned else 1.0
+		rotation = angle + (kick if turned else -kick)
+
+	func _draw() -> void:
+		_cells(-7, -1, 3, 5, WOOD_DARK)
+		_cells(-4, -1, 8, 3, WOOD)
+		_cells(-4, -1, 8, 1, WOOD.lightened(0.2))
+		_cells(3, -2, 10, 3, STEEL_DARK)
+		_cells(3, -2, 10, 1, STEEL_LIT)
+		_cells(4, 1, 2, 3, WOOD_DARK)
+		_cells(8, 1, 2, 3, EDGE)
+		# The barrel and its brake.
+		_cells(13, -2, 13, 1, STEEL_LIT)
+		_cells(13, -1, 13, 1, STEEL_DARK)
+		_cells(25, -3, 2, 4, EDGE)
+		# The scope on its two mounts.
+		_cells(7, -3, 1, 1, EDGE)
+		_cells(11, -3, 1, 1, EDGE)
+		_cells(5, -6, 9, 3, EDGE)
+		_cells(5, -6, 9, 1, STEEL_DARK)
+		_cells(4, -6, 1, 3, STEEL_LIT)
+		_cells(14, -6, 1, 3, LENS)
+		_cells(15, 0, 4, 1, EDGE)
+		if beam <= 0.0:
+			return
+		var reach := position.distance_to(aim)
+		var from := SIGHT * PIXEL
+		# It never burns quite steadily.
+		var glow := beam * (0.8 + 0.2 * sin(Time.get_ticks_msec() * 0.03))
+		draw_rect(Rect2(from, -1.0, maxf(reach - from, 0.0), 6.0), Color(LASER, glow * 0.22))
+		draw_rect(Rect2(from, 1.0, maxf(reach - from, 0.0), 2.0), Color(LASER.lightened(0.25), glow))
+		draw_rect(Rect2(reach - 8.0, -6.0, 16.0, 16.0), Color(LASER, glow * 0.35))
+		draw_rect(Rect2(reach - 4.0, -2.0, 8.0, 8.0), Color(LASER, glow))
+		draw_rect(Rect2(reach - 2.0, 0.0, 4.0, 4.0), Color(1.0, 0.9, 0.85, glow))
+
+	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
+		draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
+
+
+## The shade of the Assassin: a small hooded figure in the colours of his
+## card, seen from the side and on the run. `sunk` hides it from the feet up,
+## as if it went down into whatever it stands on (1 is all of it); `travel`
+## takes it along the way given to run(), leaving what it was a moment ago
+## fading behind it.
+class ShadeFx extends Control:
+	const PIXEL := 4.0
+	const EDGE := Color("0d0b12")
+	const CLOAK := Color("1b1a2d")
+	const FOLD := Color("110f1d")
+	const HOOD := Color("2a2c5a")
+	const HOOD_LIT := Color("4a4e96")
+	const MASK := Color("ecebf2")
+	const EYE := Color("0a0406")
+	const BLADE := Color("c9c9cb")
+	const INKS := {"K": EDGE, "C": CLOAK, "F": FOLD, "H": HOOD, "L": HOOD_LIT, "M": MASK, "E": EYE, "S": BLADE}
+	## Facing right: the hood and the mask, the cloak streaming behind and
+	## the blade held out in front.
+	const BODY: Array = [
+		"......HHHH..",
+		".....HLLLLH.",
+		"....HHLLMMM.",
+		"..CCHHHHMEM.",
+		".CCCCHHHMM..",
+		"CCCFCCHHH...",
+		".CCCFCCCCKSS",
+		"..CCCFCCC...",
+		"...CCCCCC...",
+	]
+	## The legs, apart and together.
+	const STRIDES: Array = [
+		["..FF....FF..", ".FF......FF."],
+		["....FFFF....", ".....FF....."],
+	]
+	const COLUMNS := 12
+	const ROWS := 11
+	## How many strides the whole way takes.
+	const STEPS := 7.0
+	## How far the way bends round the middle of the table.
+	const BOW := 46.0
+	const GHOST_EVERY := 0.022
+	const GHOST_LIFE := 0.2
+
+	## How fast the table is playing.
+	var speed := 1.0
+	var sunk := 1.0:
+		set(value):
+			sunk = value
+			queue_redraw()
+	var travel := 0.0:
+		set(value):
+			travel = value
+			position = _from.lerp(_bend, travel).lerp(_bend.lerp(_to, travel), travel)
+	## What it goes in behind, on screen: nothing of it is drawn there.
+	var behind := Rect2()
+	var _from := Vector2.ZERO
+	var _bend := Vector2.ZERO
+	var _to := Vector2.ZERO
+	var _facing := 1
+	var _ghosts: Array = []  # {at, stride, t}
+	var _since := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Sets the way from `from` to `to`. It keeps to the edge: the way bends
+	## away from `around`.
+	func run(from: Vector2, to: Vector2, around: Vector2) -> void:
+		_from = from
+		_to = to
+		var middle := (from + to) / 2.0
+		var side := (to - from).orthogonal().normalized()
+		if side.dot(around - middle) > 0.0:
+			side = -side
+		_bend = middle + side * BOW
+		_facing = -1 if to.x < from.x else 1
+		travel = 0.0
+
+	func _process(delta: float) -> void:
+		var dt := delta * speed
+		for ghost: Dictionary in _ghosts:
+			ghost.t += dt
+		_ghosts = _ghosts.filter(func(ghost: Dictionary) -> bool: return ghost.t < GHOST_LIFE)
+		if travel > 0.0 and travel < 1.0:
+			_since += dt
+			if _since >= GHOST_EVERY:
+				_since = 0.0
+				_ghosts.append({"at": position, "stride": _stride(), "t": 0.0})
+		queue_redraw()
+
+	func _stride() -> int:
+		return int(travel * STEPS) % 2
+
+	func _draw() -> void:
+		for ghost: Dictionary in _ghosts:
+			var left := 1.0 - float(ghost.t) / GHOST_LIFE
+			_figure(ghost.at - position, ghost.stride, ROWS, Color(HOOD, 0.45 * left * left))
+		var shown := ceili(ROWS * (1.0 - sunk))
+		if shown > 0:
+			_figure(Vector2(0.0, (ROWS - shown) * PIXEL), _stride(), shown)
+
+	## The figure with its middle at `at`, down to row `shown`. Given an
+	## `ink`, it is all of that one colour.
+	func _figure(at: Vector2, stride: int, shown: int, ink: Variant = null) -> void:
+		var rows: Array = BODY + STRIDES[stride]
+		var corner := at - Vector2(COLUMNS, ROWS) * PIXEL / 2.0
+		for y in mini(shown, ROWS):
+			var row: String = rows[y]
+			for x in COLUMNS:
+				var cell := row[x]
+				if cell == ".":
+					continue
+				var column := x if _facing > 0 else COLUMNS - 1 - x
+				var block := Rect2(corner + Vector2(column, y) * PIXEL, Vector2(PIXEL, PIXEL))
+				if behind.has_point(position + block.get_center()):
+					continue
+				draw_rect(block, INKS[cell] if ink == null else ink)
+
+
+## A note of music, in blocks: it rises from `home` as `risen` goes to 1,
+## swaying to the side `sway` says.
+class NoteFx extends Control:
+	const PIXEL := 3.0
+	const SHAPE := [
+		"...##",
+		"...#.",
+		"...#.",
+		".###.",
+		"####.",
+		".##..",
+	]
+	var ink := Color.WHITE
+	var home := Vector2.ZERO
+	var sway := 1.0
+	var risen := 0.0:
+		set(value):
+			risen = value
+			position = home + Vector2(sin(risen * TAU * 1.5) * 9.0 * sway, -52.0 * risen)
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		for layer in 2:
+			for y in SHAPE.size():
+				var row: String = SHAPE[y]
+				for x in row.length():
+					if row[x] != "#":
+						continue
+					var cell := Vector2(x - 2, y - 3) * PIXEL
+					if layer == 0:
+						draw_rect(Rect2(cell + Vector2(PIXEL, PIXEL), Vector2(PIXEL, PIXEL)), Color(0, 0, 0, 0.5))
+					else:
+						draw_rect(Rect2(cell, Vector2(PIXEL, PIXEL)), ink)
+
+
+## The vault of a Cash Out, seen from one side and a little from above: its
+## front, its right side and its top, a steel box on feet with a framed
+## doorway. The door hangs on the left of the doorway and swings out towards
+## the viewer: `open` goes from 0 (shut) to 1 (wide open, its inner face
+## showing), and what is inside lights up as it goes. `spin` turns the wheel
+## on the door.
+class VaultFx extends Control:
+	const PIXEL := 3.0
+	const EDGE := Color("0d0b12")
+	const STEEL_DARK := Color("333941")
+	const STEEL := Color("59626e")
+	const STEEL_LIT := Color("8b95a1")
+	const STEEL_TOP := Color("a3adb8")
+	const BRASS := Color("e6bc4c")
+	const BRASS_DARK := Color("7d5616")
+	const DARK := Color("120d0a")
+	const GOLD_LIT := Color("fff3c4")
+	const FELT := Color("5a1f1c")
+	## In pixels of the vault: the front face (left, top, right, bottom), how
+	## deep the box is, the doorway and how far round the door goes.
+	const FRONT := Rect2i(-11, -9, 16, 20)
+	const DEPTH := 6
+	const DOORWAY := Rect2i(-9, -7, 12, 16)
+	const SWING := 1.95
+	## The wheel in its two positions: upright and turned an eighth.
+	const WHEEL := [
+		["..#..", "..#..", "#####", "..#..", "..#.."],
+		["#...#", ".#.#.", "..#..", ".#.#.", "#...#"],
+	]
+
+	var open := 0.0:
+		set(value):
+			open = value
+			queue_redraw()
+	var spin := 0.0:
+		set(value):
+			spin = value
+			queue_redraw()
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Where the coins come out, in the coordinates of whatever holds the vault.
+	func mouth() -> Vector2:
+		return position + Vector2(DOORWAY.get_center()) * PIXEL * scale
+
+	func _draw() -> void:
+		var left := FRONT.position.x
+		var top := FRONT.position.y
+		var right := FRONT.end.x
+		var bottom := FRONT.end.y
+		# The shadow it throws on the table, to the right of it.
+		for i in 4:
+			_cells(left + 2 + i, bottom + 1, FRONT.size.x + DEPTH - i * 2, 1, Color(0, 0, 0, 0.32 - i * 0.06))
+		# Outlines first: every face, a pixel bigger all round.
+		_cells(left - 1, top - 1, FRONT.size.x + 2, FRONT.size.y + 2, EDGE)
+		for i in DEPTH:
+			_cells(right + i, top - i - 2, 2, FRONT.size.y + 2, EDGE)
+			_cells(left + i, top - i - 2, FRONT.size.x + 2, 2, EDGE)
+		# The feet: two under the front, one seen under the far corner.
+		_cells(left + 1, bottom, 3, 2, EDGE)
+		_cells(right - 4, bottom, 3, 2, EDGE)
+		_cells(right + DEPTH - 3, bottom - DEPTH + 1, 2, 2, EDGE)
+		# The top, lit, and the side, in shade: each row or column a step
+		# further back.
+		for i in DEPTH:
+			_cells(left + i + 1, top - i - 1, FRONT.size.x, 1, STEEL_TOP if i > 0 else GOLD_LIT.lerp(STEEL_TOP, 0.7))
+			_cells(right + i, top - i - 1, 1, FRONT.size.y, STEEL_DARK if i > 0 else STEEL_DARK.lightened(0.12))
+		for bolt: int in [top + 2, bottom - 4]:
+			_cells(right + 2, bolt - 3, 1, 1, STEEL)
+			_cells(right + 4, bolt - 5, 1, 1, STEEL)
+		_cells(left + 4, top - 4, 6, 1, STEEL_LIT.lightened(0.2))
+		# The front, its edges caught by the light, and a brass plate.
+		_cells(left, top, FRONT.size.x, FRONT.size.y, STEEL)
+		_cells(left, top, FRONT.size.x, 1, STEEL_LIT)
+		_cells(left, top, 1, FRONT.size.y, STEEL_LIT)
+		_cells(left, bottom - 1, FRONT.size.x, 1, STEEL_DARK)
+		_cells(right - 1, top, 1, FRONT.size.y, STEEL_DARK)
+		for corner: Vector2i in [Vector2i(left + 1, top + 1), Vector2i(right - 2, top + 1), Vector2i(left + 1, bottom - 2), Vector2i(right - 2, bottom - 2)]:
+			_cells(corner.x, corner.y, 1, 1, STEEL_LIT)
+		_cells(DOORWAY.end.x + 1, bottom - 4, 2, 2, BRASS_DARK)
+		_cells(DOORWAY.end.x + 1, bottom - 4, 1, 1, BRASS)
+
+		# The doorway and what is in it: the light comes up as the door goes.
+		var way := DOORWAY
+		_cells(way.position.x - 1, way.position.y - 1, way.size.x + 2, way.size.y + 2, EDGE)
+		_cells(way.position.x, way.position.y, way.size.x, way.size.y, DARK.lerp(FELT, open * 0.8))
+		if open > 0.0:
+			var shelf := way.position.y + 7
+			# Bars stacked on the shelf, and coins and a sack under it.
+			for bar: Vector2i in [Vector2i(1, 5), Vector2i(5, 5), Vector2i(3, 3), Vector2i(8, 5)]:
+				_cells(way.position.x + bar.x, way.position.y + bar.y, 3, 2, Color(BRASS_DARK, open))
+				_cells(way.position.x + bar.x, way.position.y + bar.y, 3, 1, Color(BRASS, open))
+				_cells(way.position.x + bar.x, way.position.y + bar.y, 1, 1, Color(GOLD_LIT, open))
+			_cells(way.position.x, shelf, way.size.x, 1, Color(STEEL_DARK, open))
+			_cells(way.position.x, shelf + 1, way.size.x, 1, Color(0, 0, 0, 0.35 * open))
+			for pile: Vector3i in [Vector3i(1, 5, 3), Vector3i(4, 3, 3), Vector3i(8, 4, 3)]:
+				for row in pile.y:
+					_cells(way.position.x + pile.x, way.end.y - 1 - row, pile.z, 1,
+							Color(BRASS if row % 2 == 0 else BRASS_DARK, open))
+				_cells(way.position.x + pile.x, way.end.y - pile.y, pile.z, 1, Color(GOLD_LIT, open))
+			for glint: Vector2i in [Vector2i(2, 2), Vector2i(9, 3), Vector2i(6, 10), Vector2i(10, 12)]:
+				_cells(way.position.x + glint.x, way.position.y + glint.y, 1, 1, Color(1, 1, 1, open * 0.9))
+		for hinge: int in [way.position.y + 2, way.end.y - 4]:
+			_cells(way.position.x - 2, hinge, 2, 2, BRASS_DARK)
+			_cells(way.position.x - 2, hinge, 1, 1, BRASS)
+
+		# The door, a column at a time from its hinges: turned by `angle`, a
+		# column `k` along it is that much across and, coming towards the
+		# viewer, that much lower.
+		var angle := open * SWING
+		var inner := angle > PI / 2.0
+		var face := STEEL.lerp(STEEL_DARK, sin(angle) * 0.5) if not inner else Color("454d57")
+		for k in way.size.x:
+			var at := _on_door(k, 0, angle)
+			_cells(at.x, at.y - 1, 1, way.size.y + 2, EDGE)
+		for k in way.size.x:
+			var at := _on_door(k, 0, angle)
+			_cells(at.x, at.y, 1, way.size.y, face)
+			_cells(at.x, at.y, 1, 1, face.lightened(0.25))
+			_cells(at.x, at.y + way.size.y - 1, 1, 1, face.darkened(0.3))
+		# Its free edge has the thickness of the steel.
+		var lip := _on_door(way.size.x, 0, angle)
+		_cells(lip.x, lip.y - 1, 1, way.size.y + 2, EDGE)
+		if sin(angle) > 0.25:
+			_cells(lip.x, lip.y, 1, way.size.y, STEEL_LIT)
+		if inner:
+			# The inside of the door: the bars of the lock.
+			for bar: int in [3, 7, 11]:
+				var from := _on_door(2, bar, angle)
+				var to := _on_door(way.size.x - 2, bar, angle)
+				_cells(mini(from.x, to.x), from.y, absi(to.x - from.x) + 1, 1, STEEL_LIT)
+			return
+		if cos(angle) < 0.35:
+			return
+		for stud: Vector2i in [Vector2i(1, 1), Vector2i(way.size.x - 2, 1), Vector2i(1, way.size.y - 2), Vector2i(way.size.x - 2, way.size.y - 2)]:
+			var at := _on_door(stud.x, stud.y, angle)
+			_cells(at.x, at.y, 1, 1, STEEL_LIT)
+		# The dial over the wheel, and the wheel.
+		var dial := _on_door(5, 2, angle)
+		_cells(dial.x, dial.y, 2, 2, GOLD_LIT)
+		_cells(dial.x + 1, dial.y + 1, 1, 1, EDGE)
+		var wheel: Array = WHEEL[int(spin) % 2]
+		for y in wheel.size():
+			var row: String = wheel[y]
+			for x in row.length():
+				var at := _on_door(4 + x, 7 + y, angle)
+				_cells(at.x, at.y, 1, 1, BRASS if row[x] == "#" else STEEL_DARK)
+		var hub := _on_door(6, 9, angle)
+		_cells(hub.x, hub.y, 1, 1, GOLD_LIT)
+
+	## Where the point `k` across and `y` down the door is, in pixels of the
+	## vault, with the door turned by `angle`.
+	func _on_door(k: int, y: int, angle: float) -> Vector2i:
+		return Vector2i(DOORWAY.position.x + roundi(k * cos(angle)), DOORWAY.position.y + y + roundi(k * sin(angle) * 0.5))
+
+	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
+		if w > 0 and h > 0:
+			draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
+
+
+## The Bard's lute, lying with its neck to the right: a pear of a body with
+## a rose in it, a fretted neck and a pegbox bent back. pluck() sets its
+## strings shaking; they die down by themselves.
+class LuteFx extends Control:
+	const PIXEL := 4.0
+	const EDGE := Color("0d0b12")
+	const WOOD := Color("b9783a")
+	const WOOD_LIT := Color("d99a52")
+	const WOOD_DARK := Color("7a4a24")
+	const NECK := Color("4a2c16")
+	const FRET := Color("c9b27a")
+	const STRING := Color("f4ecd6")
+	## Half the height of the body, column by column from its round end.
+	const BODY: Array[int] = [3, 5, 6, 7, 7, 7, 7, 6, 6, 5, 5, 4, 3, 2]
+	const BODY_AT := -9
+
+	## How hard the strings are shaking, 1 right after a pluck.
+	var ring := 0.0
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func pluck() -> void:
+		ring = 1.0
+
+	func _process(delta: float) -> void:
+		_time += delta
+		ring = maxf(ring - delta * 2.4, 0.0)
+		queue_redraw()
+
+	func _draw() -> void:
+		var neck_from := BODY_AT + BODY.size() - 1
+		for i in BODY.size():
+			_cells(BODY_AT + i - 1, -BODY[i] - 1, 3, BODY[i] * 2 + 2, EDGE)
+		_cells(neck_from, -2, 16, 4, EDGE)
+		_cells(neck_from + 14, -4, 5, 7, EDGE)
+		for i in BODY.size():
+			var h := BODY[i]
+			_cells(BODY_AT + i, -h, 1, h * 2, WOOD)
+			_cells(BODY_AT + i, -h, 1, 2, WOOD_LIT)
+			_cells(BODY_AT + i, h - 1, 1, 1, WOOD_DARK)
+		# The rose, the bridge, the neck with its frets and the pegbox.
+		_cells(-4, -2, 4, 4, WOOD_DARK)
+		_cells(-3, -1, 2, 2, EDGE)
+		_cells(-8, -2, 1, 4, NECK)
+		_cells(neck_from, -1, 15, 2, NECK)
+		for fret in 4:
+			_cells(neck_from + 2 + fret * 3, -1, 1, 2, FRET)
+		_cells(neck_from + 15, -3, 3, 5, WOOD_DARK)
+		for peg: Vector2i in [Vector2i(neck_from + 15, -4), Vector2i(neck_from + 17, -4), Vector2i(neck_from + 16, 2)]:
+			_cells(peg.x, peg.y, 1, 1, FRET)
+		# The strings: still at both ends, shaking widest in the middle.
+		var length := neck_from + 15 + 8
+		for string in 3:
+			for x in range(-8, neck_from + 15):
+				var along := float(x + 8) / length
+				var shake := sin(_time * 55.0 + string * 2.1 + x * 0.5) * ring * sin(along * PI) * 1.2
+				draw_rect(Rect2(Vector2(x, (string - 1) * 0.9 - 0.25 + shake) * PIXEL, Vector2(PIXEL, PIXEL * 0.5)), STRING)
+
+	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
+		if w > 0 and h > 0:
+			draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
+
+
+## The bomb of a Demolition: a ball of black iron with a collar and a lit
+## fuse, in blocks. The ball is shaded from a light up and to the left, not
+## drawn cell by cell. `turn` spins it (the collar and the fuse go round; the
+## light stays where it is) and `lift` is how far off the table it
+## is (its shadow stays down there); it blinks red, faster as `hurry` goes
+## from 0 to 1.
+class BombFx extends Control:
+	signal blinked
+
+	const PIXEL := 2.0
+	## The ball, in cells; the origin is its middle.
+	const BALL := 8.6
+	const RADIUS := BALL * PIXEL
+	## Where the light falls on it, in cells from the middle.
+	const LIGHT := Vector2(-3.0, -3.5)
+	const OUTLINE := Color("09080d")
+	## From the glint outwards: how far from LIGHT (in radii) each tone reaches.
+	const TONES: Array = [
+		[0.15, Color("f4f2ff")], [0.4, Color("7f7a99")], [0.88, Color("403c52")],
+		[1.3, Color("2a2734")], [9.0, Color("1a1821")],
+	]
+	## The light the table throws back on the far rim.
+	const BOUNCE := Color("4e4964")
+	## The collar the fuse comes out of, row by row from the top. K: outline,
+	## L: lit, M: metal, D: in shade.
+	const COLLAR: Array[String] = ["KKKKKKK", "KLLMMDK", "KLMMDDK", "KMMDDDK"]
+	const COLLAR_AT := Vector2(-3, -12)
+	const METAL := {"K": Color("09080d"), "L": Color("b9b4c9"), "M": Color("807a90"), "D": Color("4b4759")}
+	## The fuse, cell by cell from the collar to where it burns.
+	const FUSE: Array[Vector2] = [
+		Vector2(0, -13), Vector2(0, -14), Vector2(1, -15), Vector2(2, -16), Vector2(3, -16), Vector2(4, -15), Vector2(5, -15),
+	]
+	const ROPE: Array[Color] = [Color("d8b877"), Color("94713d")]
+	const ALARM := Color("ff2a1a")
+	const SPARK := Color("ff7a2a")
+	## Blinks a second, at rest and at the very end.
+	const SLOW := 2.5
+	const FAST := 13.0
+
+	var turn := 0.0:
+		set(value):
+			turn = value
+			queue_redraw()
+	var lift := 0.0
+	var hurry := 0.0
+	var lit := false
+
+	var _iron: Array = []  # [Rect2, Color, how red it turns]
+	var _halo: Array = []  # Rect2
+	var _trim: Array = []  # [Rect2, Color]: the collar and the fuse
+	var _phase := 0.0
+	var _red := false
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var reach := ceili(BALL) + 2
+		for row in range(-reach, reach + 1):
+			for column in range(-reach, reach + 1):
+				var cell := Vector2(column, row)
+				var out := cell.length()
+				if out > BALL + 2.0:
+					continue
+				if out > BALL:
+					_halo.append(_block(cell))
+				elif out > BALL - 1.1:
+					_iron.append([_block(cell), OUTLINE, 0.35])
+				elif out > BALL - 2.7 and cell.normalized().dot(Vector2(0.6, 0.8)) > 0.8:
+					_iron.append([_block(cell), BOUNCE, 0.75])
+				else:
+					var from_light := (cell - LIGHT).length() / BALL
+					for tone: Array in TONES:
+						if from_light < tone[0]:
+							_iron.append([_block(cell), tone[1], 0.75])
+							break
+		for row in COLLAR.size():
+			for column in COLLAR[row].length():
+				_trim.append([_block(COLLAR_AT + Vector2(column, row)), METAL[COLLAR[row][column]]])
+		for index in FUSE.size():
+			_trim.append([_block(FUSE[index]), ROPE[index % 2]])
+
+	## Where the fuse burns, from the origin, as the bomb is turned now.
+	func fuse_tip() -> Vector2:
+		return (FUSE[-1] * PIXEL).rotated(turn)
+
+	func _block(cell: Vector2) -> Rect2:
+		return Rect2((cell - Vector2(0.5, 0.5)) * PIXEL, Vector2(PIXEL, PIXEL))
+
+	func _process(delta: float) -> void:
+		if not lit:
+			return
+		_time += delta
+		_phase += delta * lerpf(SLOW, FAST, hurry)
+		var red := fposmod(_phase, 1.0) < 0.5
+		if red and not _red:
+			blinked.emit()
+		_red = red
+		queue_redraw()
+
+	func _draw() -> void:
+		# The shadow stays on the table, smaller the higher the bomb is.
+		var spread := RADIUS * (1.0 - minf(lift / 220.0, 0.45))
+		var ground := Vector2(0, lift + RADIUS)
+		draw_rect(Rect2(ground + Vector2(-spread, -PIXEL), Vector2(spread * 2.0, PIXEL * 2.0)).abs(), Color(0, 0, 0, 0.3))
+		draw_rect(Rect2(ground + Vector2(-spread * 0.6, -PIXEL * 2.0), Vector2(spread * 1.2, PIXEL * 4.0)).abs(), Color(0, 0, 0, 0.22))
+		# The light does not turn with the ball: only the collar and the fuse
+		# go round it.
+		draw_set_transform(Vector2.ZERO, turn)
+		for block: Array in _trim:
+			draw_rect(block[0], block[1])
+		draw_set_transform(Vector2.ZERO, 0.0)
+		var red := _red and lit
+		if red:
+			for block: Rect2 in _halo:
+				draw_rect(block, Color(ALARM, 0.3))
+		for block: Array in _iron:
+			draw_rect(block[0], block[1].lerp(ALARM, block[2]) if red else block[1])
+		draw_set_transform(Vector2.ZERO, turn)
+		if lit:
+			# The spark: a plus and a cross of rays, taking turns.
+			var tip: Vector2 = FUSE[-1] * PIXEL
+			var plus := fposmod(_time * 12.0, 1.0) < 0.5
+			for ray: Vector2 in ([Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT] if plus
+					else [Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]):
+				draw_rect(_block(FUSE[-1] + ray * 2.0), SPARK)
+				draw_rect(_block(FUSE[-1] + ray), Color("ffe08a"))
+			draw_rect(Rect2(tip - Vector2(PIXEL, PIXEL), Vector2(PIXEL, PIXEL) * 2.0), Color.WHITE)
+		draw_set_transform(Vector2.ZERO, 0.0)

@@ -93,7 +93,7 @@ class Recorder extends RefCounted:
 		var found := []
 		var cards := engine.deck.size()
 		for p: PlayerState in engine.players:
-			cards += p.cards.size()
+			cards += p.cards.size() + p.left.size()
 			if p.alive and p.cards.size() != engine.hand_limit(p):
 				found.append("%s holds %d cards" % [p.name, p.cards.size()])
 			if p.coins < -10:

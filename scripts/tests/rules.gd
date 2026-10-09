@@ -34,6 +34,7 @@ static func run() -> int:
 		"a swindle takes coins on their way to someone": _swindle,
 		"a swindle caught lying takes nothing": _swindle_caught,
 		"the first to fall loses: the blow in the air is void": _first_to_fall,
+		"a demolition goes past shield and mirror": _demolition,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -101,6 +102,23 @@ static func _two_of_a_kind() -> String:
 	if not table.asked(1, Decision.Kind.PICK).is_empty():
 		return "asked which shield"
 	return "kept %s" % [table.held(1)] if table.held(1) != [&"shield"] else table.expect_groggy(-1, -1)
+
+
+## The Bomber blows up one item of a player who holds a shield and a mirror:
+## neither answers, and both are still there afterwards.
+static func _demolition() -> String:
+	var table := Table.new(true, [&"bomber"])
+	table.engine.players[0].cards = [&"bomber", &"judge"]
+	table.give(1, [&"shield", &"mirror", &"potion"])
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return table.engine.players[1]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 2
+	var coins: int = table.engine.players[0].coins
+	await table.engine.claim(table.engine.players[0], table.ability(&"bomber.demolition"))
+	if not table.asked(1, Decision.Kind.PICK).is_empty():
+		return "the target was asked how to defend"
+	if table.engine.players[0].coins != coins:
+		return "it cost %d coins" % (coins - table.engine.players[0].coins)
+	return "" if table.held(1) == [&"shield", &"mirror"] else "kept %s" % [table.held(1)]
 
 
 ## The target calls LIAR! on a true claim, pays for it, and still gets to

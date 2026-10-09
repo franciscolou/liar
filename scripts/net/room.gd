@@ -37,7 +37,7 @@ const NODE_NAME := "NetRoom"
 const MAX_SEATS := 6
 const NAME_LENGTH := 12
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 6
+const PROTOCOL := 8
 const JOIN_TIMEOUT := 8.0
 const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent"]
 

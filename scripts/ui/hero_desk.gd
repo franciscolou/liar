@@ -21,7 +21,7 @@ const SOCKETS_AT := Vector2(14, 106)
 const MAT := Rect2(236, 12, 188, 154)
 const RACK := Rect2(436, 26, 580, 138)
 ## How far down the rack the top of the shelf is: the foot of the cards.
-const SHELF := 96.0
+const SHELF := 130.0
 const POSTS: Array[float] = [228.0, 428.0, 1018.0]
 
 const INK := Color("160c08")
@@ -167,8 +167,8 @@ func _mat(rect: Rect2) -> void:
 		y += PX * 4.0
 
 
-## The rack of the other characters: a niche with a shelf, and under the
-## shelf the darker board their names are written on.
+## The rack of the other characters: a niche with a shelf near its foot,
+## which the cards stand on (their names are on the cards themselves).
 func _rack(rect: Rect2) -> void:
 	_sunk(rect, Color(0, 0, 0, 0.0))
 	draw_rect(rect, Color(0, 0, 0, 0.2))

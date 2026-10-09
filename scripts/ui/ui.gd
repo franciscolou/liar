@@ -26,11 +26,28 @@ const CARD_FRAME := "res://assets/ui/card_frame.png"
 ## "res://assets/cards_proto/" and "res://assets/cards_proto2/" are cut from
 ## assets/prototype and assets/prototype2 by tools/gen_proto_cards.py.
 const CARD_ART_DIR := "res://assets/cards_proto2/"
+## The reroll of the shop: two arrows chasing each other (see draw_reroll).
+const REROLL_ICON := [
+	"....#####....",
+	"..#########..",
+	".###.....###.",
+	".##.......##.",
+	"........#####",
+	".........###.",
+	"..#.......#..",
+	".###.........",
+	"#####........",
+	".##.......##.",
+	".###.....###.",
+	"..#########..",
+	"....#####....",
+]
 ## Transparent pixels at each end of the first rows of a card: the rounded
 ## corners of the card back.
 const CARD_CORNER := [3, 2, 1]
 
 static var _theme: Theme
+static var _queasy: Shader
 static var _font: Font
 static var _bold: Font
 static var _textures: Dictionary = {}
@@ -90,6 +107,11 @@ static func card_filter(texture: Texture2D) -> CanvasItem.TextureFilter:
 	if texture != null and texture.get_width() > tex(CARD_BACK).get_width():
 		return CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	return CanvasItem.TEXTURE_FILTER_NEAREST
+
+
+## The art of a card on its own, without the frame.
+static func card_art(path: String) -> Texture2D:
+	return tex(_card_art(path))
 
 
 static func _card_art(path: String) -> String:
@@ -234,6 +256,32 @@ static func art_button(b: Button, text: String, fill: Color, border: Color, ink:
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
 
+## Draws the reroll icon in the middle of `b`, in blocks like the shop's
+## stall. Connect it to the button's `draw`; the button needs no text or box.
+static func draw_reroll(b: Button) -> void:
+	var ink := GOLD
+	if b.disabled:
+		ink = MUTED.darkened(0.35)
+	elif b.is_hovered():
+		ink = GOLD.lightened(0.4)
+	var block := 3.0
+	var at := ((b.size - Vector2(REROLL_ICON[0].length(), REROLL_ICON.size()) * block) / 2.0).floor()
+	if b.is_pressed():
+		at.y += block
+	for layer in 2:
+		for row in REROLL_ICON.size():
+			var line: String = REROLL_ICON[row]
+			for column in line.length():
+				if line[column] != "#":
+					continue
+				var cell := at + Vector2(column, row) * block
+				if layer == 0:
+					# The dark edge under and to the right of every block.
+					b.draw_rect(Rect2(cell + Vector2(block, block), Vector2(block, block)), Color(INK, 0.9))
+				else:
+					b.draw_rect(Rect2(cell, Vector2(block, block)), ink if row < 7 else ink.darkened(0.18))
+
+
 ## Hover feedback for any control: a quick scale-up around its centre.
 static func juice(c: Control, amount := 1.06) -> void:
 	c.mouse_entered.connect(func():
@@ -322,3 +370,57 @@ static func item_tip(def: ItemDef, note := "") -> String:
 	if note != "":
 		text += "\n[color=%s]%s[/color]" % [hex(BLUE), Loc.t(note)]
 	return text
+
+
+## How something looks to a player who is groggy: it sways and leans as if
+## the room were turning, and goes the colour of the drink. With `warp`, the
+## rows and columns of the picture also slide past each other by that many
+## of its own pixels (not for text: the letters share one picture).
+const QUEASY_SHADER := "shader_type canvas_item;
+
+uniform float phase = 0.0;
+uniform float warp = 0.0;
+uniform vec2 extent = vec2(16.0, 16.0);
+uniform vec3 bile : source_color = vec3(0.5, 0.6, 0.24);
+varying vec4 ink;
+
+void vertex() {
+	float t = TIME * 1.7 + phase;
+	VERTEX.x += (VERTEX.y - extent.y * 0.5) * sin(t) * 0.14 + sin(t * 0.6) * 1.5;
+	VERTEX.y += cos(t * 0.8) * 1.5;
+	ink = COLOR;
+}
+
+void fragment() {
+	vec4 color = COLOR;
+	if (warp > 0.0) {
+		vec2 cell = floor(UV / TEXTURE_PIXEL_SIZE);
+		float t = TIME * 2.3 + phase;
+		cell.x += floor(sin(cell.y * 0.35 + t) * warp + 0.5);
+		cell.y += floor(sin(cell.x * 0.3 + t * 0.7) * warp * 0.5 + 0.5);
+		vec2 uv = (cell + 0.5) * TEXTURE_PIXEL_SIZE;
+		color = texture(TEXTURE, uv) * ink;
+		if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+			color.a = 0.0;
+		}
+	}
+	float light = dot(color.rgb, vec3(0.3, 0.6, 0.1));
+	color.rgb = mix(color.rgb, bile * (0.5 + light * 1.4), 0.3);
+	COLOR = color;
+}
+"
+
+
+## The look of something `extent` big seen by a groggy player (see
+## QUEASY_SHADER). `phase` keeps neighbours from swaying together.
+static func queasy(extent: Vector2, phase: float, warp := 0.0, bile := Color("7f9a3c")) -> ShaderMaterial:
+	if _queasy == null:
+		_queasy = Shader.new()
+		_queasy.code = QUEASY_SHADER
+	var look := ShaderMaterial.new()
+	look.shader = _queasy
+	look.set_shader_parameter("extent", extent)
+	look.set_shader_parameter("phase", phase)
+	look.set_shader_parameter("warp", warp)
+	look.set_shader_parameter("bile", bile)
+	return look

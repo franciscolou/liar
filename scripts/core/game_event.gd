@@ -19,7 +19,7 @@ extends RefCounted
 ##   item_buying {player, item, slot}           before the item is shown in the inventory
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
 ##   shop_restocked {slot} / shop_rerolled {player}
-##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item}
+##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item, index}
 ##   item_stolen {thief, victim, item, index}   a held item changes inventory as it is
 ##     (index: where it was in the victim's inventory)
 ##   item_missed {thief, victim}                the victim had no item to take

@@ -8,6 +8,9 @@ var alive := true
 var morale := 3
 var coins := 0
 var cards: Array = []  # character ids (StringName)
+## The cards an eliminated player was holding: they stay on the table, face
+## up, out of the deck for the rest of the match.
+var left: Array = []
 var items: Array = []  # ItemInstance
 ## status id -> {expires, turns, by, blocks}. See GameEngine.add_status.
 var statuses: Dictionary = {}

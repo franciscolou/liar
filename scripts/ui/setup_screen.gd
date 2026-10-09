@@ -28,6 +28,41 @@ const CYCLE_ICON: Array[String] = [
 	"...#...#.",
 	"....###..",
 ]
+## The arrow beside the title of the house rules: folded away, and open.
+const FOLDED_ICON: Array[String] = [
+	"#...",
+	"##..",
+	"###.",
+	"####",
+	"###.",
+	"##..",
+	"#...",
+]
+const OPEN_ICON: Array[String] = [
+	"#######",
+	".#####.",
+	"..###..",
+	"...#...",
+]
+## The character being read, behind the text: its art in one colour, faint,
+## melting into the panel at the edges.
+const GHOST_SHADER := "shader_type canvas_item;
+
+uniform vec3 tint : source_color = vec3(0.86, 0.68, 0.36);
+uniform float strength = 0.3;
+
+void fragment() {
+	vec4 art = texture(TEXTURE, UV);
+	float light = dot(art.rgb, vec3(0.299, 0.587, 0.114));
+	float edge = smoothstep(0.0, 0.3, UV.x) * smoothstep(1.0, 0.8, UV.x)
+			* smoothstep(0.0, 0.12, UV.y) * smoothstep(1.0, 0.6, UV.y);
+	COLOR = vec4(tint * (0.25 + light * 1.1), art.a * strength * edge * COLOR.a);
+}"
+
+## Whether the house rules are unfolded. Folded away, their place is where
+## the abilities of the characters are read. It is kept for the next time
+## this screen opens (back from a match).
+static var _rules_open := false
 
 var _room: Node
 var _host := false
@@ -49,6 +84,13 @@ var _summary: Label
 var _start: Button
 var _resets: Array = []  # {button, is_default: Callable}
 var _problem: Label
+var _rules: VBoxContainer
+var _rules_arrow: Control
+## Where the abilities of a character are read, in the place of the rules.
+var _reader: RichTextLabel
+var _read: StringName  # the character in the reader
+var _ghost: TextureRect
+var _ghost_tween: Tween
 
 
 func _ready() -> void:
@@ -67,7 +109,7 @@ func _ready() -> void:
 
 	var bg := TextureRect.new()
 	# The table itself, before anyone sits down.
-	bg.texture = UI.tex("res://assets/background.png")
+	bg.texture = UI.tex("res://assets/table.png")
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -190,20 +232,117 @@ func _build_players(box: VBoxContainer) -> void:
 		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove})
 
 	box.add_child(HSeparator.new())
-	box.add_child(_header("HOUSE RULES", 16, _reset_rules, _rules_default))
-	box.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
+	box.add_child(_rules_header())
+	_rules = VBoxContainer.new()
+	_rules.add_theme_constant_override("separation", 5)
+	box.add_child(_rules)
+	_rules.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
 			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
-	box.add_child(_stepper("Starting coins", "",
+	_rules.add_child(_stepper("Starting coins", "",
 			func(): return _config.start_coins, func(v): _config.start_coins = v, 0, 10))
-	box.add_child(_stepper("Income per turn", "",
+	_rules.add_child(_stepper("Income per turn", "",
 			func(): return _config.income, func(v): _config.income = v, 0, 5))
-	box.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
+	_rules.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
 			func(): return _config.doubt_cost, func(v): _config.doubt_cost = v, 0, 6))
-	box.add_child(_stepper("Shop slots", "",
+	_rules.add_child(_stepper("Shop slots", "",
 			func(): return _config.shop_slots, func(v): _config.shop_slots = v, 1, 4))
-	box.add_child(_stepper("Animation speed", "",
+	_rules.add_child(_stepper("Animation speed", "",
 			_anim_speed_index, func(v): _config.anim_speed = ANIM_SPEEDS[v] / 100.0,
 			0, ANIM_SPEEDS.size() - 1, false, 1, "%d%%", ANIM_SPEEDS))
+	_reader = RichTextLabel.new()
+	_reader.bbcode_enabled = true
+	_reader.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_reader.add_theme_font_size_override("normal_font_size", 15)
+	_reader.add_theme_font_size_override("bold_font_size", 15)
+	box.add_child(_reader)
+	_ghost = TextureRect.new()
+	_ghost.show_behind_parent = true
+	_ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ghost.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_ghost.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	# The right side of the reader, where the lines of text end.
+	_ghost.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ghost.anchor_left = 0.56
+	var look := ShaderMaterial.new()
+	look.shader = Shader.new()
+	look.shader.code = GHOST_SHADER
+	_ghost.material = look
+	_reader.add_child(_ghost)
+
+
+## The title of the house rules, which folds them away and brings them back.
+func _rules_header() -> Control:
+	var row := HBoxContainer.new()
+	row.custom_minimum_size = Vector2(0, 26)
+	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_rules_arrow = Control.new()
+	_rules_arrow.custom_minimum_size = Vector2(14, 0)
+	_rules_arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rules_arrow.draw.connect(func():
+		_draw_bits(_rules_arrow, OPEN_ICON if _rules_open else FOLDED_ICON, UI.GOLD))
+	row.add_child(_rules_arrow)
+	var title := UI.label("HOUSE RULES", 16, UI.GOLD, true)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(title)
+	row.add_child(_reset_button(_reset_rules, _rules_default))
+	row.mouse_entered.connect(func(): title.add_theme_color_override("font_color", UI.CREAM))
+	row.mouse_exited.connect(func(): title.add_theme_color_override("font_color", UI.GOLD))
+	row.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_set_rules_open(not _rules_open))
+	TipLayer.attach(row, func() -> String:
+		return Loc.t("Click to fold the rules away. While they are open, right-click a character to read its abilities here."
+				if _rules_open else "Click to show the rules."))
+	return row
+
+
+func _set_rules_open(open: bool) -> void:
+	_rules_open = open
+	if TipLayer.current != null:
+		TipLayer.current.hide_all()
+	_redraw_reader()
+
+
+## A card of the grid was hovered (`asked` false) or right-clicked. Hovering
+## only reaches the reader while the rules are folded away; asking for it
+## folds them.
+func _read_character(character_id: StringName, asked: bool) -> void:
+	if _rules_open and not asked:
+		return
+	_read = character_id
+	if _rules_open:
+		_set_rules_open(false)
+	else:
+		_redraw_reader()
+
+
+func _on_card_input(event: InputEvent, character_id: StringName) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		_read_character(character_id, true)
+
+
+func _redraw_reader() -> void:
+	_rules.visible = _rules_open
+	_rules_arrow.queue_redraw()
+	_reader.visible = not _rules_open
+	var def := Content.character(_read) if _read != &"" else null
+	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Hover a character to read its abilities here.")]
+	if def != null:
+		text = UI.character_tip(def, _cards[_read].note)
+	# Left alone when nothing changed, so a long text stays where it was scrolled to.
+	if _reader.text != text:
+		_reader.text = text
+	var art := UI.card_art(def.texture_path) if def != null else null
+	if _ghost.texture != art:
+		_ghost.texture = art
+		_ghost.texture_filter = UI.card_filter(art)
+		if _ghost_tween != null:
+			_ghost_tween.kill()
+		_ghost.modulate.a = 0.0
+		_ghost_tween = _ghost.create_tween()
+		_ghost_tween.tween_property(_ghost, "modulate:a", 1.0, 0.25)
 
 
 func _build_match(box: VBoxContainer) -> void:
@@ -247,6 +386,10 @@ func _build_match(box: VBoxContainer) -> void:
 		var card := CardView.new(card_scale)
 		card.position = Vector2(roundf(column * step + (step - card.size.x) / 2.0), top)
 		card.set_card(def.id, true)
+		# The abilities are read in the place of the house rules, not over the cards.
+		card.tips = false
+		card.mouse_entered.connect(_read_character.bind(def.id, false))
+		card.gui_input.connect(_on_card_input.bind(def.id))
 		if _host:
 			card.clicked.connect(_toggle_character.bind(def.id))
 		grid.add_child(card)
@@ -463,6 +606,7 @@ func _redraw() -> void:
 		card.note = "" if _random or not _host else ("In the match. Click to remove." if chosen else "Click to add to the match.")
 	for item_id: StringName in _item_views:
 		_item_views[item_id].modulate = Color.WHITE if _items_on[item_id] else Color(0.3, 0.28, 0.28)
+	_redraw_reader()
 
 	var count := _character_count()
 	var copies := maxi(_config.copies_per_character, _min_copies())
@@ -507,7 +651,7 @@ func _reset_button(action: Callable, is_default: Callable) -> Button:
 	var icon := Control.new()
 	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	icon.draw.connect(_draw_cycle.bind(icon))
+	icon.draw.connect(_draw_bits.bind(icon, CYCLE_ICON, UI.CREAM))
 	b.add_child(icon)
 	b.pressed.connect(func():
 		action.call()
@@ -516,14 +660,14 @@ func _reset_button(action: Callable, is_default: Callable) -> Button:
 	return b
 
 
-## The CYCLE_ICON bitmap, drawn as square pixels to match the pixel art.
-func _draw_cycle(icon: Control) -> void:
+## A bitmap of text rows, drawn as square pixels to match the pixel art.
+func _draw_bits(icon: Control, bits: Array[String], color: Color) -> void:
 	var cell := 2.0
-	var origin := ((icon.size - Vector2(CYCLE_ICON[0].length(), CYCLE_ICON.size()) * cell) / 2.0).round()
-	for y in CYCLE_ICON.size():
-		for x in CYCLE_ICON[y].length():
-			if CYCLE_ICON[y][x] == "#":
-				icon.draw_rect(Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell)), UI.CREAM)
+	var origin := ((icon.size - Vector2(bits[0].length(), bits.size()) * cell) / 2.0).round()
+	for y in bits.size():
+		for x in bits[y].length():
+			if bits[y][x] == "#":
+				icon.draw_rect(Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell)), color)
 
 
 func _rules_default() -> bool:

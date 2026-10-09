@@ -551,14 +551,17 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
 	if not await pay(player, price(player, def.price), &"shop"):
 		return
 	player.turn["busy"] = true
-	if stocked:
-		shop[slot] = null
 	var instance := ItemInstance.new(def)
 	await fire(&"item_buying", {"player": player, "item": instance, "slot": slot})
+	# An item bought out of sight (the Spy's Low Profile) leaves the shelf as
+	# it was: a slot that changed would tell the table what was taken.
+	var unseen := instance.hidden and player.alive
+	if stocked and not unseen:
+		shop[slot] = null
 	if player.alive:
 		player.items.append(instance)
 		await fire(&"item_bought", {"player": player, "item": instance, "slot": slot})
-	if stocked:
+	if stocked and not unseen:
 		shop[slot] = _random_item()
 		await fire(&"shop_restocked", {"slot": slot})
 
@@ -583,11 +586,13 @@ func give_item(player: PlayerState, def: ItemDef, hidden := false) -> ItemInstan
 	return instance
 
 
-## Removes a held item without using it (shields and mirrors breaking).
+## Removes a held item without using it (shields and mirrors breaking, the
+## Bomber's "Demolition").
 func break_item(player: PlayerState, instance: ItemInstance) -> void:
+	var index := player.items.find(instance)
 	player.items.erase(instance)
 	instance.hidden = false
-	await fire(&"item_broken", {"player": player, "item": instance})
+	await fire(&"item_broken", {"player": player, "item": instance, "index": index})
 
 
 ## Moves a held item from one inventory to another. A hidden item stays
@@ -754,7 +759,7 @@ func _resolve(play: Play) -> void:
 ## acts on this `targeted` event: only one does, and a holder with more than
 ## one kind of them chooses which.
 func guards(instance: ItemInstance, holder: PlayerState, event: GameEvent) -> bool:
-	if event.type != &"targeted" or event.data.target != holder:
+	if event.type != &"targeted" or event.data.target != holder or event.data.play.source.unstoppable:
 		return false
 	if not event.data.has("guard"):
 		event.data["guard"] = await _choose_guard(holder, event.data.play)
@@ -913,8 +918,8 @@ func heal(player: PlayerState, amount: int) -> bool:
 
 func _eliminate(player: PlayerState, killer: PlayerState, play: Play) -> void:
 	player.alive = false
-	deck.append_array(player.cards)
-	_shuffle(deck)
+	# What they held stays on the table for all to see: it is out of the match.
+	player.left = player.cards.duplicate()
 	player.cards.clear()
 	player.items.clear()
 	player.statuses.clear()

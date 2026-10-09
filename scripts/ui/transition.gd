@@ -4,16 +4,18 @@ extends CanvasLayer
 ## uncovers the new one. `Transition.go(path, Transition.DOORS)` takes the
 ## place of `change_scene_to_file(path)`.
 ##
-## Each style is something of the saloon, drawn in code in the blocks of the
-## shop stall:
+## Each style is something of the saloon, drawn in code, in blocks:
 ## - DOORS: the two leaves of a plank door slam shut and swing open again
 ##   (walking into the saloon, or out of it);
 ## - KEYHOLE: the screen closes down to a keyhole in a door and opens from it
 ##   (knocking on the door of a room);
-## - DEAL: card backs are dealt all over the screen and turned over (the
-##   match begins);
-## - GATHER: the cards are thrown in, swept into one deck and taken away (the
-##   match is over).
+## - DEAL: card backs are dealt all over the screen (the match begins);
+## - GATHER: the cards are thrown in from all sides (the match is over).
+## Either way the cards leave the same way: swept into one deck in the middle
+## of the screen, which is then taken away.
+##
+## The wood of both doors is one shader (WOOD): boards with their own tone,
+## grain that wanders and goes round the knots, worn patches, nails.
 ##
 ## A second `go` before the first one is over only changes where it ends.
 ## Nothing here touches the state of a match: the dice are its own.
@@ -29,7 +31,7 @@ const GATHER := &"gather"
 const TIMES := {
 	DOORS: [0.45, 0.7],
 	KEYHOLE: [0.55, 0.65],
-	DEAL: [0.75, 0.75],
+	DEAL: [0.75, 0.9],
 	GATHER: [0.6, 0.9],
 }
 ## The least time the screen stays covered.
@@ -47,6 +49,7 @@ var _phase := Phase.IDLE
 var _t := 0.0  # how far into the phase, 0 to 1 (seconds, while it holds)
 var _last := 0
 var _screen: Screen
+var _doors: ColorRect
 var _hole: ColorRect
 var _sfx: Dictionary = {}  # name -> AudioStreamPlayer
 
@@ -73,16 +76,23 @@ func _init() -> void:
 	_screen.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_screen.hide()
 	add_child(_screen)
-	_hole = ColorRect.new()
-	_hole.size = SIZE
-	_hole.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_doors = _shaded(DOORS_SHADER)
+	_hole = _shaded(KEYHOLE_SHADER)
+	set_process(false)
+
+
+## A sheet over the whole screen, painted by the shader in `code`.
+func _shaded(code: String) -> ColorRect:
+	var sheet := ColorRect.new()
+	sheet.size = SIZE
+	sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var look := ShaderMaterial.new()
 	look.shader = Shader.new()
-	look.shader.code = KEYHOLE_SHADER
-	_hole.material = look
-	_hole.hide()
-	add_child(_hole)
-	set_process(false)
+	look.shader.code = code
+	sheet.material = look
+	sheet.hide()
+	add_child(sheet)
+	return sheet
 
 
 func _go(path: String, style: StringName, cut: bool) -> void:
@@ -137,13 +147,14 @@ func _process(_delta: float) -> void:
 					_change()
 				elif _t >= HOLD:
 					_enter(Phase.UNCOVER)
-					_play({DOORS: "ui_doors_open", KEYHOLE: "ui_unlock", DEAL: "ui_flip", GATHER: "ui_gather"}[_style])
+					_play({DOORS: "ui_doors_open", KEYHOLE: "ui_unlock", DEAL: "ui_gather", GATHER: "ui_gather"}[_style])
 		Phase.UNCOVER:
 			_t = minf(_t + delta / TIMES[_style][1], 1.0)
 			if _t >= 1.0:
 				_enter(Phase.IDLE)
 				set_process(false)
 				_screen.hide()
+				_doors.hide()
 				_hole.hide()
 				offset = Vector2.ZERO
 				return
@@ -169,6 +180,11 @@ func _show() -> void:
 	_screen.cover = cover
 	_screen.leaving = _phase == Phase.UNCOVER
 	_screen.queue_redraw()
+	_doors.visible = _style == DOORS
+	if _style == DOORS:
+		# They fall shut faster and faster, and open the way a door is pushed.
+		var shut := smoothstep(0.0, 1.0, cover) if _phase == Phase.UNCOVER else cover * cover
+		(_doors.material as ShaderMaterial).set_shader_parameter("shut", shut)
 	_hole.visible = _style == KEYHOLE
 	if _style == KEYHOLE:
 		# Slow near the keyhole, fast when the whole door is out of sight.
@@ -202,15 +218,242 @@ func _play(sound: String) -> void:
 		_sfx[sound].play()
 
 
+## Shared by the two doors. Everything is counted in cells (the blocks the
+## door is drawn in), and a board is a step of tone(): dark to light.
+const WOOD := "
+const vec2 SCREEN = vec2(1152.0, 648.0);
+const vec3 BRASS_LIT = vec3(0.96, 0.86, 0.52);
+const vec3 BRASS = vec3(0.902, 0.737, 0.298);
+const vec3 BRASS_SHADE = vec3(0.72, 0.565, 0.184);
+const vec3 BRASS_DARK = vec3(0.49, 0.337, 0.086);
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float soft(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+vec3 tone(float level) {
+	if (level < 0.5) return vec3(0.086, 0.047, 0.031);
+	if (level < 1.5) return vec3(0.118, 0.063, 0.039);
+	if (level < 2.5) return vec3(0.165, 0.086, 0.051);
+	if (level < 3.5) return vec3(0.200, 0.110, 0.071);
+	if (level < 4.5) return vec3(0.231, 0.133, 0.086);
+	if (level < 5.5) return vec3(0.290, 0.180, 0.102);
+	return vec3(0.40, 0.26, 0.145);
+}
+
+// The wood of board `id` at cell `c`. The grain runs along y; the board is
+// `width` cells across.
+float grain(vec2 c, float id, float width) {
+	float level = 3.0 + floor(hash(vec2(id, 3.0)) * 2.0);
+	// A knot now and then, and the grain goes round it.
+	float stretch = floor(c.y / 110.0);
+	vec2 roll = vec2(hash(vec2(id, stretch)), hash(vec2(stretch + 7.0, id)));
+	vec2 knot = vec2(floor(4.0 + roll.x * (width - 8.0)), floor(stretch * 110.0 + 15.0 + roll.y * 80.0));
+	vec2 off = (c - knot) * vec2(1.0, 0.45);
+	float ring = hash(vec2(id + 13.0, stretch + 5.0)) < 0.45 ? length(off) : 99.0;
+	float x = c.x - sign(off.x) * floor(3.0 * exp(-ring * ring / 40.0) + 0.5);
+	x += floor(sin(c.y * 0.05 + id * 5.0) * 1.2 + 0.5);
+	// Streaks, each broken into pieces of its own length.
+	float streak = hash(vec2(x, id + 1.0));
+	float piece = hash(vec2(x + id * 31.0, floor((c.y + streak * 90.0) / (26.0 + streak * 44.0))));
+	if (streak < 0.24 && piece < 0.75) {
+		level -= 1.0;
+	} else if (streak > 0.84 && piece < 0.6) {
+		level += 1.0;
+	}
+	// Worn patches, dithered.
+	float wear = soft(c * vec2(0.11, 0.035) + id * 17.0);
+	if (mod(c.x + c.y, 2.0) < 1.0) {
+		level += wear > 0.68 ? 1.0 : (wear < 0.27 ? -1.0 : 0.0);
+	}
+	if (ring < 1.6) {
+		level = 1.0;
+	} else if (ring < 2.7) {
+		level = 2.0;
+	} else if (ring < 3.6) {
+		level = 5.0;
+	} else if (ring < 4.5) {
+		level = 2.0;
+	}
+	return level;
+}
+
+// A wall of upright planks `width` cells wide. With `cut`, each is made of
+// lengths of that many cells, butted and nailed where they meet.
+float planks(vec2 c, float width, float cut) {
+	float n = floor(c.x / width);
+	float x = c.x - n * width;
+	float id = n * 3.0;
+	float along = 50.0;
+	if (cut > 0.0) {
+		float y = c.y + floor(hash(vec2(n, 21.0)) * cut);
+		id += floor(y / cut) * 57.0;
+		along = mod(y, cut);
+	}
+	float level = grain(vec2(x, c.y), id, width);
+	if (x < 1.0) {
+		return 0.0;
+	}
+	if (x < 2.0) {
+		level += 1.0;
+	} else if (x >= width - 1.0) {
+		level -= 1.0;
+	}
+	if (cut > 0.0) {
+		if (along < 1.0) {
+			level = 1.0;
+		} else if (along < 2.0) {
+			level += 1.0;
+		}
+		bool column = (x >= 4.0 && x < 6.0) || (x >= width - 6.0 && x < width - 4.0);
+		bool row = (along >= 5.0 && along < 7.0) || (along >= cut - 6.0 && along < cut - 4.0);
+		if (column && row) {
+			// A nail head, lit from the top left.
+			bool lit = (x == 4.0 || x == width - 6.0) && (along == 5.0 || along == cut - 6.0);
+			level = lit ? 6.0 : 0.0;
+		}
+	}
+	return level;
+}
+"
+
+
+## The saloon doors: two leaves of planks on strap hinges, with brass-studded
+## rails, a stile where they meet and a pull. The right leaf is the left one
+## in a mirror. `shut` goes from 0 (out of sight) to 1 (the leaves meet).
+const DOORS_SHADER := "shader_type canvas_item;
+" + WOOD + "
+uniform float shut = 0.0;
+const float PX = 2.0;
+// In cells: the leaf, its rails, the stile at each edge and its planks.
+const vec2 LEAF = vec2(288.0, 324.0);
+const float RAIL = 15.0;
+const float HINGED = 9.0;
+const float STILE = 13.0;
+const float PLANK = 19.0;
+const vec2 PULL = vec2(255.0, 150.0);
+const vec3 IRON = vec3(0.105, 0.095, 0.1);
+const vec3 IRON_LIT = vec3(0.3, 0.28, 0.29);
+
+vec3 door(vec2 c) {
+	vec3 color = tone(planks(vec2(c.x - HINGED, c.y), PLANK, 0.0));
+	// Which rail this is (0: none) and how far down it.
+	float rail = 0.0;
+	float y = 0.0;
+	float mid = floor((LEAF.y - RAIL) * 0.5);
+	if (c.y < RAIL) {
+		rail = 1.0;
+		y = c.y;
+	} else if (c.y >= mid && c.y < mid + RAIL) {
+		rail = 2.0;
+		y = c.y - mid;
+	} else if (c.y >= LEAF.y - RAIL) {
+		rail = 3.0;
+		y = c.y - LEAF.y + RAIL;
+	} else {
+		// The shadow a rail throws on the planks under it.
+		float under = c.y < mid ? c.y - RAIL : c.y - mid - RAIL;
+		color *= under < 1.0 ? 0.55 : (under < 2.0 ? 0.75 : (under < 3.0 ? 0.9 : 1.0));
+	}
+	if (c.x < HINGED) {
+		color = tone(c.x < 1.0 ? 0.0 : (c.x >= HINGED - 1.0 ? 1.0 : grain(c, 300.0, HINGED) + 1.0));
+	}
+	if (rail > 0.0) {
+		// The grain of a rail runs across.
+		float level = grain(vec2(y, c.x), 200.0 + rail, RAIL) + 1.0;
+		color = tone(y < 1.0 ? 6.0 : (y >= RAIL - 1.0 ? 1.0 : level));
+		if (y == 3.0 || y == RAIL - 4.0) {
+			color = BRASS_DARK;
+		}
+		// A brass stud over every plank.
+		vec2 stud = vec2(mod(c.x - HINGED, PLANK) - 8.0, y - 6.0);
+		if (c.x >= HINGED && stud.x >= 0.0 && stud.x < 3.0 && stud.y >= 0.0 && stud.y < 3.0) {
+			color = stud.x + stud.y < 1.0 ? BRASS_LIT : (stud.x > 1.0 || stud.y > 1.0 ? BRASS_DARK : BRASS);
+		}
+		if (rail != 2.0) {
+			// The strap of a hinge: a knuckle at the edge, then a tongue
+			// that narrows to a point, riveted down.
+			float reach = 78.0;
+			float half_width = min(3.0, floor((reach - c.x) / 3.0));
+			if (c.x < 5.0 && y >= 2.0 && y < RAIL - 2.0) {
+				color = c.x == 1.0 ? IRON_LIT : IRON;
+			} else if (c.x < reach && abs(y - 7.0) <= half_width) {
+				color = y - 7.0 == -half_width ? IRON_LIT : IRON;
+				if (y == 7.0 && mod(c.x, 14.0) == 9.0) {
+					color = IRON_LIT;
+				}
+			}
+		}
+	}
+	// The stile where the two leaves meet.
+	float stile = c.x - LEAF.x + STILE;
+	if (stile >= 0.0) {
+		color = tone(stile < 1.0 ? 6.0 : grain(vec2(stile, c.y), 400.0, STILE) + 1.0);
+		if (stile == 4.0) {
+			color = BRASS_SHADE;
+		} else if (stile >= STILE - 2.0) {
+			color = tone(0.0);
+		} else if (stile >= STILE - 3.0) {
+			color = tone(2.0);
+		}
+	}
+	// The pull: a plate with a ring, in blocks of two cells.
+	vec2 plate = c - PULL;
+	vec2 cast = plate - vec2(2.0, 3.0);
+	if (cast.x >= 0.0 && cast.x < 12.0 && cast.y >= 0.0 && cast.y < 24.0) {
+		color *= 0.6;
+	}
+	if (plate.x >= 0.0 && plate.x < 12.0 && plate.y >= 0.0 && plate.y < 24.0) {
+		vec2 b = floor(plate / 2.0);
+		bool corner = (b.x == 0.0 || b.x == 5.0) && (b.y == 0.0 || b.y == 11.0);
+		bool hole = b.x >= 2.0 && b.x <= 3.0 && b.y >= 4.0 && b.y <= 7.0;
+		if (!corner && !hole) {
+			if (b.x >= 1.0 && b.x <= 4.0 && b.y >= 3.0 && b.y <= 8.0) {
+				color = BRASS_DARK;
+			} else if ((b.x == 1.0 || b.x == 4.0) && (b.y == 1.0 || b.y == 10.0)) {
+				color = vec3(0.945, 0.89, 0.753);
+			} else if (b.x == 5.0 || b.y == 11.0) {
+				color = BRASS_SHADE;
+			} else {
+				color = plate.x < 1.0 || plate.y < 1.0 ? BRASS_LIT : BRASS;
+			}
+		}
+	}
+	// The lamps hang high: the door is darker towards the floor.
+	return color * (1.05 - 0.04 * floor(c.y / 54.0));
+}
+
+void fragment() {
+	vec2 at = UV * SCREEN;
+	float leaf = SCREEN.x * 0.5;
+	// From the nearer side of the screen, and from the hinges of that leaf.
+	float side = at.x < leaf ? at.x : SCREEN.x - at.x;
+	float x = side + floor((1.0 - shut) * leaf / PX) * PX;
+	if (x < leaf) {
+		COLOR = vec4(door(floor(vec2(x, at.y) / PX)), 1.0);
+	} else {
+		// The room goes dark, and each leaf throws a shadow ahead of it.
+		float cast = max(0.3 - floor((x - leaf) / 6.0) * 0.05, 0.0) * min((1.0 - shut) * 8.0, 1.0);
+		COLOR = vec4(0.0, 0.0, 0.0, 0.45 * shut + cast * (1.0 - 0.45 * shut));
+	}
+}
+"
+
+
 ## The door the keyhole is cut in: planks, a brass escutcheon round the hole
 ## and, through the hole, the screen. `open` goes from 0 (shut) to 1 (the
 ## hole is wider than the screen).
-const KEYHOLE_SHADER := "
-shader_type canvas_item;
-
+const KEYHOLE_SHADER := "shader_type canvas_item;
+" + WOOD + "
 uniform float open = 1.0;
-const vec2 SCREEN = vec2(1152.0, 648.0);
-const float BLOCK = 6.0;
+const float BLOCK = 3.0;
 const float WIDEST = 2400.0;
 
 float keyhole(vec2 p, float r) {
@@ -221,66 +464,38 @@ float keyhole(vec2 p, float r) {
 }
 
 void fragment() {
-	vec2 px = (floor(UV * SCREEN / BLOCK) + 0.5) * BLOCK;
+	vec2 cell = floor(UV * SCREEN / BLOCK);
+	vec2 px = (cell + 0.5) * BLOCK;
 	float d = keyhole(px - SCREEN * 0.5 - vec2(0.0, 10.0), max(open * WIDEST, 0.001));
-	float plank = floor(px.x / 48.0);
-	vec3 wood = mod(plank, 2.0) < 1.0 ? vec3(0.231, 0.133, 0.086) : vec3(0.2, 0.11, 0.07);
-	if (mod(px.x, 48.0) < BLOCK) {
-		wood = vec3(0.118, 0.063, 0.039);
-	}
-	// The grain: a few strokes, always the same ones on the same plank.
-	float mark = fract(sin(plank * 12.9898 + floor(px.y / 54.0) * 78.233) * 43758.5453);
-	if (abs(mod(px.x, 48.0) - 12.0 - mark * 24.0) < BLOCK * 0.5 && mod(px.y, 54.0) < 12.0 + mark * 30.0) {
-		wood = vec3(0.165, 0.086, 0.051);
-	}
-	vec3 color = wood * 0.8;
-	if (d < BLOCK) {
+	vec3 wood = tone(planks(cell, 20.0, 150.0)) * 0.9;
+	vec3 color = wood;
+	// Lit from the top left.
+	bool lit = px.x + px.y < SCREEN.x * 0.5 + SCREEN.y * 0.5;
+	if (d < 6.0) {
 		color = vec3(0.086, 0.047, 0.031);
-	} else if (d < BLOCK * 3.0) {
-		// Lit from the top left.
-		color = px.x + px.y < SCREEN.x * 0.5 + SCREEN.y * 0.5 ? vec3(0.902, 0.737, 0.298) : vec3(0.72, 0.56, 0.2);
-	} else if (d < BLOCK * 4.0) {
-		color = vec3(0.49, 0.337, 0.086);
-	} else if (d < BLOCK * 5.0) {
-		color = wood * 0.45;
+	} else if (d < 9.0) {
+		color = lit ? BRASS_SHADE : BRASS_LIT;
+	} else if (d < 21.0) {
+		color = lit ? BRASS : BRASS_SHADE;
+		if (d >= 13.5 && d < 16.5) {
+			color = lit ? BRASS_SHADE : BRASS_DARK;
+		}
+	} else if (d < 24.0) {
+		color = lit ? BRASS_LIT : BRASS_DARK;
+	} else if (d < 27.0) {
+		color = BRASS_DARK;
+	} else if (d < 36.0) {
+		color = wood * (d < 30.0 ? 0.4 : (d < 33.0 ? 0.6 : 0.8));
 	}
 	COLOR = vec4(color, d < 0.0 && open > 0.0005 ? 0.0 : 1.0);
 }
 "
 
 
-## What is drawn over the scene: the doors or the cards. It also keeps the
-## mouse away from the screen underneath.
+## What is drawn over the scene when it is cards. Whatever the style, it also
+## keeps the mouse away from the screen underneath.
 class Screen extends Control:
-	const PX := 2.0
 	const INK := Color("160c08")
-	const WALL: Array[Color] = [Color("3b2216"), Color("331c12")]
-	const SEAM := Color("1e100a")
-	const GRAIN := Color("2a160d")
-	const FRAME := Color("4a2e1a")
-	const FRAME_LIGHT := Color("6b4526")
-	const FRAME_DARK := Color("2e1b0e")
-	const BRASS := Color("e6bc4c")
-	const BRASS_SHADE := Color("b8902f")
-	const BRASS_DARK := Color("7d5616")
-	const PLANK := 48.0
-	const RAIL := 30.0
-	const STILE := 26.0
-	## The pull of a door: a plate with a ring, in blocks of 4 px.
-	const PULL := [
-		".####.",
-		"#o##o#",
-		"######",
-		"#+--+#",
-		"#|..|#",
-		"#|..|#",
-		"#|..|#",
-		"#|..|#",
-		"#+--+#",
-		"######",
-		"#o##o#",
-		".####.",
-	]
 	const CARD := Vector2(110, 200)
 	const COLUMNS := 12
 	const ROWS := 4
@@ -312,7 +527,6 @@ class Screen extends Control:
 			var out := (slot - SIZE * 0.5).normalized()
 			_cards.append({
 				"slot": slot,
-				"cell": cell,
 				"turn": randf_range(-0.07, 0.07),
 				"spin": randf_range(-2.5, 2.5),
 				"order": float(order[i]) / (COLUMNS * ROWS - 1),
@@ -322,87 +536,9 @@ class Screen extends Control:
 		_cards.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.order < b.order)
 
 	func _draw() -> void:
-		match style:
-			DOORS:
-				_draw_doors()
-			DEAL, GATHER:
-				_draw_cards()
-
-	# --- the doors -----------------------------------------------------------------
-
-	func _draw_doors() -> void:
-		# They fall shut faster and faster, and open the way a door is pushed.
-		var shut := cover * cover if not leaving else smoothstep(0.0, 1.0, cover)
-		var leaf := SIZE.x * 0.5
-		draw_rect(Rect2(Vector2.ZERO, SIZE), Color(0, 0, 0, 0.45 * shut))
-		for side in 2:
-			# The right leaf is the left one in a mirror.
-			var flip := -1.0 if side == 1 else 1.0
-			var x := (shut - 1.0) * leaf
-			draw_set_transform(Vector2(SIZE.x if side == 1 else 0.0, 0.0), 0.0, Vector2(flip, 1.0))
-			_draw_leaf(x, leaf, 1.0 - shut)
-		draw_set_transform(Vector2.ZERO)
-
-	## One leaf, `leaf` wide, with its outer edge at `x`; `ajar` is how far it
-	## is from shut.
-	func _draw_leaf(x: float, leaf: float, ajar: float) -> void:
-		var h := SIZE.y
-		# The shadow it throws on the floor ahead of it.
-		for step in 6:
-			draw_rect(Rect2(x + leaf + step * 6.0, 0, 6.0, h), Color(0, 0, 0, (0.3 - step * 0.05) * minf(ajar * 8.0, 1.0)))
-		draw_rect(Rect2(x, 0, leaf, h), INK)
-		var plank := 0
-		var left := x
-		while left < x + leaf - STILE:
-			var width := minf(PLANK, x + leaf - STILE - left)
-			draw_rect(Rect2(left, 0, width, h), WALL[plank % 2])
-			draw_rect(Rect2(left, 0, PX, h), SEAM)
-			draw_rect(Rect2(left + PX, 0, PX, h), Color(1, 1, 1, 0.03))
-			for stroke in 7:
-				var mark := plank * 7 + stroke * 13
-				var gx := left + 8.0 + (mark * 5 % 16) * PX
-				var gy := 40.0 + (mark * 37 % 280) * PX
-				if gx < left + width - PX:
-					draw_rect(Rect2(gx, gy, PX, 14.0 + (mark % 5) * 8.0), GRAIN)
-			left += PLANK
-			plank += 1
-		# The rails across the planks, each nailed to every one of them.
-		for y: float in [0.0, (h - RAIL) * 0.5, h - RAIL]:
-			draw_rect(Rect2(x, y, leaf, RAIL), FRAME)
-			draw_rect(Rect2(x, y, leaf, PX), FRAME_LIGHT)
-			draw_rect(Rect2(x, y + RAIL - PX, leaf, PX), FRAME_DARK)
-			draw_rect(Rect2(x, y + RAIL, leaf, PX * 2.0), Color(0, 0, 0, 0.35))
-			draw_rect(Rect2(x, y + 8.0, leaf, PX), BRASS_DARK)
-			draw_rect(Rect2(x, y + RAIL - 10.0, leaf, PX), BRASS_DARK)
-			var nail := x + PLANK * 0.5
-			while nail < x + leaf - STILE:
-				draw_rect(Rect2(nail - 3.0, y + 12.0, 6.0, 6.0), BRASS_DARK)
-				draw_rect(Rect2(nail - 3.0, y + 12.0, 4.0, 4.0), BRASS)
-				nail += PLANK
-		# The stile where the two leaves meet.
-		var stile := x + leaf - STILE
-		draw_rect(Rect2(stile, 0, STILE, h), FRAME)
-		draw_rect(Rect2(stile, 0, PX, h), FRAME_LIGHT)
-		draw_rect(Rect2(stile + 8.0, 0, PX, h), BRASS_SHADE)
-		draw_rect(Rect2(x + leaf - PX * 2.0, 0, PX * 2.0, h), INK)
-		draw_rect(Rect2(x + leaf - PX * 3.0, 0, PX, h), FRAME_DARK)
-		# The pull.
-		var at := Vector2(stile - 40.0, (h - PULL.size() * 4.0) * 0.5)
-		draw_rect(Rect2(at + Vector2(4, 6), Vector2(24, PULL.size() * 4.0)), Color(0, 0, 0, 0.4))
-		for row in PULL.size():
-			var line: String = PULL[row]
-			for column in line.length():
-				var color := BRASS
-				match line[column]:
-					".":
-						continue
-					"o":
-						color = Color("f1e3c0")
-					"-", "|", "+":
-						color = BRASS_DARK
-				if column == line.length() - 1 or row == PULL.size() - 1:
-					color = BRASS_SHADE if color == BRASS else color
-				draw_rect(Rect2(at + Vector2(column, row) * 4.0, Vector2(4, 4)), color)
+		# The doors are a sheet of their own (see DOORS_SHADER).
+		if style == DEAL or style == GATHER:
+			_draw_cards()
 
 	# --- the cards -----------------------------------------------------------------
 
@@ -414,7 +550,6 @@ class Screen extends Control:
 		for card: Dictionary in _cards:
 			var at: Vector2 = card.slot
 			var turn: float = card.turn
-			var squash := Vector2.ONE
 			if not leaving and style == DEAL:
 				# Dealt one by one from the dealer's hand, spinning.
 				var u := clampf((t - card.order * 0.62) / 0.38, 0.0, 1.0)
@@ -431,13 +566,6 @@ class Screen extends Control:
 				var eased := 1.0 - pow(1.0 - u, 3.0)
 				at = (card.from as Vector2).lerp(card.slot, eased)
 				turn += card.spin * 0.5 * (1.0 - eased)
-			elif style == DEAL:
-				# Turned over, in a wave from the top left.
-				var wave: float = (card.cell.x + card.cell.y * 1.5) / (COLUMNS - 1 + (ROWS - 1) * 1.5)
-				var u := clampf((t - wave * 0.6) / 0.4, 0.0, 1.0)
-				if u >= 1.0:
-					continue
-				squash = Vector2(cos(u * PI * 0.5), 1.0 + 0.12 * sin(u * PI))
 			else:
 				# Swept into one deck, which is then taken off the table.
 				var u := clampf((t - card.order * 0.3) / 0.4, 0.0, 1.0)
@@ -446,7 +574,7 @@ class Screen extends Control:
 				turn *= 1.0 - eased * 0.8
 				var away := clampf((t - 0.76) / 0.24, 0.0, 1.0)
 				at.y += away * away * 560.0
-			draw_set_transform(at, turn, squash)
+			draw_set_transform(at, turn)
 			draw_texture_rect(_back, Rect2(-CARD * 0.5 + Vector2(3, 4), CARD), false, Color(0, 0, 0, 0.3))
 			draw_texture_rect(_back, Rect2(-CARD * 0.5, CARD), false)
 		draw_set_transform(Vector2.ZERO)

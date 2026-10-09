@@ -21,7 +21,7 @@ func _ready() -> void:
 	Jukebox.play(Jukebox.LOBBY)
 
 	var bg := TextureRect.new()
-	bg.texture = UI.tex("res://assets/background.png")
+	bg.texture = UI.tex("res://assets/table.png")
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -33,16 +33,26 @@ func _ready() -> void:
 	title.position = Vector2(26, 10)
 	add_child(title)
 
-	var who := _panel(Rect2(226, 96, 700, 76))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 14)
-	who.add_child(row)
-	var asks := UI.label("YOUR NAME", 20, UI.GOLD, true)
-	asks.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(asks)
-	_name = _field(Settings.player_name, "", Room.NAME_LENGTH)
-	_name.custom_minimum_size = Vector2(300, 40)
-	row.add_child(_name)
+	# The whole plate is the name: no box inside the box. Enter puts the pen
+	# down; a click picks the name up again, all of it.
+	var who := _panel(Rect2(226, 84, 700, 92))
+	who.add_theme_constant_override("separation", 0)
+	var asks := UI.label("YOUR NAME", 13, UI.MUTED, true)
+	asks.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	who.add_child(asks)
+	_name = _field(Settings.player_name, "Player", Room.NAME_LENGTH)
+	_name.add_theme_font_size_override("font_size", 40)
+	_name.add_theme_font_override("font", UI.bold())
+	_name.add_theme_color_override("font_color", UI.GOLD)
+	_name.add_theme_color_override("font_uneditable_color", UI.GOLD.darkened(0.3))
+	for state: String in ["normal", "focus", "read_only"]:
+		_name.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	_name.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name.select_all_on_focus = true
+	_name.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_name.text_submitted.connect(func(_text: String): _name.release_focus())
+	who.add_child(_name)
+	TipLayer.attach(_name, "Click to change your name.")
 
 	var hosting := _panel(Rect2(226, 190, 340, 290))
 	hosting.add_child(UI.label("CREATE A ROOM", 24, UI.GOLD, true))

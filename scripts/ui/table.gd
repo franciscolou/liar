@@ -9,6 +9,7 @@ const ARC_CENTER := Vector2(576, 322)
 const ARC_RADIUS := Vector2(450, 240)
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
+const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
@@ -27,6 +28,16 @@ const SOUND_DIR := "res://assets/sounds/"
 const COIN_SOUNDS := 3
 ## Most coins shown (and heard) flying for one change of coins.
 const MAX_COINS_SHOWN := 12
+## Seconds a swindled coin takes to dance over to the Bard, and between one
+## coin and the next.
+const DANCE_TIME := 2.4
+const DANCE_STAGGER := 0.16
+## The doll's cut of a hexed player's coins: seconds winding into the doll,
+## out of sight in it, on the way to its owner, and between two coins.
+const HEX_GRAB := 0.55
+const HEX_PAUSE := 0.1
+const HEX_FLIGHT := 0.75
+const HEX_STAGGER := 0.1
 ## Seconds a coin takes to fly, and between one coin and the next: far enough
 ## apart for each clink to be heard on its own.
 const COIN_FLIGHT := 0.42
@@ -54,10 +65,22 @@ const PEEK_SHEAR := 0.18
 ## Where, and how large, a card is shown when the table stops to look at it.
 const SHOWN_SCALE := 2.5
 const SHOWN_CENTRE := Vector2(576, 236)
+## The chalk a play is marked on the table with, and how far from the box of
+## its actor and of its target the mark starts and ends.
+## The characters shown to an eliminated viewer: how big, and how wide a row.
+const ONLOOKER_SCALE := 0.62
+const ONLOOKER_WIDTH := 760.0
+const CHALK_WHITE := Color("efe9dc")
+const CHALK_RED := Color("e8705c")
+const CHALK_START := 26.0
+const CHALK_END := 12.0
 const SHOP_HEIGHT := 106.0
 const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck
 const SHOP_DECK_WIDTH := 62.0
 const SHOP_TAB_ROW := 36.0  # folded: from one row of mini icons to the next
+const SHOP_ITEM_Y := 18.0  # open: the top of the goods
+## How far the goods of a reroll travel off their shelf and onto it.
+const REROLL_TRAVEL := 34.0
 const LOG_SIZE := Vector2(232, 136)
 const LOG_HEADER := 18.0  # the strip with the fold button
 const LOG_FOLDED := Vector2(24, 24)  # just the button
@@ -83,11 +106,15 @@ var _shop_body: Control  # what shows while open
 var _shop_entries: Array = []  # {view, price, coin, mini, slot, def}; slot -1 = always on sale
 var _shop_reroll: Button
 var _shop_reroll_price: Label
+var _shop_reroll_coin: TextureRect
+var _shop_reroll_queasy: ShaderMaterial
 var _shop_hint: Label
 var _shop_width := 0.0
 var _shop_open := false
 var _shop_pinned := false
 var _shop_tween: Tween
+## What takes the place of the viewer's panel once they are out (see _clear_hud).
+var _onlooker: Control
 var _deck_label: Label
 var _stage: PanelContainer
 var _stage_stack: Array = []
@@ -257,7 +284,7 @@ func _back_out() -> bool:
 
 func _build() -> void:
 	var bg := TextureRect.new()
-	bg.texture = UI.tex("res://assets/background.png")
+	bg.texture = UI.tex("res://assets/table.png")
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -286,13 +313,19 @@ func _build() -> void:
 	_turn_label.position = Vector2(12, 8)
 	add_child(_turn_label)
 	var menu := UI.button("MENU", UI.BORDER, 13)
-	menu.position = Vector2(1070, 8)
-	menu.size = Vector2(72, 28)
+	menu.position = Vector2(1072, 8)
+	menu.size = Vector2(70, 28)
+	menu.pivot_offset = menu.size / 2.0
+	menu.alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	# Three bars before the word: what a menu looks like everywhere.
+	menu.draw.connect(func() -> void:
+		for bar in 3:
+			menu.draw_rect(Rect2(9, 8 + bar * 5, 13, 2), UI.GOLD if menu.is_hovered() else UI.CREAM))
 	menu.pressed.connect(_toggle_pause)
 	TipLayer.attach(menu, "Pause, settings and quit (Esc).")
 	add_child(menu)
 	_peek_all = UI.button("SHOW ALL HANDS", UI.BORDER, 13)
-	_peek_all.position = Vector2(862, 8)
+	_peek_all.position = Vector2(864, 8)
 	_peek_all.size = Vector2(200, 28)
 	_peek_all.visible = false
 	_peek_all.pressed.connect(_on_peek_all_pressed)
@@ -353,7 +386,7 @@ func _build_shop() -> void:
 	deck.interactive = false
 	deck.mouse_entered.connect(_set_shop_open.bind(true))
 	_shop.add_child(deck)
-	TipLayer.attach(deck, "[b]Deck[/b]\nCharacters nobody holds. Eliminated players' cards are shuffled back in.")
+	TipLayer.attach(deck, "[b]Deck[/b]\nCharacters nobody holds. The cards of eliminated players stay on the table.")
 	var deck_title := UI.label("DECK", 11, UI.MUTED, true)
 	deck_title.position = Vector2(deck_x + 14, 3)
 	_shop.add_child(deck_title)
@@ -395,13 +428,13 @@ func _build_shop() -> void:
 	for i in stock:
 		var x := 12.0 + i * 80.0
 		var view := ItemView.new(0.9)
-		view.position = Vector2(x, 18)
+		view.position = Vector2(x, SHOP_ITEM_Y)
 		view.clicked.connect(_on_shop_clicked.bind(i))
+		view.picked.connect(_buy_now.bind(i))
 		_shop_body.add_child(view)
 		var coin := _shop_icon("res://assets/ui/coin.png", Vector2(x + 10, 82), Vector2(16, 16))
 		_shop_body.add_child(coin)
-		var price := UI.label("", 15, UI.GOLD, true)
-		price.position = Vector2(x + 30, 79)
+		var price := _price_tag(Vector2(x + 30, 81))
 		_shop_body.add_child(price)
 		var mini := _shop_icon("", Vector2(8 + (i % 2) * 27, 22 + (i >> 1) * SHOP_TAB_ROW), ItemView.BASE * 0.4)
 		_shop_tab.add_child(mini)
@@ -409,20 +442,50 @@ func _build_shop() -> void:
 			"view": view, "price": price, "coin": coin, "mini": mini,
 			"slot": i - fixed.size() if i >= fixed.size() else -1,
 			"def": fixed[i] if i < fixed.size() else null,
+			# How each part looks to a groggy viewer: item, mini icon, price.
+			"queasy": [UI.queasy(view.size, i * 1.9, 1.5), UI.queasy(mini.size, i * 1.9, 1.0), UI.queasy(price.size, i * 1.9 + 0.8)],
 		})
 
+	# The reroll is not one of the goods: it stands apart, past a divider.
 	var reroll_x := 12.0 + stock * 80.0
-	_shop_reroll = UI.button("REROLL", UI.BLUE, 13)
-	_shop_reroll.position = Vector2(reroll_x, 24)
-	_shop_reroll.size = Vector2(68, 46)
+	var apart := ColorRect.new()
+	apart.color = UI.BORDER.darkened(0.3)
+	apart.position = Vector2(reroll_x - 6, 16)
+	apart.size = Vector2(2, 80)
+	apart.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_shop_body.add_child(apart)
+	_shop_reroll = Button.new()
+	for state: String in ["normal", "hover", "pressed", "disabled", "focus"]:
+		_shop_reroll.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	_shop_reroll.position = Vector2(reroll_x + 10, 24)
+	_shop_reroll.size = Vector2(48, 48)
+	_shop_reroll.pivot_offset = _shop_reroll.size / 2.0
+	_shop_reroll.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_shop_reroll.draw.connect(_draw_reroll)
 	_shop_reroll.pressed.connect(_on_reroll_pressed)
 	TipLayer.attach(_shop_reroll, _reroll_tip)
 	_shop_body.add_child(_shop_reroll)
-	_shop_body.add_child(_shop_icon("res://assets/ui/coin.png", Vector2(reroll_x + 18, 82), Vector2(16, 16)))
-	_shop_reroll_price = UI.label(str(engine.config.reroll_cost), 15, UI.GOLD, true)
-	_shop_reroll_price.position = Vector2(reroll_x + 38, 79)
+	_shop_reroll_coin = _shop_icon("res://assets/ui/coin.png", Vector2(reroll_x + 16, 82), Vector2(16, 16))
+	_shop_body.add_child(_shop_reroll_coin)
+	_shop_reroll_price = _price_tag(Vector2(reroll_x + 36, 81))
+	_shop_reroll_price.text = str(engine.config.reroll_cost)
+	_shop_reroll_queasy = UI.queasy(_shop_reroll_price.size, stock * 1.9 + 0.8)
 	_shop_body.add_child(_shop_reroll_price)
 	_set_shop_open(false, true)
+
+
+## The number next to a coin of the shop, level with the coin at `at`.
+func _price_tag(at: Vector2) -> Label:
+	var price := UI.label("", 15, UI.GOLD, true)
+	price.position = at
+	price.size = Vector2(30, 16)
+	price.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return price
+
+
+## The reroll button: two arrows chasing each other, in the blocks of the stall.
+func _draw_reroll() -> void:
+	UI.draw_reroll(_shop_reroll)
 
 
 func _shop_icon(path: String, at: Vector2, icon_size: Vector2) -> TextureRect:
@@ -566,6 +629,7 @@ func _layout_seats() -> void:
 			seat = SeatView.new()
 			seat.bind(p, engine)
 			seat.clicked.connect(_on_seat_clicked)
+			seat.item_clicked.connect(_on_seat_item_clicked)
 			_table.add_child(seat)
 			_seats[p.id] = seat
 		var degrees := 270.0
@@ -620,6 +684,7 @@ func _answer(value: Variant) -> void:
 		TipLayer.current.hide_all()
 	for seat: SeatView in _seats.values():
 		seat.set_targetable(false)
+		seat.set_item_pick(false)
 	answered.emit(value)
 
 
@@ -676,7 +741,7 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 			})
 	var held := viewer != null and viewer.has_character(def.id)
 	var subtitle := "You hold this card: claiming it is the truth." if held else "Not in your hand: claiming it is a bluff."
-	if viewer == null:
+	if viewer == null or not viewer.alive:
 		subtitle = ""
 	_open_popup(view.get_global_rect(), def.display_name.to_upper(), subtitle, UI.GREEN if held else UI.RED, rows)
 
@@ -692,10 +757,19 @@ func _on_shop_clicked(index: int) -> void:
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.reason]
 	elif option.credit:
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will claim Vagabond (On the Cuff).")]
+	# The price is on the tag under the item already.
 	_open_popup(entry.view.get_global_rect(), def.display_name.to_upper(), def.description, UI.MUTED, [{
-		"text": Loc.t("Buy  ·  %d coins") % option.get("cost", def.price), "tip": tip, "enabled": option.enabled,
+		"text": "Buy", "tip": tip, "enabled": option.enabled,
 		"accent": UI.GOLD, "action": _answer_turn.bind(option), "reason": option.reason,
-	}])
+	}], _buy_now.bind(index))
+
+
+## Buys what is in a shop entry without asking again: a right click or a
+## double click on it.
+func _buy_now(index: int) -> void:
+	var option: Variant = _buy_option(_turn_options(), _shop_entries[index])
+	if option != null and option.enabled:
+		_answer_turn(option)
 
 
 func _on_reroll_pressed() -> void:
@@ -749,6 +823,13 @@ func _on_item_clicked(instance: ItemInstance, _view: ItemView) -> void:
 		_answer_turn(option)
 
 
+## An item picked where it lies, in the box of whoever holds it (see _open_pick).
+func _on_seat_item_clicked(index: int) -> void:
+	if _pending != null and _pending.kind == Decision.Kind.PICK and _pending.context.has("held_by") \
+			and index >= 0 and index < _pending.options.size():
+		_answer(index)
+
+
 func _on_seat_clicked(p: PlayerState) -> void:
 	if _pending != null and _pending.kind == Decision.Kind.TARGET and _pending.options.has(p):
 		_answer(p)
@@ -757,6 +838,68 @@ func _on_seat_clicked(p: PlayerState) -> void:
 		seat.set_revealed(not seat.is_revealed())
 		_play_sfx("card_draw")
 		_sync_peek()
+
+
+## The viewer is out of the match: their side of the counter is cleared
+## away. What stays on screen is the log, the shop and, where the hand was,
+## the cards they left on the table and a row of the characters in the match,
+## to look up what each one does.
+func _clear_hud() -> void:
+	if _onlooker != null:
+		return
+	_close_popup()
+	_hide_prompt()
+	# Hidden, not freed: it still says where the viewer's things were.
+	var leave := _hero.create_tween()
+	leave.tween_property(_hero, "modulate:a", 0.0, 0.4 / _speed)
+	leave.tween_callback(_hero.hide)
+	_onlooker = Control.new()
+	_onlooker.position = _hero.position
+	_onlooker.size = Vector2(1152, 170)
+	_onlooker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_onlooker.modulate.a = 0.0
+	_hero.add_sibling(_onlooker)
+	_onlooker.create_tween().tween_property(_onlooker, "modulate:a", 1.0, 0.4 / _speed).set_delay(0.3 / _speed)
+
+	var left: Array = viewer.left
+	var mine := UI.label("YOUR LAST CARD" if left.size() == 1 else "YOUR LAST CARDS", 11, UI.MUTED, true)
+	mine.position = Vector2(28, 34)
+	_onlooker.add_child(mine)
+	for i in left.size():
+		var card := CardView.new(0.9)
+		card.position = Vector2(28 + i * 56, 52)
+		card.pivot_offset = card.size / 2.0
+		card.rotation = 0.05 * (1.0 if i % 2 == 0 else -1.4)
+		card.modulate = SeatView.LEFT_TINT
+		card.interactive = false
+		card.set_card(left[i], true)
+		_onlooker.add_child(card)
+
+	var cast := engine.characters
+	var card_size := CardView.BASE * ONLOOKER_SCALE
+	var step := 44.0
+	if cast.size() > 1:
+		step = minf(step, (ONLOOKER_WIDTH - card_size.x) / (cast.size() - 1))
+	var width := card_size.x + step * maxi(cast.size() - 1, 0) + 24.0
+	var shelf := Panel.new()
+	shelf.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.88), UI.BORDER, 2, 6, 0))
+	shelf.size = Vector2(width, card_size.y + 38.0)
+	shelf.position = Vector2(roundf((1152 - width) / 2.0), 170 - shelf.size.y - 10.0)
+	_onlooker.add_child(shelf)
+	var heading := UI.label("CHARACTERS IN THIS MATCH (click for details)", 11, UI.GOLD, true)
+	heading.position = Vector2(12, 5)
+	heading.size = Vector2(width - 24.0, 14)
+	heading.clip_text = true
+	shelf.add_child(heading)
+	for i in cast.size():
+		var def: CharacterDef = cast[i]
+		var card := CardView.new(ONLOOKER_SCALE)
+		card.position = Vector2(12 + roundf(i * step), 24)
+		card.lift = 5.0
+		card.set_card(def.id, true)
+		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		card.clicked.connect(_on_character_clicked.bind(def, card))
+		shelf.add_child(card)
 
 
 ## Whether the player at this screen was eliminated and may see the hands of
@@ -904,6 +1047,13 @@ func _prompt_react(d: Decision) -> void:
 func _open_pick(d: Decision) -> void:
 	if d.options.all(func(option: Dictionary): return option.has("card")):
 		_open_card_pick(d)
+		return
+	# The options are the items another player holds, in the order they lie in
+	# that player's box: they are picked right there, with no menu.
+	var holder: Variant = d.context.get("held_by")
+	if holder is PlayerState and _seats.has(holder.id):
+		_seats[holder.id].set_item_pick(true)
+		_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click one of the highlighted items.")], [])
 		return
 	var panel := _open_modal(d.prompt)
 	var row := HBoxContainer.new()
@@ -1193,15 +1343,20 @@ func _hide_prompt() -> void:
 
 ## A small menu anchored to something on screen. rows: {info} for a text
 ## block, or {text, tip, enabled, accent, action, note, reason} for a button
-## (`note`: a line under it saying what it does).
-func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color: Color, rows: Array) -> void:
+## (`note`: a line under it saying what it does). `quick` is what a right
+## click or the second click of a double click on the anchor does, in place
+## of only closing the menu.
+func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color: Color, rows: Array, quick := Callable()) -> void:
 	_close_popup()
 	var catcher := Control.new()
 	catcher.set_anchors_preset(Control.PRESET_FULL_RECT)
 	catcher.mouse_filter = Control.MOUSE_FILTER_STOP
 	catcher.gui_input.connect(func(event: InputEvent):
 		if event is InputEventMouseButton and event.pressed:
-			_close_popup())
+			var again: bool = event.double_click or event.button_index == MOUSE_BUTTON_RIGHT
+			_close_popup()
+			if again and quick.is_valid() and anchor.has_point(event.global_position):
+				quick.call())
 	_popup.add_child(catcher)
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.97), UI.GOLD, 2, 6, 10))
@@ -1324,17 +1479,60 @@ func _toggle_pause() -> void:
 	box.add_child(fullscreen)
 	if _room != null and _room.hosting:
 		var lobby := UI.button("End the match", UI.RED, 18)
-		lobby.pressed.connect(_room.to_lobby)
+		lobby.pressed.connect(_confirm.bind("End the match for everyone and take the whole room back to the lobby?", "End the match", _room.to_lobby))
 		TipLayer.attach(lobby, "Stops the match for everyone and takes the whole room back to the lobby.")
 		box.add_child(lobby)
 	var quit := UI.button("Quit to menu", UI.RED, 18)
-	quit.pressed.connect(func():
+	var leave := func() -> void:
 		if Room.current != null:
 			Room.current.leave()
-		Transition.go(MENU_SCENE, Transition.DOORS, true))
+		Transition.go(MENU_SCENE, Transition.DOORS, true)
+	var asks := "Leave the match and go back to the menu?"
+	if _room != null and _room.hosting:
+		asks = "Leave the match and go back to the menu? The room closes for everyone."
+	quit.pressed.connect(_confirm.bind(asks, "Quit to menu", leave))
 	if _room != null:
 		TipLayer.attach(quit, "Closes the room for everyone." if _room.hosting else "Leaves the room. A bot plays the rest of the match for you.")
 	box.add_child(quit)
+
+
+## Asks again before something that cannot be taken back: `question`, and
+## two buttons, the one that goes ahead (`yes`, which runs `action`) and the
+## one that does not. Shown over the pause menu.
+func _confirm(question: String, yes: String, action: Callable) -> void:
+	if _pause == null or not is_instance_valid(_pause):
+		return
+	var veil := ColorRect.new()
+	veil.color = Color(0, 0, 0, 0.7)
+	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_pause.add_child(veil)
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.98), UI.RED, 3, 8, 22))
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	veil.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 16)
+	panel.add_child(box)
+	var text := UI.label(question, 18, UI.CREAM)
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	text.custom_minimum_size = Vector2(360, 0)
+	box.add_child(text)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	box.add_child(row)
+	var back := UI.button("Cancel", UI.BORDER, 18)
+	back.custom_minimum_size = Vector2(150, 44)
+	back.pressed.connect(veil.queue_free)
+	row.add_child(back)
+	var go := UI.button(yes, UI.RED, 18)
+	go.custom_minimum_size = Vector2(170, 44)
+	go.pressed.connect(action)
+	row.add_child(go)
+	UI.pop(panel, 1.06, 0.15)
 
 
 # === presentation =============================================================
@@ -1405,11 +1603,7 @@ func present(e: GameEvent) -> void:
 			_sync_shop()
 			_pop_shop_slot(d.slot)
 		&"shop_rerolled":
-			_sync_shop()
-			for slot in engine.shop.size():
-				_pop_shop_slot(slot)
-			_float("REROLL", _shop_bg.get_global_rect().get_center() + Vector2(0, -40), UI.BLUE, 20)
-			await _wait(0.4)
+			await _anim_reroll()
 		&"morale_lost":
 			await _anim_damage(d.target, d.amount)
 		&"morale_gained":
@@ -1417,12 +1611,23 @@ func present(e: GameEvent) -> void:
 			_float(Loc.t("+%d MORALE") % d.amount, _anchor(d.player), UI.GREEN, 22)
 			await _wait(0.4)
 		&"player_eliminated":
-			_sync()
 			_float("ELIMINATED", _anchor(d.player), UI.RED, 28)
 			_shake_screen(10.0)
 			await _wait(0.9)
+			# What they held is shown to the table, card by card, before it is
+			# left where they sat. Not after the last blow of the match: that
+			# is the winner's moment.
+			if not engine.over:
+				var hand: Array = []
+				for i in d.player.left.size():
+					hand.append(_card_view(d.player, i))
+				for i in d.player.left.size():
+					_set_cards_shown([hand[i]], false)
+					await _anim_card_lost({"player": d.player, "card": d.player.left[i]}, true)
+			_sync()
 			if d.player == viewer:
 				_log_line(Loc.t("You are out. Click a player to see their hand."), &"coins")
+				_clear_hud()
 		&"cards_changed":
 			await _anim_card_traded(d)
 		&"card_lost":
@@ -1445,6 +1650,11 @@ func present(e: GameEvent) -> void:
 		&"card_peeked":
 			await _anim_peek(d)
 		&"status_added":
+			if d.status == &"hexed" and _play_fx.doll_thrown_at(d.player):
+				# The doll that was thrown becomes the one the player carries.
+				_sync()
+				_node_of(d.player).doll_landed()
+				_play_fx.drop_doll(true)
 			var def: Dictionary = Content.statuses.get(d.status, {})
 			_float(Loc.t(def.get("name", String(d.status))).to_upper(), _anchor(d.player), def.get("color", UI.PURPLE).lightened(0.35), 20)
 			await _wait(0.4)
@@ -1471,7 +1681,11 @@ func _sync() -> void:
 
 func _sync_shop() -> void:
 	var options: Variant = _turn_options()
+	var ink := _price_ink()
+	var queasy := ink != UI.GOLD
 	_shop_reroll_price.text = str(_price(engine.config.reroll_cost))
+	_shop_reroll_price.add_theme_color_override("font_color", ink)
+	_shop_reroll_price.material = _shop_reroll_queasy if queasy else null
 	for entry: Dictionary in _shop_entries:
 		var def := _entry_def(entry)
 		for node: Control in [entry.view, entry.price, entry.coin, entry.mini]:
@@ -1481,6 +1695,12 @@ func _sync_shop() -> void:
 		entry.view.set_item(def)
 		entry.mini.texture = UI.tex(def.texture_path)
 		entry.price.text = str(_price(def.price))
+		entry.price.add_theme_color_override("font_color", ink)
+		# The goods swim in front of a groggy viewer, and so does every
+		# number the drink has raised.
+		entry.view.set_look(entry.queasy[0] if queasy else null)
+		entry.mini.material = entry.queasy[1] if queasy else null
+		entry.price.material = entry.queasy[2] if queasy else null
 		var option: Variant = _buy_option(options, entry)
 		var buyable: bool = option == null or option.enabled
 		entry.view.set_enabled(buyable)
@@ -1489,12 +1709,60 @@ func _sync_shop() -> void:
 		if entry.slot < 0:
 			notes.append(Loc.t("Always on sale."))
 		if option != null:
-			notes.append(Loc.t("Click to buy.") if option.enabled else option.reason)
+			notes.append(Loc.t("Double click or right click to buy.") if option.enabled else option.reason)
 		entry.view.note = " ".join(notes)
 	var reroll: Variant = options.reroll if options != null else null
-	_shop_reroll.visible = not engine.item_pool.is_empty()
+	for node: Control in [_shop_reroll, _shop_reroll_coin, _shop_reroll_price]:
+		node.visible = not engine.item_pool.is_empty()
 	_shop_reroll.disabled = reroll == null or not reroll.enabled
+	_shop_reroll.mouse_default_cursor_shape = Control.CURSOR_ARROW if _shop_reroll.disabled else Control.CURSOR_POINTING_HAND
 	_deck_label.text = "x%d" % engine.deck.size()
+
+
+## The goods of the slots leave their shelf, each one up or down, and the new
+## ones come in the same way: the shelf is being rearranged, not repainted.
+func _anim_reroll() -> void:
+	var spin := _shop_reroll.create_tween()
+	_shop_reroll.rotation = 0.0
+	spin.tween_property(_shop_reroll, "rotation", TAU, 0.55 / _speed).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	spin.tween_callback(_shop_reroll.set.bind("rotation", 0.0))
+	_play_sfx("card_draw")
+	var moved: Array = []  # {node, home, way, travel, delay}
+	var order := 0
+	for entry: Dictionary in _shop_entries:
+		if entry.slot < 0:
+			continue
+		# Only drawing: the dice of the match stay out of it.
+		var way := -1.0 if randf() < 0.5 else 1.0
+		var delay := order * 0.05
+		for part: Array in [[entry.view, SHOP_ITEM_Y, REROLL_TRAVEL], [entry.mini, entry.mini.position.y, 16.0]]:
+			var node: Control = part[0]
+			var home: float = part[1]
+			var travel: float = part[2]
+			moved.append({"node": node, "home": home, "way": way, "travel": travel, "delay": delay})
+			var out := node.create_tween().set_parallel()
+			out.tween_property(node, "position:y", home + way * travel, 0.16 / _speed) \
+					.set_delay(delay / _speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			out.tween_property(node, "modulate:a", 0.0, 0.16 / _speed).set_delay(delay / _speed)
+		for tag: Control in [entry.price, entry.coin]:
+			tag.create_tween().tween_property(tag, "modulate:a", 0.0, 0.12 / _speed)
+		order += 1
+	await _wait(0.16 + order * 0.05)
+	_sync_shop()
+	_play_sfx("card_draw")
+	for move: Dictionary in moved:
+		var node: Control = move.node
+		# It comes in from the side the old one did not leave by.
+		node.position.y = move.home - move.way * move.travel
+		var back := node.create_tween().set_parallel()
+		back.tween_property(node, "position:y", move.home, 0.22 / _speed) \
+				.set_delay(move.delay / _speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		back.tween_property(node, "modulate:a", 1.0, 0.14 / _speed).set_delay(move.delay / _speed)
+	for entry: Dictionary in _shop_entries:
+		if entry.slot >= 0:
+			for tag: Control in [entry.price, entry.coin]:
+				tag.create_tween().tween_property(tag, "modulate:a", 1.0, 0.2 / _speed).set_delay(0.1 / _speed)
+	await _wait(0.3 + order * 0.05)
 
 
 func _pop_shop_slot(slot: int) -> void:
@@ -1659,20 +1927,42 @@ func _push_stage(entry: Dictionary) -> void:
 	UI.pop(_stage, 1.12, 0.22)
 
 
-## The arrow from the actor of `play` to its target, null if there is none to draw.
-func _stage_arrow(play: Play) -> ArrowFx:
+## The chalk mark from the actor of `play` to its target, null if there is
+## none to draw. It runs on the table between the two boxes, not over them.
+func _stage_arrow(play: Play) -> Control:
 	play = play.aimed()
 	var whom := play.whom()
 	if whom == null or whom == play.actor:
 		return null
-	var arrow := ArrowFx.new()
+	var from := _anchor(play.actor)
+	var to := _anchor(whom)
+	var arrow := ChalkFx.new()
 	arrow.set_anchors_preset(Control.PRESET_FULL_RECT)
-	arrow.from = _anchor(play.actor)
-	arrow.to = _anchor(whom)
-	arrow.color = UI.RED if play.source.tags.has(&"damage") or play.source.tags.has(&"steal") else UI.GOLD
+	arrow.from = _clear_of(_node_of(play.actor), from, to, CHALK_START)
+	arrow.to = _clear_of(_node_of(whom), to, from, CHALK_END)
+	if (arrow.to - arrow.from).dot(to - from) <= 0.0 or arrow.from.distance_to(arrow.to) < 24.0:
+		# The two boxes all but touch: there is no table between them.
+		arrow.from = from
+		arrow.to = to
+	arrow.color = CHALK_RED if play.source.tags.has(&"damage") or play.source.tags.has(&"steal") else CHALK_WHITE
 	_arrows.add_child(arrow)
-	arrow.create_tween().tween_property(arrow, "progress", 1.0, 0.3 / _speed)
+	arrow.create_tween().tween_property(arrow, "progress", 1.0, 0.35 / _speed)
+	_play_sfx("chalk")
 	return arrow
+
+
+## The point on the way from `from` to `to` that is `gap` past the edge of
+## `box` (`from` itself if there is no box, or it is not inside it).
+func _clear_of(box: Control, from: Vector2, to: Vector2, gap: float) -> Vector2:
+	if box == null:
+		return from
+	var rect := box.get_global_rect()
+	var way := (to - from).normalized()
+	var at := from
+	var reach := from.distance_to(to)
+	while rect.has_point(at) and at.distance_to(from) < reach:
+		at += way * 2.0
+	return at + way * gap if at != from else from
 
 
 func _pop_stage(play: Play) -> void:
@@ -1694,7 +1984,7 @@ func _drop_transient_stage() -> void:
 func _remove_stage_entry(entry: Dictionary) -> void:
 	_stage_stack.erase(entry)
 	if entry.arrow != null and is_instance_valid(entry.arrow):
-		entry.arrow.queue_free()
+		entry.arrow.wipe(0.3 / _speed)
 
 
 func _render_stage() -> void:
@@ -1788,6 +2078,15 @@ func _anim_coins(d: Dictionary) -> void:
 	var there := _coin_anchor(d.other) if d.other != null else _bank()
 	var bar := _stat_bar(p)
 	var other_bar := _stat_bar(d.other)
+	if d.reason == &"swindle" and delta > 0:
+		_dance_coins(d)
+		return
+	if d.reason == &"voodoo" and delta > 0 and d.other != null:
+		await _anim_hex_cut(d)
+		return
+	# A Cash Out pays out of the vault standing open on the table.
+	if d.reason == &"vault" and _play_fx.vault_mouth(p) != Vector2.INF:
+		there = _play_fx.vault_mouth(p)
 	if d.reason == &"steal":
 		# The coins already flew out of the victim's pile, and were counted
 		# in as they landed.
@@ -1827,11 +2126,161 @@ func _anim_coins(d: Dictionary) -> void:
 	await _wait(COIN_FLIGHT + coins * COIN_STAGGER)
 	if bar != null:
 		bar.coin_bias = 0
+	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
+
+
+## The doll's cut of what a hexed player gains, carried by the same purple
+## swirl that hangs round the doll: the coins are drawn out of the victim's
+## pile and wind in round the doll, shrinking and turning purple, until it
+## has swallowed them; then they come out again and are borne off to whoever
+## owns the doll on a winding trail of motes. Nobody is left wondering why
+## half the coins went somewhere else.
+func _anim_hex_cut(d: Dictionary) -> void:
+	var owner_player: PlayerState = d.player
+	var victim: PlayerState = d.other
+	var bar := _stat_bar(owner_player)
+	if bar != null:
+		bar.hold_coins(owner_player)
+	var from := _coin_anchor(victim)
+	var doll := _anchor(victim)
+	var box := _node_of(victim)
+	if box != null:
+		var pieces: Array[Vector2] = box.status_pieces(&"hexed")
+		if not pieces.is_empty():
+			doll = pieces[0]
+	var total: int = d.delta
+	var coins := clampi(total, 1, MAX_COINS_SHOWN)
+	var hex: Color = Content.statuses.get(&"hexed", {}).get("color", UI.PURPLE)
+	_play_sfx("fx_doll_hit")
+	_float(Loc.t("THE DOLL TAKES %d") % total, doll + Vector2(0, -52), hex.lightened(0.45), 18)
+	for i in coins:
+		var share := total * (i + 1) / coins - total * i / coins
+		var leaves := i * HEX_STAGGER
+		var sprite := _sprite(UI.tex("res://assets/ui/coin.png"), from, Vector2(20, 20))
+		sprite.hide()
+		var way := sprite.create_tween()
+		way.tween_interval(maxf(leaves, 0.001) / _speed)
+		way.tween_callback(sprite.show)
+		way.tween_method(_hex_wind.bind(sprite, from, doll, i, hex), 0.0, 1.0, HEX_GRAB / _speed)
+		# Swallowed: for a moment there is nothing to see.
+		way.tween_callback(sprite.hide)
+		way.tween_interval(HEX_PAUSE / _speed)
+		way.tween_callback(sprite.show)
+		way.tween_method(_hex_carry.bind(sprite, doll, owner_player, i, hex), 0.0, 1.0, HEX_FLIGHT / _speed)
+		way.tween_callback(sprite.queue_free)
+		var lands := leaves + HEX_GRAB + HEX_PAUSE + HEX_FLIGHT
+		_play_sfx_later("coin_%d" % (i % COIN_SOUNDS + 1), lands)
+		_count_coins(bar, share, lands)
+	await _wait(HEX_GRAB + HEX_PAUSE + HEX_FLIGHT + coins * HEX_STAGGER)
+	if bar != null:
+		bar.coin_bias = 0
+	_float("%+d" % total, _coin_anchor(owner_player) + Vector2(0, -18), hex.lightened(0.45), 22)
+
+
+## A coin `t` of its way from `from` into the doll at `doll`: round and
+## round it, closer every turn, smaller and more purple as it goes.
+func _hex_wind(t: float, sprite: Control, from: Vector2, doll: Vector2, index: int, hex: Color) -> void:
+	var out := from - doll
+	var turn := out.angle() + t * t * TAU * 1.6
+	var reach := out.length() * (1.0 - t) + 26.0 * sin(t * PI)
+	var at := doll + Vector2(cos(turn), sin(turn) * lerpf(1.0, 0.66, t)) * reach
+	sprite.position = at - sprite.size / 2.0
+	sprite.scale = Vector2.ONE * lerpf(1.0, 0.7, t)
+	sprite.modulate = Color.WHITE.lerp(hex.lightened(0.6), t)
+	_hex_trail(sprite, at, t, index, hex)
+
+
+## A coin `t` of its way from the doll to the pile of `p`: out along a wide
+## bend, turning about its own path like the motes that carry it.
+func _hex_carry(t: float, sprite: Control, doll: Vector2, p: PlayerState, index: int, hex: Color) -> void:
+	var to := _coin_anchor(p)
+	var across := to - doll
+	var side := across.orthogonal().normalized()
+	var bend := doll.lerp(to, 0.5) + side * across.length() * 0.22 * (1.0 if index % 2 == 0 else -0.6)
+	var at := doll.lerp(bend, t).lerp(bend.lerp(to, t), t)
+	var turn := t * TAU * 3.0 + index * 1.7
+	at += Vector2(cos(turn), sin(turn) * 0.66) * 14.0 * sin(t * PI)
+	sprite.position = at - sprite.size / 2.0
+	sprite.scale = Vector2.ONE * lerpf(0.7, 1.0, t)
+	sprite.modulate = hex.lightened(0.6).lerp(Color.WHITE, t * t * t)
+	_hex_trail(sprite, at, t, index, hex)
+
+
+## Leaves motes behind a coin the swirl is carrying, a few to every stretch
+## of its way.
+func _hex_trail(sprite: Control, at: Vector2, t: float, index: int, hex: Color) -> void:
+	var stretch := int(t * 44.0)
+	if sprite.get_meta(&"stretch", -1) == stretch:
+		return
+	sprite.set_meta(&"stretch", stretch)
+	for twin in 2:
+		var mote := ColorRect.new()
+		var side := 6.0 if (stretch + index + twin) % 3 == 0 else 4.0
+		mote.size = Vector2(side, side)
+		mote.color = hex.lightened(0.5) if (stretch + index + twin) % 2 == 0 else hex.lightened(0.15)
+		mote.position = (at + Vector2(randf_range(-9, 9), randf_range(-9, 9)) - mote.size / 2.0).round()
+		mote.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fx.add_child(mote)
+		_fx.move_child(mote, 0)
+		var fade := mote.create_tween().set_parallel()
+		fade.tween_property(mote, "modulate:a", 0.0, 0.6 / _speed)
+		fade.tween_property(mote, "position:y", mote.position.y - 8.0, 0.6 / _speed)
+		fade.chain().tween_callback(mote.queue_free)
+
+
+## Swindled coins take their time: they sway over to the Bard's pile to the
+## tune (PlayFx._fx_bard_swindle) while the match goes on, and each is
+## counted in as it lands. Nothing waits for them.
+func _dance_coins(d: Dictionary) -> void:
+	var p: PlayerState = d.player
+	var bar := _stat_bar(p)
+	var other_bar := _stat_bar(d.other)
+	var from := _coin_anchor(d.other) if d.other != null else _bank()
+	var total: int = d.delta
+	var coins := clampi(total, 1, MAX_COINS_SHOWN)
+	if bar != null:
+		bar.hold_coins(p)
 	# Stolen coins that were swindled on the way: the thief's pile was shown
 	# ahead of a payment that is not coming.
-	if d.reason == &"swindle" and other_bar != null:
+	if other_bar != null:
 		other_bar.coin_bias = 0
-	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
+	for i in coins:
+		var share := total * (i + 1) / coins - total * i / coins
+		var sprite := _sprite(UI.tex("res://assets/ui/coin.png"), from, Vector2(20, 20))
+		sprite.pivot_offset = sprite.size / 2.0
+		sprite.hide()
+		var dance := sprite.create_tween()
+		dance.tween_interval(i * DANCE_STAGGER / _speed)
+		dance.tween_callback(sprite.show)
+		dance.tween_method(_dance_step.bind(sprite, p, from, i), 0.0, 1.0, DANCE_TIME / _speed)
+		dance.tween_callback(_dance_landed.bind(sprite, p, share, total if i == coins - 1 else 0))
+
+
+## A dancing coin `t` of its way from `from` to the pile of `p`: it swings
+## from side to side and hops, widest in the middle of the way.
+func _dance_step(t: float, sprite: Control, p: PlayerState, from: Vector2, index: int) -> void:
+	var across := _coin_anchor(p) - from
+	var side := across.orthogonal().normalized()
+	var room := sin(t * PI)
+	var at := from + across * smoothstep(0.0, 1.0, t)
+	at += side * sin(t * TAU * 2.0 + index * 0.9) * 28.0 * room
+	at.y -= absf(sin(t * TAU * 4.0 + index)) * 9.0 * room
+	sprite.position = at - sprite.size / 2.0
+	sprite.rotation = sin(t * TAU * 3.0 + index) * 0.4
+
+
+## A dancing coin reaches the pile of `p`, worth `share` coins. `total` is
+## what the whole dance brought, on the last coin of it.
+func _dance_landed(sprite: Control, p: PlayerState, share: int, total: int) -> void:
+	sprite.queue_free()
+	_play_sfx("coin_%d" % (randi() % COIN_SOUNDS + 1))
+	var bar := _stat_bar(p)
+	# Only what the pile is still short of: something else may have caught
+	# it up in the meantime.
+	if bar != null and bar.coin_bias < 0:
+		bar.add_coins(mini(share, -bar.coin_bias))
+	if total > 0:
+		_float("%+d" % total, _coin_anchor(p) + Vector2(0, -18), UI.GOLD, 22)
 
 
 ## Moves the coins shown on `bar` by `amount`, `delay` seconds from now.
@@ -1863,7 +2312,10 @@ func _anim_item_bought(d: Dictionary) -> void:
 	var instance: ItemInstance = d.item
 	var concealed: bool = instance.hidden and d.player != viewer
 	var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
-	_fly(texture, _shop_point(d.slot, instance.def), _anchor(d.player), Vector2(48, 50), 0.4)
+	# Bought out of sight, it comes from the shop at large: nobody is shown
+	# which shelf it was on (the shop keeps it on sale, see GameEngine.buy_item).
+	var from := _shop_bg.get_global_rect().get_center() if concealed else _shop_point(d.slot, instance.def)
+	_fly(texture, from, _anchor(d.player), Vector2(48, 50), 0.4)
 	await _wait(0.42)
 
 
@@ -1888,6 +2340,15 @@ func _anim_item_gained(d: Dictionary) -> void:
 
 
 func _anim_item_broken(d: Dictionary) -> void:
+	if _play_fx.bombing():
+		# The Bomber's "Demolition": the bomb rolls to it and takes it along.
+		var held: Variant = _node_of(d.player)
+		var gone := func() -> void:
+			if held != null and is_instance_valid(held):
+				held.sync()
+		await _play_fx.item_bombed(UI.tex(d.item.def.texture_path), _item_spot(d.player, d.get("index", 0)),
+				ItemView.BASE * (0.8 if d.player == viewer else 0.4), gone)
+		return
 	_play_sfx("item_%s" % d.item.def.id, "breaking")
 	_play_fx.item_broken(d.player, d.item.def)
 	var at := _anchor(d.player)
@@ -2086,8 +2547,14 @@ func _anim_card_traded(d: Dictionary) -> void:
 ## The card given up gets its moment: the table dims, the card travels from
 ## its owner to the centre, turns face up for everyone and only then goes back
 ## to the deck.
-func _anim_card_lost(d: Dictionary) -> void:
-	_sync()
+## A card leaves a hand for good and the whole table is shown which: it comes
+## up to the middle, is turned over and named. `left` is for a card of
+## somebody who was just eliminated: it does not go back to the deck, it is
+## put down where they sat (and the table is not brought up to date first:
+## their box is still there to take it from).
+func _anim_card_lost(d: Dictionary, left := false) -> void:
+	if not left:
+		_sync()
 	var def := Content.character(d.card)
 	var loser: PlayerState = d.player
 	var centre := Vector2(576, 236)
@@ -2118,9 +2585,12 @@ func _anim_card_lost(d: Dictionary) -> void:
 	scene.add_child(card)
 
 	var who := "YOU LOSE A CARD" if loser == viewer else Loc.t("%s LOSES A CARD") % loser.name.to_upper()
+	if left:
+		who = "YOU ARE OUT" if loser == viewer else Loc.t("%s IS OUT") % loser.name.to_upper()
 	var heading := _reveal_label(scene, who, 26, UI.RED, centre.y - card.size.y / 2.0 - 58)
 	var name_label := _reveal_label(scene, def.display_name.to_upper(), 46, UI.GOLD, centre.y + card.size.y / 2.0 + 14)
-	var caption := _reveal_label(scene, Loc.t("%s  ·  shuffled back into the deck") % def.title, 15, UI.CREAM, centre.y + card.size.y / 2.0 + 80)
+	var fate := "%s  ·  left on the table" if left else "%s  ·  shuffled back into the deck"
+	var caption := _reveal_label(scene, Loc.t(fate) % def.title, 15, UI.CREAM, centre.y + card.size.y / 2.0 + 80)
 
 	var enter := scene.create_tween().set_parallel()
 	enter.tween_property(heading, "modulate:a", 1.0, 0.25 / _speed)
@@ -2158,15 +2628,16 @@ func _anim_card_lost(d: Dictionary) -> void:
 	pulse.tween_property(glow, "scale", Vector2.ONE, 0.45 / _speed).set_trans(Tween.TRANS_SINE)
 	await _wait(1.9)
 
-	# Back to the deck.
+	# Back to the deck, or down where its owner sat.
+	var goes := _anchor(loser) if left else _bank()
 	pulse.kill()
 	var leave := scene.create_tween().set_parallel()
 	for node: Control in [glow, heading, name_label, caption]:
 		leave.tween_property(node, "modulate:a", 0.0, 0.2 / _speed)
 	leave.tween_property(dim, "modulate:a", 0.0, 0.4 / _speed)
-	leave.tween_property(card, "position", _bank() - card.size / 2.0, 0.4 / _speed) \
+	leave.tween_property(card, "position", goes - card.size / 2.0, 0.4 / _speed) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
-	leave.tween_property(card, "scale", Vector2.ONE * 0.14, 0.4 / _speed) \
+	leave.tween_property(card, "scale", Vector2.ONE * (0.28 if left else 0.14), 0.4 / _speed) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	await _wait(0.45)
 	if is_instance_valid(scene):
@@ -2634,6 +3105,17 @@ func _card_center(p: PlayerState, index: int) -> Vector2:
 ## may have raised every price for them).
 func _price(amount: int) -> int:
 	return engine.price(viewer, amount) if viewer != null else amount
+
+
+## The colour prices are written in for the viewer: gold, or the colour of
+## the status that is raising them.
+func _price_ink() -> Color:
+	if viewer != null:
+		for status_id: StringName in viewer.statuses:
+			if int(viewer.statuses[status_id].get("surcharge", 0)) > 0:
+				var color: Color = Content.statuses.get(status_id, {}).get("color", UI.GOLD)
+				return color.lightened(0.15)
+	return UI.GOLD
 
 
 func _bank() -> Vector2:

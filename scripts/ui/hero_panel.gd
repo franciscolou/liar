@@ -13,7 +13,11 @@ const StatusFx := preload("res://scripts/ui/status_fx.gd")
 const Desk := preload("res://scripts/ui/hero_desk.gd")
 const SIZE := Vector2(1152, 170)
 const MAX_EXTRAS := 3
-const STRIP_SCALE := 0.92
+const STRIP_SCALE := 1.22
+## The hand lies on the mat: how wide a card is with the gap to the next,
+## and how many fit side by side.
+const HAND_STEP := 95.0
+const HAND_FITS := 2
 ## Room for the strip, from its left edge to the END TURN button.
 const STRIP_WIDTH := 572.0
 const BRASS := Color("b98a2e")
@@ -64,6 +68,7 @@ func _init() -> void:
 	_chips = StatusChips.new()
 	_chips.position = Vector2(10, 71)
 	_chips.size = Vector2(214, 32)
+	_chips.limit = 0  # two rows of them fit here: nothing folds away
 	add_child(_chips)
 	_inventory = HBoxContainer.new()
 	_inventory.position = Desk.SOCKETS_AT
@@ -79,7 +84,7 @@ func _init() -> void:
 	_strip_hint.position = Vector2(438, 9)
 	add_child(_strip_hint)
 	_strip = Control.new()
-	_strip.position = Vector2(440, Desk.RACK.position.y + Desk.SHELF - CardView.BASE.y * STRIP_SCALE)
+	_strip.position = Vector2(441, Desk.RACK.position.y + Desk.SHELF - CardView.BASE.y * STRIP_SCALE)
 	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_strip)
 
@@ -95,12 +100,18 @@ func _init() -> void:
 	_extras.size = Vector2(116, 80)
 	add_child(_extras)
 	# The player's own box is the block on the left: the stars circle the
-	# name and the hearts, the doll sits on the top edge of the band where the
-	# block ends (a leg along it, a leg hanging into the gap before the hand)
-	# and the dynamite stands beside the name.
+	# name and the hearts, the doll sits at the foot of the mat of the hand,
+	# in its left corner and facing right (here only): sat on the bottom
+	# edge of the mat (the screen ends under it, so no leg hangs), its back
+	# to the side of the mat and its legs out over the foot of the first card. The
+	# dynamite stands beside the name.
 	_status_fx.ring_centre = Vector2(116, 50)
 	_status_fx.ring_reach = Vector2(110, 20)
-	_status_fx.doll_foot = Vector2(232, 1)
+	_status_fx.doll_foot = Vector2(Desk.MAT.position.x + 17, Desk.MAT.end.y - 2)
+	_status_fx.doll_facing = 1.0
+	_status_fx.doll_hangs = false
+	_status_fx.doll_drop = Vector2(0, 46 - Desk.MAT.size.y)
+	_status_fx.doll_drain = Vector2(116, 50)
 	_status_fx.bomb_foot = Vector2(209, 40)
 	add_child(_status_fx)
 	_restyle()
@@ -124,33 +135,23 @@ func _sync_strip() -> void:
 		_strip.remove_child(child)
 		child.queue_free()
 	_strip_cards.clear()
-	# Up to eleven sit side by side; a bigger cast overlaps like a fanned hand
-	# (the one under the mouse comes to the front) and drops the captions,
-	# which would run into each other. The tooltip still names every card.
+	# The cards take the whole height of the rack, each with its name on a
+	# plate across its foot. Up to eight sit side by side; a bigger cast
+	# overlaps like a fanned hand (the one under the mouse comes to the front).
 	var card_width := CardView.BASE.x * STRIP_SCALE
-	var step := 60.0
+	var step := card_width + 5.0
 	if defs.size() > 1:
 		step = minf(step, (STRIP_WIDTH - card_width) / (defs.size() - 1))
-	var captioned := step >= card_width
 	for i in defs.size():
 		var def: CharacterDef = defs[i]
 		var card := CardView.new(STRIP_SCALE)
 		card.position = Vector2(roundf(i * step), 0)
 		card.set_card(def.id, true)
+		card.set_caption(def.display_name)
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		card.clicked.connect(func(): character_clicked.emit(def, card))
 		_strip.add_child(card)
 		_strip_cards[def.id] = card
-		if not captioned:
-			continue
-		var caption := UI.label(def.display_name, 10, UI.MUTED)
-		# Clipping comes before the size: until then the label refuses to be
-		# narrower than its text, and a long name would be centred in a wider box.
-		caption.clip_text = true
-		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		caption.position = Vector2(i * step - 6, CardView.BASE.y * STRIP_SCALE + 10)
-		caption.size = Vector2(step + 12 - 4, 14)
-		_strip.add_child(caption)
 
 
 func _notification(what: int) -> void:
@@ -249,6 +250,24 @@ func status_chip(id: StringName) -> Control:
 	return _chips.chip_of(id)
 
 
+## A thrown doll's way to its place on this panel (see StatusFx.doll_way),
+## and its arrival there.
+func doll_way() -> Array[Vector2]:
+	return _status_fx.doll_way()
+
+
+func doll_facing() -> float:
+	return _status_fx.doll_facing
+
+
+func doll_hangs() -> bool:
+	return _status_fx.doll_hangs
+
+
+func doll_landed() -> void:
+	_status_fx.doll_landed()
+
+
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).
 func status_pieces(id: StringName) -> Array[Vector2]:
 	return _status_fx.pieces(id)
@@ -298,7 +317,7 @@ func _sync_hand() -> void:
 		_hand_cards.pop_back().queue_free()
 	while _hand_cards.size() < player.cards.size():
 		var card := CardView.new(1.55)
-		card.position = Vector2(_hand_cards.size() * 95, 0)
+		card.position = Vector2(_hand_cards.size() * HAND_STEP, 0)
 		card.lift = 14.0
 		card.note = "You hold this card."
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -309,6 +328,14 @@ func _sync_hand() -> void:
 		var changed: bool = i >= _hand_shown.size() or _hand_shown[i] != player.cards[i]
 		_hand_cards[i].set_card(player.cards[i], true, changed and not _hand_shown.is_empty())
 	_hand_shown = player.cards.duplicate()
+	# Fewer cards than the mat holds stand in the middle of it.
+	var start := maxf(HAND_FITS - _hand_cards.size(), 0.0) * HAND_STEP / 2.0
+	for i in _hand_cards.size():
+		var card: CardView = _hand_cards[i]
+		var home := Vector2(start + i * HAND_STEP, 0)
+		if card.position != home and card.get_meta(&"home", Vector2.INF) != home:
+			card.set_meta(&"home", home)
+			card.create_tween().tween_property(card, "position", home, 0.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
 func _sync_inventory() -> void:

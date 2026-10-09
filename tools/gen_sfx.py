@@ -104,6 +104,19 @@ def card_draw():
     return out
 
 
+def chalk():
+    """A stroke of chalk across a table: it catches and slips on the grain."""
+    out = bandpass(noise(0.34, 0.03, 0.5, 7), 1500, 6500)
+    rng = random.Random(9)
+    grip = [rng.uniform(0.25, 1.0) for _ in range(40)]
+    # Loud where it catches, nearly silent where it skips.
+    out = [s * grip[int(i / RATE * 90) % 40] * min(1.0, (len(out) - i) / (0.05 * RATE)) for i, s in enumerate(out)]
+    # And the two short strokes of the head.
+    for at in (0.3, 0.38):
+        mix(out, bandpass(noise(0.07, 0.008, 0.05, 11 + int(at * 100)), 1800, 7000), at, 0.8)
+    return out
+
+
 def piano(freq, seconds, decay):
     """A felt-hammer piano note: harmonics that die faster the higher they are."""
     out = silence(seconds)
@@ -363,13 +376,6 @@ def item_roulette_shot():
     return gunshot()
 
 
-def item_cloak():
-    """Cloth swept around the shoulders."""
-    body = noise(0.55, 0.16, 0.25, 31)
-    swept = bandpass(body, 300, lambda t: 5000 * math.exp(-t * 4.0) + 500)
-    return mix(silence(0.6), swept, 0.0, 1.0)
-
-
 def item_soul_swap():
     """Two voices crossing."""
     out = silence(0.8)
@@ -422,12 +428,88 @@ def fx_blade():
     return out
 
 
+def fx_shade():
+    """Something quick and quiet crossing the table, close to the ground."""
+    out = silence(0.7)
+    body = noise(0.5, 0.22, 0.1, 141)
+    mix(out, bandpass(body, 250, lambda t: 500 + 2600 * math.exp(-((t - 0.3) / 0.11) ** 2)), 0.04, 1.0)
+    mix(out, lowpass(noise(0.12, 0.02, 0.04, 143), 600), 0.0, 0.35)
+    return out
+
+
 def fx_lute():
     """A sly little run on the lute."""
     out = silence(1.0)
     for i, freq in enumerate((293.7, 349.2, 440.0, 523.3, 587.3)):  # D4 F4 A4 C5 D5
         mix(out, pluck(freq, 0.6, 0.32), i * 0.075, 0.7)
     mix(out, pluck(146.8, 0.8, 0.5), 0.0, 0.5)
+    return out
+
+
+def fx_serenade():
+    """The Bard's tune, played while the coins of a Swindle dance over to him.
+    The melody is given, note for note and to the hundredth of a second (3/4
+    at 75 to the minute): nine plucked notes of 0.3 s each (the last one is
+    held instead: struck as B flat and slid up to C with a vibrato on it),
+    nothing added to it and none of its rests filled. Everything else is the room around it:
+    noir, slow and unresolved. A bass that barely moves (F, C, D flat, C), a
+    low drone, dark chords on a vibraphone (F minor 9, D flat major 7, and a
+    C7 with a sharp nine left hanging) and a brush on the second and third
+    beats."""
+    note = 0.3
+    f4, gs4, as4, c5, ds5 = 349.23, 415.30, 466.16, 523.25, 622.25
+    melody = ((f4, 0.0), (f4, 0.4), (gs4, 1.2), (f4, 1.4), (gs4, 1.6), (ds5, 1.8), (c5, 2.2), (as4, 2.4), (c5, 2.8))
+    out = silence(4.6)
+    for freq, at in melody[:-1]:
+        pick = pluck(freq, note, 0.5)
+        # Stopped at the end of its 0.3 s, without a click. Where the notes
+        # come 0.2 s apart, each rings a little into the next.
+        fade = int(0.02 * RATE)
+        pick = [s * min(1.0, (len(pick) - i) / fade) for i, s in enumerate(pick)]
+        mix(out, pick, at, 0.85)
+    # The last note alone is held (asked for after the rest was fixed). It
+    # is struck as B flat, like the one before it, and is carried up to the
+    # C it used to be: a slow slide of a whole tone with an even vibrato on
+    # it all the way, the same small amount above and below.
+    _was, at = melody[-1]
+    held = 2.5
+    # It is let go of gently: the last stretch of it fades to nothing.
+    fade_out = 1.0
+
+    def sliding(n):
+        def pitch(t):
+            # Still on B flat for a moment, then up, easing in and out.
+            up = min(max(t - 0.25, 0.0) / 0.95, 1.0)
+            up = up * up * (3.0 - 2.0 * up)
+            waver = 14.0 * min(t / 0.2, 1.0) * math.sin(TAU * 5.5 * t)
+            return as4 * n * 2.0 ** ((200.0 * up + waver) / 1200.0)
+        return pitch
+
+    for n in range(1, 8):
+        # It dies away slowly, so that the slide is heard to its end.
+        ringing = tone(sliding(n), held, 0.002, 2.6 / n ** 0.5)
+        ringing = [s * min(1.0, (len(ringing) - i) / (fade_out * RATE)) for i, s in enumerate(ringing)]
+        mix(out, ringing, at, 0.85 / n ** 1.1)
+    mix(out, highpass(noise(0.01, 0.0005, 0.004, int(as4)), 2000), at, 0.85 * 0.3)
+    mix(out, lowpass(tone(43.65, 4.4, 0.6, 5.0), 200), 0.0, 0.5)
+    for freq, at, ring in ((87.31, 0.0, 1.5), (130.81, 1.6, 0.8), (69.30, 2.4, 0.6), (65.41, 2.8, 1.7)):
+        mix(out, upright_bass(freq, ring, ring * 0.8), at, 0.75)
+    chords = (((207.65, 261.63, 311.13, 392.0), 0.0, 2.3), ((207.65, 261.63, 349.23), 2.4, 0.5),
+              ((164.81, 233.08, 311.13), 2.8, 1.7))
+    for chord, at, ring in chords:
+        for i, freq in enumerate(chord):
+            mix(out, vibes(freq, ring, ring * 0.8), at + i * 0.012, 0.16)
+    for at in (0.8, 1.6, 3.2, 4.0):
+        mix(out, brush(0.16, 43 + int(at * 10)), at, 0.22)
+    return lowpass(out, 4800)
+
+
+def fx_doll_hit():
+    """A rag doll thrown against wood: a soft thump, and the straw in it."""
+    out = silence(0.4)
+    mix(out, tone(120, 0.2, 0.002, 0.09, glide=0.5), 0.0, 1.0)
+    mix(out, lowpass(noise(0.12, 0.002, 0.07, 221), 900), 0.0, 0.9)
+    mix(out, bandpass(noise(0.22, 0.01, 0.16, 223), 2500, 7000), 0.02, 0.18)
     return out
 
 
@@ -615,27 +697,32 @@ def fx_shimmer():
     return out
 
 
-def fx_burst_fire():
-    """Three rounds, fast."""
-    out = silence(0.7)
-    for i in range(3):
-        mix(out, small_shot(71 + 3 * i), i * 0.09, 1.0)
-    return drive(out, 3.5)
-
-
-def fx_vault():
-    """The handle thrown, the wheel spun, the door groaning open."""
-    out = silence(1.2)
-    mix(out, steel_click(3.0, 85), 0.0, 1.2)
-    at, gap = 0.14, 0.035
-    for i in range(7):
-        mix(out, steel_click(1.6, 87 + i), at, 0.45)
-        at += gap
-        gap *= 1.15
-    groan = lowpass(tone(lambda t: 62 - 14 * t, 0.6, 0.15, 0.3, "saw", vibrato=0.02), 320)
-    mix(out, groan, 0.5, 0.9)
-    mix(out, steel_click(2.6, 95), 0.5, 0.8)
+def fx_sniper_aim():
+    """A laser sight settling on somebody: a thin whine and a beep that
+    hurries up. 1.55 s, the time the rifle takes to find its target."""
+    out = silence(1.6)
+    mix(out, tone(1400, 1.55, 0.3, 4.0, glide=1.5, vibrato=0.01), 0.0, 0.12)
+    for at in (0.0, 0.4, 0.72, 0.97, 1.16, 1.3, 1.4, 1.48):
+        mix(out, tone(1760, 0.06, 0.002, 0.04), at, 0.5)
     return out
+
+
+def fx_sniper():
+    """One round from a long rifle: the crack, the valley answering twice,
+    and the bolt worked afterwards."""
+    out = silence(2.4)
+    shot = gunshot(1.9, 211)
+    mix(out, shot, 0.0, 1.0)
+    mix(out, tone(48, 0.6, 0.001, 0.3, glide=0.5), 0.0, 1.6)
+    mix(out, bandpass(noise(0.05, 0.0002, 0.015, 213), 2500, 9000), 0.0, 1.2)
+    for at, gain, cutoff in ((0.33, 0.3, 1800), (0.71, 0.16, 1100)):
+        mix(out, lowpass(shot, cutoff), at, gain)
+    mix(out, steel_click(1.5, 215), 1.25, 0.45)
+    mix(out, steel_click(1.1, 217), 1.42, 0.5)
+    return drive(out[:int(2.4 * RATE)], 3.0)
+
+
+# The vault (fx_vault) is a recording: see cut_sfx.py.
 
 
 def fx_shutter():
@@ -855,46 +942,7 @@ def fx_boom():
     return drive(out[:int(1.5 * RATE)], 3.5)
 
 
-def creak(seconds, low, high, seed):
-    """A hinge complaining: a reedy note that wavers as the door moves."""
-    rng = random.Random(seed)
-    wobble = [rng.uniform(0.0, TAU) for _ in range(3)]
-    def pitch(t):
-        along = t / seconds
-        return (low + (high - low) * along) * (1.0 + 0.05 * math.sin(31 * t + wobble[0]) + 0.03 * math.sin(77 * t + wobble[1]))
-    out = silence(seconds)
-    mix(out, tone(pitch, seconds, seconds * 0.3, seconds * 1.5, shape="saw"), 0.0, 0.5)
-    mix(out, tone(lambda t: pitch(t) * 2.02, seconds, seconds * 0.3, seconds * 1.2, shape="square"), 0.0, 0.18)
-    out = bandpass(out, 500, 2600)
-    # It catches and lets go: the note is chopped, not held.
-    return [s * (0.55 + 0.45 * math.sin(TAU * 23 * i / RATE + wobble[2]) ** 2) for i, s in enumerate(out)]
-
-
-def ui_doors_shut():
-    """The doors of the saloon swung shut: the rush of them, the hinges, and
-    the two leaves meeting 0.45 s in (the time the screen takes to close)."""
-    out = silence(1.1)
-    mix(out, lowpass(noise(0.45, 0.4, 0.2, 301), lambda t: 300 + 2500 * t), 0.0, 0.35)
-    mix(out, creak(0.32, 620, 880, 303), 0.08, 0.14)
-    at = 0.44
-    mix(out, lowpass(noise(0.09, 0.0005, 0.03, 305), 1400), at, 1.3)
-    for freq, gain, decay in ((62, 1.3, 0.22), (118, 0.9, 0.12), (233, 0.5, 0.06), (410, 0.25, 0.035)):
-        mix(out, tone(freq, 0.5, 0.001, decay, glide=0.8), at, gain)
-    # The second leaf, a moment behind, and the latch dropping.
-    mix(out, wood_knock(307), at + 0.035, 0.5)
-    mix(out, steel_click(1.6, 309), at + 0.07, 0.3)
-    mix(out, lowpass(noise(0.5, 0.01, 0.25, 311), 420), at, 0.3)
-    return drive(out, 1.6)
-
-
-def ui_doors_open():
-    """The latch lifted and the doors pushed open on their hinges."""
-    out = silence(0.85)
-    mix(out, steel_click(1.3, 313), 0.0, 0.5)
-    mix(out, creak(0.5, 520, 760, 315), 0.08, 0.22)
-    mix(out, creak(0.3, 700, 610, 317), 0.36, 0.1)
-    mix(out, lowpass(noise(0.6, 0.15, 0.3, 319), 1100), 0.06, 0.3)
-    return out
+# The doors themselves (ui_doors_shut, ui_doors_open) are recordings: see cut_sfx.py.
 
 
 def ui_lock():
@@ -962,8 +1010,6 @@ def ui_gather():
 
 
 SOUNDS = {
-    "ui_doors_shut": ui_doors_shut,
-    "ui_doors_open": ui_doors_open,
     "ui_lock": ui_lock,
     "ui_unlock": ui_unlock,
     "ui_deal": ui_deal,
@@ -978,6 +1024,7 @@ SOUNDS = {
     "coin_2": lambda: coin(((0.0, 0.8), (0.016, 0.6), (0.027, 0.3)), 1.035, 53),
     "coin_3": lambda: coin(((0.0, 1.0), (0.008, 0.35)), 0.97, 55),
     "fx_blade": fx_blade,
+    "fx_shade": fx_shade,
     "fx_lute": fx_lute,
     "fx_lute_flourish": fx_lute_flourish,
     "fx_cash": fx_cash,
@@ -993,8 +1040,11 @@ SOUNDS = {
     "fx_poof": fx_poof,
     "fx_conjure": fx_conjure,
     "fx_shimmer": fx_shimmer,
-    "fx_burst_fire": fx_burst_fire,
-    "fx_vault": fx_vault,
+    "fx_sniper_aim": fx_sniper_aim,
+    "fx_serenade": fx_serenade,
+    "fx_doll_hit": fx_doll_hit,
+    "chalk": chalk,
+    "fx_sniper": fx_sniper,
     "fx_shutter": fx_shutter,
     "fx_hush": fx_hush,
     "fx_tin": fx_tin,
@@ -1025,7 +1075,6 @@ SOUNDS = {
     "item_roulette_tick": item_roulette_tick,
     "item_roulette_cock": item_roulette_cock,
     "item_roulette_shot": item_roulette_shot,
-    "item_cloak": item_cloak,
     "item_soul_swap": item_soul_swap,
 }
 PEAK = 0.7
@@ -1033,14 +1082,14 @@ PEAK = 0.7
 PEAKS = {
     "truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38, "item_roulette": 0.5,
     "fx_hush": 0.4, "fx_shutter": 0.5, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5, "fx_lute": 0.55,
-    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "fx_burst_fire": 0.85, "fx_hex": 0.75,
+    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "chalk": 0.28, "fx_serenade": 0.8, "fx_doll_hit": 0.6, "fx_sniper_aim": 0.3, "fx_sniper": 0.95, "fx_hex": 0.75,
     "item_death": 0.9,
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
     "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
     "fx_scales_chain": 0.4, "fx_scales": 0.9,
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
-    "ui_doors_shut": 0.85, "ui_doors_open": 0.4, "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
+    "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
     "ui_gather": 0.5,
 }
 

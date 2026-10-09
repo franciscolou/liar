@@ -2,13 +2,13 @@
 
 importer="wav"
 type="AudioStreamWAV"
-uid="uid://ceu2o0j118qed"
-path="res://.godot/imported/item_cloak.wav-a54bc067b5ceeaa21ed0f4f47bfbba39.sample"
+uid="uid://djx4x48hjyefk"
+path="res://.godot/imported/fx_sniper.wav-06eb4e2e453bc2a8ddf7e435c2d4ac95.sample"
 
 [deps]
 
-source_file="res://assets/sounds/item_cloak.wav"
-dest_files=["res://.godot/imported/item_cloak.wav-a54bc067b5ceeaa21ed0f4f47bfbba39.sample"]
+source_file="res://assets/sounds/fx_sniper.wav"
+dest_files=["res://.godot/imported/fx_sniper.wav-06eb4e2e453bc2a8ddf7e435c2d4ac95.sample"]
 
 [params]
 

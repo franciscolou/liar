@@ -3,6 +3,8 @@ extends Control
 ## An item icon (shop slot or inventory), or the item back when hidden.
 
 signal clicked
+## Right click, or the second click of a double click: "this one, no questions".
+signal picked
 
 const BASE := Vector2(61, 64)
 
@@ -43,6 +45,11 @@ func set_enabled(value: bool) -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if value else Control.CURSOR_ARROW
 
 
+## Draws the picture with `look` (a material), or as it is with null.
+func set_look(look: Material) -> void:
+	_art.material = look
+
+
 func center() -> Vector2:
 	return global_position + size / 2.0
 
@@ -59,5 +66,9 @@ func _hover(inside: bool) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if not (event is InputEventMouseButton and event.pressed):
+		return
+	if event.button_index == MOUSE_BUTTON_RIGHT or (event.button_index == MOUSE_BUTTON_LEFT and event.double_click):
+		picked.emit()
+	elif event.button_index == MOUSE_BUTTON_LEFT:
 		clicked.emit()

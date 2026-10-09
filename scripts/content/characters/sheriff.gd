@@ -1,7 +1,7 @@
 extends CharacterDef
 ## Sheriff Amos Harlan. The law in Carcaj comes with a price list.
 
-const TOLL := 2
+const TOLL := 3
 
 
 func _init() -> void:
@@ -18,29 +18,28 @@ class Shakedown extends Ability:
 	func _init() -> void:
 		id = &"sheriff.shakedown"
 		display_name = "Shakedown"
-		description = "Take %d coins from every other player." % TOLL
+		description = "Steal %d coins from a player." % TOLL
 		on_turn = true
+		targeting = Targeting.OPPONENT
 		tags = [&"steal"]
 
 	func can_use(player: PlayerState, engine: GameEngine) -> String:
-		return "" if not _marks(player, engine).is_empty() else Loc.t("Nobody has coins to take")
+		return "" if engine.targetable_opponents(player).any(_has_coins) else Loc.t("Nobody has coins to take")
+
+	func target_candidates(play: Play) -> Array:
+		return play.engine.targetable_opponents(play.actor).filter(_has_coins)
 
 	func resolve(play: Play) -> void:
-		var engine := play.engine
-		for mark: PlayerState in _marks(play.actor, engine):
-			if engine.over or not play.actor.alive:
-				return
-			if mark.alive:
-				await engine.steal_coins(play.actor, mark, TOLL, play)
+		await play.engine.steal_coins(play.actor, play.target, TOLL, play)
 
-	## Everyone the round goes through, in turn order. Nobody is aimed at, but
-	## a player out of sight is passed over all the same.
-	func _marks(player: PlayerState, engine: GameEngine) -> Array:
-		return engine.seat_order(player).filter(
-			func(p): return p != player and p.coins > 0 and not p.has_status(&"untargetable"))
+	func _has_coins(p: PlayerState) -> bool:
+		return p.coins > 0
 
-	func ai_weight(player: PlayerState, engine: GameEngine) -> float:
-		return 0.6 * _marks(player, engine).size()
+	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
+		return 1.4
+
+	func ai_target_weight(_play: Play, candidate: PlayerState) -> float:
+		return float(mini(candidate.coins, TOLL))
 
 
 class Confiscate extends Ability:

@@ -92,7 +92,7 @@ const MESSAGES := {
 	"Whatever costs coins costs 2 more: abilities, items, rerolls. Wears off at the end of the next turn of whoever spiked the drink.": "Tudo o que custa moedas custa 2 a mais: habilidades, itens, re-rolagens. Passa no fim do próximo turno de quem batizou a bebida.",
 	"Spike a player's drink. Whatever costs them coins costs 2 more until the end of your next turn.": "Batize a bebida de um jogador. Tudo o que custa moedas custa 2 a mais para ele até o fim do seu próximo turno.",
 	"Show a card from your hand. Everyone holding that character, you included, discards it and draws a new card.": "Mostre uma carta da sua mão. Todos que têm esse personagem, você inclusive, descartam a carta e compram uma nova.",
-	"Take 2 coins from every other player.": "Tome 2 moedas de cada um dos outros jogadores.",
+	"Steal 3 coins from a player.": "Roube 3 moedas de um jogador.",
 	"Nobody has coins to take": "Ninguém tem moedas para tomar",
 	"Pay 3 coins to seize an item from a player. You choose which; a hidden item is taken blind.": "Pague 3 moedas para apreender um item de um jogador. Você escolhe qual; um item escondido é levado às cegas.",
 	"Which of %s's items do you seize?": "Qual dos itens de %s você apreende?",

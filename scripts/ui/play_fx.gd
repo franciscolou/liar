@@ -60,6 +60,28 @@ const SERENADES: Array[Dictionary] = [
 ]
 ## How long the lute stays out: the tune and what rings on after it.
 const SERENADE_LENGTH := 5.0
+## A Silver Tongue: how far short of the coins the palm of the hand stops, how
+## far from its grip on the neck the lute strikes, and the radians it is
+## lifted before a blow.
+const GLOVE_SHORT := 40.0
+const LUTE_REACH := 84.0
+const LUTE_LIFT := 0.95
+## How many times it comes down on the hand.
+const LUTE_BLOWS := 3
+## A Shakedown: the px one hop of the boot covers and the seconds it takes,
+## how high over the coins the heel is drawn back, how far back the boot is
+## tipped to pour (toe down: see BootFx.pose), the most coins shown, the
+## seconds between two coins jumping out of the pile and each one's time in
+## the air, and the same for the coins poured out.
+const BOOT_HOP := 170.0
+const BOOT_STRIDE := 0.2
+const BOOT_COCKED := 26.0
+const BOOT_TIPPED := -1.6
+const BOOT_COINS := 6
+const BOOT_SPIT := 0.1
+const BOOT_ARC := 0.5
+const BOOT_POUR := 0.15
+const BOOT_DROP := 0.24
 const DRAIN_FRAMES := 12
 const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
@@ -86,6 +108,13 @@ var _drain_frames: Dictionary = {}  # texture path -> Array of Texture2D
 ## The lasso of a Confiscate, turning overhead until it is thrown.
 var _lasso: RopeFx
 var _lasso_spin: Tween
+## The boot of a Shakedown, out from the moment it is drawn back until the
+## coins are home: whose it is, whose coins it is over, and the pose it was
+## last sent to (see _boot_go).
+var _boot: BootFx
+var _boot_owner: PlayerState
+var _boot_target: PlayerState
+var _boot_pose: Array = []
 ## The hat of a Hat Trick, set down and waiting for what comes out of it.
 var _hat: HatFx
 var _hat_owner: PlayerState
@@ -263,14 +292,171 @@ func _note(at: Vector2, index: int) -> void:
 	up.chain().tween_callback(note.queue_free)
 
 
+## A hand in a white glove slips out of the thief's box and goes for the
+## Bard's coins, in no straight line: it looks round, has second thoughts,
+## and does the last stretch with its fingers itching. The lute comes down
+## on it, and again: every blow sends it jumping further back, fingers wide
+## and shaking, with the lute coming after it, until it bolts back the way
+## it came.
 func _fx_bard_silver_tongue(play: Play) -> void:
-	var here := _at(play.actor)
+	var speed: float = table._speed
+	var purse: Vector2 = table._coin_anchor(play.actor)
+	var thief: Variant = play.event.data.get("thief") if play.event != null else null
+	if thief is PlayerState and booting(thief, play.actor):
+		# It is a boot that is after them, not a hand.
+		await _boot_bonked(play)
+		return
+	var from := POT
+	if thief is PlayerState:
+		from = table._clear_of(table._node_of(thief), _at(thief), purse, 0.0)
+	if from.distance_to(purse) < GLOVE_SHORT * 2.0:
+		from = POT
+	var way := (purse - from).normalized()
+	var across := way.orthogonal()
+	var aim := way.angle()
+	# Where it is stopped: its fingers on the coins.
+	var reach := purse - way * GLOVE_SHORT
+	var glove := GloveFx.new()
+	glove.position = from
+	glove.rotation = aim
+	glove.flipped = way.x < 0.0
+	glove.scale = Vector2(0.4, 0.4)
+	glove.modulate.a = 0.0
+	add_child(glove)
+	var move := glove.create_tween()
+	move.tween_property(glove, "modulate:a", 1.0, 0.08 / speed)
+	move.parallel().tween_property(glove, "scale", Vector2.ONE, 0.16 / speed)
+	move.parallel().tween_property(glove, "position", from.lerp(reach, 0.38) + across * 10.0, 0.22 / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# A look to one side and to the other: is anybody watching?
+	move.tween_property(glove, "rotation", aim - 0.4, 0.09 / speed)
+	move.parallel().tween_property(glove, "fidget", 1.0, 0.05 / speed)
+	move.tween_property(glove, "rotation", aim + 0.3, 0.12 / speed)
+	move.tween_property(glove, "rotation", aim, 0.07 / speed)
+	move.parallel().tween_property(glove, "fidget", 0.0, 0.07 / speed)
+	# Further in, and then second thoughts.
+	move.tween_property(glove, "position", from.lerp(reach, 0.74) - across * 8.0, 0.18 / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	move.tween_property(glove, "position", from.lerp(reach, 0.62) - across * 4.0, 0.14 / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	move.parallel().tween_property(glove, "spread", 0.5, 0.1 / speed)
+	move.tween_interval(0.1 / speed)
+	# The last stretch, fingers itching.
+	move.tween_property(glove, "position", reach, 0.34 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	move.parallel().tween_property(glove, "fidget", 1.0, 0.1 / speed)
+	move.parallel().tween_property(glove, "spread", 0.0, 0.2 / speed)
+	# The lute is held by the neck, past the hand and over it (under it, for
+	# a Bard sitting at the top of the screen). The grip moves with every
+	# blow: it is swung with the whole arm, not turned on a pin.
+	var side := 1.0 if way.x >= 0.0 else -1.0
+	var over := -1.0 if reach.y > 170.0 else 1.0
+	# Which way round it comes down.
+	var turn := side * over
+	var grip := reach + Vector2(side * 0.8, over * 0.6) * LUTE_REACH
+	var club := Control.new()
+	club.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	club.position = grip
+	var struck := (reach - grip).angle() - PI
+	var raised := struck - LUTE_LIFT * turn
+	club.rotation = raised
+	club.modulate.a = 0.0
+	var lute := LuteFx.new()
+	lute.position = Vector2(LuteFx.BELLY - LUTE_REACH, 0.0)
+	club.add_child(lute)
+	add_child(club)
+	# Which way a blow sends the hand: the way the belly of the lute is going.
+	var blow := (reach - (grip - Vector2.from_angle(raised) * LUTE_REACH)).normalized()
+	# Every blow drives the hand further back, and the lute goes after it.
+	var held := grip - reach
+	var spot := reach
+	var step := clampf(from.distance_to(reach) / (LUTE_BLOWS + 1.0), 14.0, 46.0)
+	await _wait(0.85)
+	club.create_tween().tween_property(club, "modulate:a", 1.0, 0.12 / speed)
+	await _wait(0.3)
+	for knock in LUTE_BLOWS:
+		if not is_instance_valid(club) or not is_instance_valid(glove):
+			return
+		# The last one goes all the way round first, and lands hardest.
+		var last := knock == LUTE_BLOWS - 1
+		var wind := 0.2 if last else 0.14
+		var fall := 0.22 if last else 0.07
+		var hard := 1.0 + 0.25 * knock
+		grip = spot + held
+		# Where the hand jumps back to, and so where the next one lands.
+		var back := spot - way * step + across * (10.0 if knock % 2 == 0 else -10.0)
+		var swing := club.create_tween()
+		swing.tween_property(club, "position", grip - blow * (34.0 if last else 22.0), wind / speed) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		swing.parallel().tween_property(club, "rotation", raised - turn * (0.5 if last else 0.35), wind / speed) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		if last:
+			struck += turn * TAU
+			raised += turn * TAU
+		swing.tween_property(club, "position", grip + blow * 10.0, fall / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		swing.parallel().tween_property(club, "rotation", struck + turn * 0.1, fall / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		# It bounces off, and is lifted again over where the hand went.
+		swing.tween_property(club, "position", grip - blow * 10.0, 0.1 / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		swing.parallel().tween_property(club, "rotation", struck - turn * 0.3, 0.1 / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		swing.parallel().tween_property(lute, "scale", Vector2(0.86, 1.18), 0.04 / speed)
+		swing.parallel().tween_property(lute, "scale", Vector2.ONE, 0.12 / speed).set_delay(0.04 / speed)
+		var after := grip if last else back + held
+		swing.tween_property(club, "position", after, 0.25 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		swing.parallel().tween_property(club, "rotation", raised, 0.25 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		await _wait(wind + fall)
+		if not is_instance_valid(glove):
+			return
+		_snd("fx_lute_bonk")
+		lute.pluck(0.5)
+		burst(spot, Color.WHITE, 8 + 4 * knock, 200.0 * hard, 0.3, 400.0, 6.0)
+		ring(spot, UI.GOLD, 10.0, 70.0 * hard, 0.25, 5.0)
+		table._shake_screen(5.0 * hard)
+		# Knocked flat, then back out of the way, stiff, fingers wide and
+		# shaking all over.
+		move.kill()
+		glove.sting = 1.0
+		glove.spread = 1.0
+		glove.fidget = 1.0
+		glove.rotation = aim
+		glove.position = spot
+		move = glove.create_tween()
+		move.tween_property(glove, "position", spot + blow * 18.0 * hard, 0.05 / speed)
+		move.parallel().tween_property(glove, "scale", Vector2(1.3, 0.65), 0.05 / speed)
+		move.tween_property(glove, "position", back, 0.14 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		move.parallel().tween_property(glove, "scale", Vector2.ONE, 0.14 / speed)
+		move.parallel().tween_property(glove, "sting", 0.0, 0.5 / speed)
+		move.tween_callback(_alarm.bind(back))
+		for wag: float in [0.3, -0.3, 0.2, 0.0]:
+			move.tween_property(glove, "rotation", aim + wag, 0.06 / speed)
+		spot = back
+		if not last:
+			await _wait(0.38)
+	# Home it goes, as fast as it can, and he plays it off.
+	move.tween_interval(0.12 / speed)
+	move.tween_property(glove, "position", from, 0.24 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	move.parallel().tween_property(glove, "modulate:a", 0.0, 0.08 / speed).set_delay(0.16 / speed)
+	move.tween_callback(glove.queue_free)
+	await _wait(0.45)
 	_snd("fx_lute_flourish")
-	ring(here, UI.GOLD, 20.0, 100.0, 0.4, 5.0)
-	rise(here, Color("f6e6a8"), 12, 70.0)
-	await _wait(0.2)
-	ring(here, Color.WHITE, 20.0, 120.0, 0.4, 3.0)
-	await _wait(0.35)
+	if is_instance_valid(club):
+		lute.pluck(0.4)
+		_note(reach, 0)
+		_note(reach, 1)
+		var away := club.create_tween()
+		away.tween_interval(0.45 / speed)
+		away.tween_property(club, "modulate:a", 0.0, 0.25 / speed)
+		away.tween_callback(club.queue_free)
+	await _wait(0.5)
+
+
+## Three short strokes over `at`: whatever is there has had a fright.
+func _alarm(at: Vector2) -> void:
+	for tilt: float in [-0.6, 0.0, 0.6]:
+		var out := Vector2.UP.rotated(tilt)
+		line(at + out * 34.0, at + out * 48.0, Color.WHITE, 4.0, 0.3)
 
 
 func _fx_heir_sold_out(play: Play) -> void:
@@ -530,6 +716,7 @@ func drop_hat() -> void:
 ## Clears away what an effect left out waiting for something that never
 ## came: the play is over.
 func put_away() -> void:
+	drop_boot()
 	drop_lasso()
 	drop_hat()
 	drop_wand()
@@ -1347,66 +1534,404 @@ func _card_dealt(view: CardView) -> void:
 	UI.pop(view, 1.15, 0.2)
 
 
-## The badge comes out spinning, catches the light, and then the whole room
-## feels a hand in its pocket.
+## The Sheriff's boot steps out of his box and across the table, spur
+## jingling, to the coins of whoever is being shaken down, and is drawn back
+## over them, heel up and rowel spinning. There it waits: the coins are only
+## his once nobody stopped him (boot_stomp), and it is walked home empty if
+## somebody did (put_away).
 func _fx_sheriff_shakedown(play: Play) -> void:
-	var here := _at(play.actor)
+	drop_boot()
 	var speed: float = table._speed
-	var badge := BadgeFx.new()
-	badge.position = here
-	badge.scale = Vector2.ONE * 0.2
-	badge.rotation = -TAU * 2.5
-	badge.modulate.a = 0.0
-	add_child(badge)
-	_snd("fx_whistle")
-	dim(0.45, 1.7)
-	# Out of the pocket: a quick spin that winds down as it grows.
-	var enter := badge.create_tween().set_parallel()
-	enter.tween_property(badge, "modulate:a", 1.0, 0.1 / speed)
-	enter.tween_property(badge, "scale", Vector2.ONE, 0.5 / speed) \
+	var coin: Vector2 = table._coin_anchor(play.target)
+	var home := _at(play.actor)
+	var from: Vector2 = table._clear_of(table._node_of(play.actor), home, coin, 0.0)
+	var boot := BootFx.new()
+	boot.facing = -1.0 if coin.x < from.x else 1.0
+	boot.modulate.a = 0.0
+	add_child(boot)
+	_boot = boot
+	_boot_owner = play.actor
+	_boot_target = play.target
+	_boot_pose = [BootFx.ROWEL, home, 0.0]
+	boot.pose(BootFx.ROWEL, home, 0.0)
+	var f := boot.facing
+	# Beside the coins, heel first.
+	var stand := coin + Vector2(-f * 12.0, -2.0)
+	var hops := clampi(roundi(from.distance_to(stand) / BOOT_HOP), 1, 3)
+	var move := boot.create_tween()
+	move.tween_property(boot, "modulate:a", 1.0, 0.08 / speed)
+	_boot_go(move, [BootFx.ROWEL, from, 0.0], 0.12, 8.0)
+	move.tween_callback(_boot_lands.bind(boot))
+	for hop in hops:
+		var to := from.lerp(stand, float(hop + 1) / hops)
+		_boot_go(move, [BootFx.ROWEL, to, 0.0], BOOT_STRIDE, _boot_lift(from.lerp(stand, float(hop) / hops), to))
+		move.tween_callback(_boot_lands.bind(boot))
+		move.tween_interval(0.04 / speed)
+	# Drawn back: the toe goes down and the heel comes up over the coins.
+	move.tween_callback(_snd.bind("fx_spur"))
+	move.tween_property(boot, "restless", 1.0, 0.01)
+	_boot_go(move, [BootFx.ROWEL, coin + Vector2(-f * 6.0, -BOOT_COCKED), -0.8], 0.24) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	enter.tween_property(badge, "rotation", 0.0, 0.58 / speed) \
-			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	for i in 4:
-		burst(here, UI.GOLD, 3, 120.0, 0.25, 0.0, 6.0)
-		await _wait(0.14)
-	await _wait(0.06)
-	if not is_instance_valid(badge):
-		return
+	move.parallel().tween_property(boot, "whirl", 20.0, 0.3 / speed)
+	await _wait(0.12 + hops * (BOOT_STRIDE + 0.04) + 0.4)
 
-	# Held still, it catches the light.
-	_snd("fx_glint")
-	badge.create_tween().tween_property(badge, "shine", 1.0, 0.45 / speed)
-	rise(here, BadgeFx.LIGHT, 8, 34.0)
-	await _wait(0.47)
-	if not is_instance_valid(badge):
-		return
 
-	# The wave, and what it shakes out of everyone it reaches.
-	var pulse := badge.create_tween()
-	pulse.tween_property(badge, "scale", Vector2.ONE * 1.3, 0.07 / speed)
-	pulse.tween_property(badge, "scale", Vector2.ONE, 0.22 / speed)
-	_snd("fx_wave")
-	ring(here, UI.GOLD, 30.0, 400.0, 0.6, 6.0)
-	ring(here, BadgeFx.LIGHT, 20.0, 300.0, 0.5, 3.0)
-	flash(Color(1.0, 0.9, 0.5, 0.14), 0.2)
-	table._shake_screen(5.0)
-	await _wait(0.22)
-	for p: PlayerState in table.engine.opponents(play.actor):
-		var there := _at(p)
-		ring(there, UI.RED, 80.0, 18.0, 0.35, 4.0)
-		burst(there, UI.GOLD, 6, 150.0, 0.35, 420.0)
-		stream(there, here, UI.GOLD, 4, 0.35, 0.2)
-		var box: Control = table._node_of(p)
-		if box is SeatView:
-			UI.shake(box, 6.0, 0.25)
+## Moves the boot on from the pose it was last given to the pose `to`
+## ([cell, where, lean]: see BootFx.pose), as one more step of `move`. It
+## leaves the straight way by `lift` px, upwards, at the middle of it.
+func _boot_go(move: Tween, to: Array, time: float, lift := 0.0) -> MethodTweener:
+	var step := move.tween_method(_boot_step.bind(_boot, _boot_pose, to, lift), 0.0, 1.0, time / table._speed)
+	_boot_pose = to
+	return step
+
+
+func _boot_step(t: float, boot: BootFx, a: Array, b: Array, lift: float) -> void:
+	var cell: Vector2 = (a[0] as Vector2).lerp(b[0], t)
+	var where: Vector2 = (a[1] as Vector2).lerp(b[1], t) - Vector2(0.0, lift * 4.0 * t * (1.0 - t))
+	boot.pose(cell, where, lerpf(a[2], b[2], t))
+
+
+## How high a hop between two places it stands on can go without the top of
+## the boot leaving the screen.
+func _boot_lift(a: Vector2, b: Vector2) -> float:
+	return clampf(minf(a.y, b.y) - BootFx.TALL - 4.0, 4.0, 30.0)
+
+
+## The heel comes down on the table at the end of a hop.
+func _boot_lands(boot: BootFx) -> void:
+	_snd("fx_boot_step")
+	burst(boot.at(BootFx.HEEL), BootFx.DUST, 4, 70.0, 0.25, 200.0, 4.0)
+	_boot_jolt(boot, Vector2(1.12, 0.86), 9.0)
+	if boot.haul > 0:
+		_snd("coin_%d" % (randi() % 3 + 1))
+
+
+## The boot gives under a blow, and the rowel is set turning by it.
+func _boot_jolt(boot: BootFx, squash: Vector2, kick: float) -> void:
+	boot.scale = squash
+	boot.spur(kick)
+	var give := boot.create_tween()
+	give.tween_property(boot, "scale", Vector2.ONE, 0.14 / table._speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## True while the boot of `thief` is drawn back over the coins of `victim`.
+func booting(thief: PlayerState, victim: PlayerState) -> bool:
+	return _boot != null and is_instance_valid(_boot) and _boot_owner == thief and _boot_target == victim
+
+
+## The coins of a Shakedown leaving their owner (the `coins` event with
+## reason "stolen"): the heel comes down with everything behind it, the rowel
+## of the spur on the coin of their balance, and the coins jump out of the
+## pile, one after the other, in a high arc that ends in the mouth of the
+## boot, which has hopped clear to catch them.
+func boot_stomp(d: Dictionary) -> void:
+	var boot := _boot
+	var speed: float = table._speed
+	var victim: PlayerState = d.player
+	var total: int = -d.delta
+	var coin: Vector2 = table._coin_anchor(victim)
+	var f := boot.facing
+	var bar: StatBar = table._stat_bar(victim)
+	if bar != null:
+		bar.hold_coins(victim)
+	# A little further back, and down.
+	var move := boot.create_tween()
+	_boot_go(move, [BootFx.ROWEL, coin + Vector2(-f * 8.0, -BOOT_COCKED - 6.0), -1.0], 0.12) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_boot_go(move, [BootFx.ROWEL, coin, 0.4], 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await _wait(0.19)
+	if boot != _boot or not is_instance_valid(boot):
+		return
+	_snd("fx_boot_stomp")
+	boot.restless = 0.0
+	boot.whirl = 0.0
+	_boot_jolt(boot, Vector2(1.22, 0.72), 50.0)
+	burst(coin, UI.GOLD, 14, 260.0, 0.45, 520.0)
+	burst(coin, Color.WHITE, 6, 200.0, 0.25, 300.0, 6.0)
+	ring(coin, UI.GOLD, 8.0, 64.0, 0.3, 5.0)
+	ring(coin, Color.WHITE, 4.0, 40.0, 0.2, 3.0)
+	flash(Color(1.0, 0.9, 0.5, 0.12), 0.18)
+	table._shake_screen(10.0)
+	var box: Control = table._node_of(victim)
+	if box is SeatView:
+		UI.shake(box, 8.0, 0.3)
+	# It stays where it hit for a moment, then hops clear, mouth to the coins.
+	var mouth := Vector2(clampf(coin.x + f * 46.0, 44.0, size.x - 44.0), maxf(coin.y - 20.0, BootFx.TALL + 8.0))
+	move = boot.create_tween()
+	move.tween_interval(0.06 / speed)
+	_boot_go(move, [BootFx.MOUTH, mouth, 0.3], 0.24, 14.0)
+	var coins := clampi(total, 1, BOOT_COINS)
+	for i in coins:
+		var share := total * (i + 1) / coins - total * i / coins
+		var sprite := _sprite(UI.tex(COIN_ART), coin, Vector2(20, 20))
+		boot.take(sprite)
+		sprite.hide()
+		var height := clampf(46.0 + 12.0 * i, 16.0, (coin.y + mouth.y) / 2.0 - 14.0)
+		var flight := sprite.create_tween()
+		flight.tween_interval((0.03 + BOOT_SPIT * i) / speed)
+		flight.tween_callback(_boot_spat.bind(sprite, boot, bar, share, coin))
+		flight.tween_method(_boot_spit.bind(sprite, boot, coin, height, i), 0.0, 1.0, BOOT_ARC / speed)
+		flight.tween_callback(_boot_caught.bind(sprite, boot, i))
+	await _wait(0.03 + BOOT_SPIT * (coins - 1) + BOOT_ARC + 0.12)
+	if boot != _boot or not is_instance_valid(boot):
+		return
+	# Upright again, with what it got.
+	_boot_go(boot.create_tween(), [BootFx.MOUTH, mouth, 0.0], 0.14)
+	await _wait(0.14)
+
+
+## A coin jumps out of the pile at `from`.
+func _boot_spat(sprite: Control, boot: BootFx, bar: StatBar, share: int, from: Vector2) -> void:
+	if is_instance_valid(boot):
+		_boot_coin(sprite, boot, from)
+	sprite.show()
+	if bar != null:
+		bar.add_coins(-share)
+	burst(from, UI.GOLD, 3, 120.0, 0.2, 300.0, 4.0)
+
+
+## A coin `t` of its way from the pile at `from` into the boot: thrown up
+## and over, turning, and down into the mouth, wherever that is by now.
+func _boot_spit(t: float, sprite: Control, boot: BootFx, from: Vector2, height: float, index: int) -> void:
+	if not is_instance_valid(boot):
+		return
+	var into := boot.at(BootFx.MOUTH + Vector2(0.0, 5.0))
+	var at := from.lerp(into, t) - Vector2(0.0, height * 4.0 * t * (1.0 - t))
+	_boot_coin(sprite, boot, at)
+	sprite.rotation = t * TAU * (1.5 + 0.5 * index) * boot.facing
+	sprite.scale = Vector2.ONE * lerpf(1.0, 0.7, smoothstep(0.6, 1.0, t))
+
+
+## Puts a coin the boot holds (see BootFx.take) at `at` on the screen.
+func _boot_coin(sprite: Control, boot: BootFx, at: Vector2) -> void:
+	sprite.position = boot.get_transform().affine_inverse() * at - sprite.size / 2.0
+
+
+func _boot_caught(sprite: Control, boot: BootFx, index: int) -> void:
+	sprite.queue_free()
+	if not is_instance_valid(boot):
+		return
+	boot.haul += 1
+	_snd("coin_%d" % (index % 3 + 1))
+	burst(boot.at(BootFx.MOUTH), UI.GOLD, 3, 90.0, 0.2, 300.0, 4.0)
+	_boot_jolt(boot, Vector2(1.1, 0.88), 10.0)
+
+
+## True if `who` has a boot out with coins in it.
+func boot_loaded(who: PlayerState) -> bool:
+	return _boot != null and is_instance_valid(_boot) and _boot_owner == who and _boot.haul > 0
+
+
+## Where the coins in the boot of `who` come out, if somebody else is getting
+## them after all (a Swindle): the boot is left empty. Vector2.INF if there
+## is no such boot.
+func boot_robbed(who: PlayerState) -> Vector2:
+	if not boot_loaded(who):
+		return Vector2.INF
+	_boot.haul = 0
+	return _boot.at(BootFx.MOUTH)
+
+
+## The coins of a Shakedown reaching the thief (the `coins` event with reason
+## "steal"): the boot turns for home and hops back, the coins clinking in it,
+## and is tipped over his balance, mouth down. The coins drop out one at a
+## time and are counted in as they land; a last shake for the one that is
+## not there, and the boot goes back where it came from.
+func boot_pour(d: Dictionary) -> void:
+	var boot := _boot
+	var thief: PlayerState = d.player
+	var total: int = d.delta
+	var speed: float = table._speed
+	var purse: Vector2 = table._coin_anchor(thief)
+	var home := _at(thief)
+	var bar: StatBar = table._stat_bar(thief)
+	if bar != null:
+		bar.hold_coins(thief)
+	var heel := boot.at(BootFx.HEEL)
+	var f := -1.0 if purse.x < heel.x else 1.0
+	var turned := f != boot.facing
+	var move := boot.create_tween()
+	if turned:
+		# Turned round on the spot, like a card.
+		var middle := boot.at(BootFx.SHAFT)
+		move.tween_method(_boot_turn.bind(boot, middle, boot.facing), 0.0, 1.0, 0.12 / speed)
+		heel = middle + Vector2((BootFx.HEEL.x - BootFx.SHAFT.x) * f, BootFx.HEEL.y - BootFx.SHAFT.y) * BootFx.PIXEL
+	_boot_pose = [BootFx.HEEL, heel, 0.0]
+	# Where it is tipped from: the mouth ends up over the coin.
+	var spout := Vector2(purse.x - f * 8.0, maxf(purse.y - 30.0, 44.0))
+	var stand := Vector2(purse.x - f * 60.0, maxf(purse.y + 8.0, BootFx.TALL + 6.0))
+	var hops := clampi(roundi(heel.distance_to(stand) / BOOT_HOP), 1, 3)
+	for hop in hops:
+		var to := heel.lerp(stand, float(hop + 1) / hops)
+		_boot_go(move, [BootFx.HEEL, to, 0.0], BOOT_STRIDE + 0.02, _boot_lift(heel.lerp(stand, float(hop) / hops), to))
+		move.tween_callback(_boot_lands.bind(boot))
+		move.tween_interval(0.04 / speed)
+	_boot_go(move, [BootFx.MOUTH, spout, BOOT_TIPPED], 0.22, 10.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	await _wait((0.12 if turned else 0.0) + hops * (BOOT_STRIDE + 0.06) + 0.24)
+	if boot != _boot or not is_instance_valid(boot):
+		return
+	var coins := clampi(total, 1, BOOT_COINS)
+	for i in coins:
+		var share := total * (i + 1) / coins - total * i / coins
+		_boot_shake(boot, spout)
+		boot.haul = maxi(boot.haul - 1, 0)
+		var sprite := _sprite(UI.tex(COIN_ART), spout, Vector2(20, 20))
+		boot.take(sprite)
+		_boot_drop(0.0, sprite, boot, purse, i)
+		var fall := sprite.create_tween()
+		fall.tween_method(_boot_drop.bind(sprite, boot, purse, i), 0.0, 1.0, BOOT_DROP / speed)
+		fall.tween_callback(_boot_paid.bind(sprite, bar, share, purse, i))
+		await _wait(BOOT_POUR)
+		if not is_instance_valid(boot):
+			return
+	boot.haul = 0
+	# Is that all of it?
+	for shake in 2:
+		_boot_shake(boot, spout)
+		await _wait(0.13)
+		if not is_instance_valid(boot):
+			return
+	# Set down again, and back where it came from.
+	_boot = null
+	_boot_owner = null
+	_boot_target = null
+	move = boot.create_tween()
+	move.tween_method(_boot_step.bind(boot, [BootFx.MOUTH, spout, BOOT_TIPPED], [BootFx.HEEL, stand, 0.0], 8.0), 0.0, 1.0, 0.16 / speed)
+	move.tween_method(_boot_step.bind(boot, [BootFx.HEEL, stand, 0.0], [BootFx.HEEL, home, 0.0], 12.0), 0.0, 1.0, 0.2 / speed)
+	move.parallel().tween_property(boot, "modulate:a", 0.0, 0.1 / speed).set_delay(0.1 / speed)
+	move.tween_callback(boot.queue_free)
+	await _wait(0.2)
+
+
+## The boot turning round about the middle of its leg, which stays at
+## `middle`: flat as a card half way through.
+func _boot_turn(t: float, boot: BootFx, middle: Vector2, facing: float) -> void:
+	boot.facing = facing if t < 0.5 else -facing
+	boot.scale.x = maxf(absf(1.0 - 2.0 * t), 0.05)
+	boot.pose(BootFx.SHAFT, middle, 0.0)
+
+
+## A shake of the boot held mouth down over `spout`, to get a coin out.
+func _boot_shake(boot: BootFx, spout: Vector2) -> void:
+	var shake := boot.create_tween()
+	shake.tween_method(_boot_step.bind(boot, [BootFx.MOUTH, spout, BOOT_TIPPED], [BootFx.MOUTH, spout + Vector2(0.0, 5.0), BOOT_TIPPED - 0.16], 0.0), 0.0, 1.0, 0.04 / table._speed)
+	shake.tween_method(_boot_step.bind(boot, [BootFx.MOUTH, spout + Vector2(0.0, 5.0), BOOT_TIPPED - 0.16], [BootFx.MOUTH, spout, BOOT_TIPPED], 0.0), 0.0, 1.0, 0.08 / table._speed)
+
+
+## A coin `t` of its way out of the mouth of the boot and down to the pile
+## at `to`: it slides out and then falls faster and faster.
+func _boot_drop(t: float, sprite: Control, boot: BootFx, to: Vector2, index: int) -> void:
+	if not is_instance_valid(boot):
+		return
+	var from := boot.at(BootFx.MOUTH + Vector2(0.0, 3.0))
+	var at := Vector2(lerpf(from.x, to.x, sqrt(t)), lerpf(from.y, to.y, t * t))
+	_boot_coin(sprite, boot, at)
+	sprite.rotation = t * TAU * (0.5 + 0.25 * index)
+
+
+func _boot_paid(sprite: Control, bar: StatBar, share: int, at: Vector2, index: int) -> void:
+	sprite.queue_free()
+	if bar != null:
+		bar.add_coins(share)
+	_snd("coin_%d" % (index % 3 + 1))
+	burst(at, UI.GOLD, 3, 90.0, 0.2, 300.0, 4.0)
+
+
+## A Silver Tongue against a Shakedown: there is no hand to rap, there is a
+## boot. It comes down all the same, and the lute meets it half way: the
+## boot goes home over the table, end over end, with nothing in it.
+func _boot_bonked(play: Play) -> void:
+	var boot := _boot
+	var home := _at(_boot_owner)
+	_boot = null
+	_boot_owner = null
+	_boot_target = null
+	var speed: float = table._speed
+	var coin: Vector2 = table._coin_anchor(play.actor)
+	var f := boot.facing
+	# Where it is met: the leg of the boot, on its way down.
+	var reach := coin + Vector2(f * 24.0, -28.0)
+	# Held by the neck, in front of the boot and over it (under it, for a
+	# Bard sitting at the top of the screen).
+	var over := -1.0 if reach.y > 170.0 else 1.0
+	var turn := f * over
+	var grip := reach + Vector2(f * 0.8, over * 0.6) * LUTE_REACH
+	var club := Control.new()
+	club.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	club.position = grip
+	var struck := (reach - grip).angle() - PI
+	var raised := struck - LUTE_LIFT * turn
+	club.rotation = raised
+	club.modulate.a = 0.0
+	var lute := LuteFx.new()
+	lute.position = Vector2(LuteFx.BELLY - LUTE_REACH, 0.0)
+	club.add_child(lute)
+	add_child(club)
+	var blow := (reach - (grip - Vector2.from_angle(raised) * LUTE_REACH)).normalized()
+	club.create_tween().tween_property(club, "modulate:a", 1.0, 0.12 / speed)
+	await _wait(0.3)
+	if not is_instance_valid(boot) or not is_instance_valid(club):
+		return
+	# Both of them drawn back, and both come down.
+	var move := boot.create_tween()
+	move.tween_method(_boot_step.bind(boot, _boot_pose, [BootFx.ROWEL, coin + Vector2(-f * 8.0, -BOOT_COCKED - 6.0), -1.0], 0.0), 0.0, 1.0, 0.14 / speed)
+	move.tween_method(_boot_step.bind(boot, [BootFx.ROWEL, coin + Vector2(-f * 8.0, -BOOT_COCKED - 6.0), -1.0], [BootFx.ROWEL, coin + Vector2(0.0, -10.0), 0.1], 0.0), 0.0, 1.0, 0.07 / speed)
+	var swing := club.create_tween()
+	swing.tween_property(club, "position", grip - blow * 22.0, 0.14 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	swing.parallel().tween_property(club, "rotation", raised - turn * 0.35, 0.14 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	swing.tween_property(club, "position", grip + blow * 10.0, 0.07 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	swing.parallel().tween_property(club, "rotation", struck + turn * 0.1, 0.07 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	swing.tween_property(club, "position", grip - blow * 10.0, 0.1 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	swing.parallel().tween_property(club, "rotation", struck - turn * 0.3, 0.1 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	swing.tween_property(club, "position", grip, 0.25 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	swing.parallel().tween_property(club, "rotation", raised, 0.25 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await _wait(0.21)
+	if not is_instance_valid(boot):
+		return
+	_snd("fx_lute_bonk")
+	lute.pluck(0.5)
+	var hit := boot.at(BootFx.SHAFT)
+	burst(hit, Color.WHITE, 14, 300.0, 0.3, 400.0, 6.0)
+	ring(hit, UI.GOLD, 10.0, 100.0, 0.25, 5.0)
+	table._shake_screen(7.0)
+	_alarm(hit)
+	move.kill()
+	boot.restless = 0.0
+	boot.whirl = 40.0
+	var lift := clampf(minf(hit.y, home.y) - 50.0, 10.0, 110.0)
+	move = boot.create_tween()
+	move.tween_method(_boot_step.bind(boot, [BootFx.SHAFT, hit, 0.1], [BootFx.SHAFT, home, 0.1 - TAU * 2.0], lift), 0.0, 1.0, 0.55 / speed)
+	move.parallel().tween_property(boot, "modulate:a", 0.0, 0.1 / speed).set_delay(0.45 / speed)
+	move.tween_callback(boot.queue_free)
+	await _wait(0.6)
+	_snd("fx_lute_flourish")
+	if is_instance_valid(club):
+		lute.pluck(0.4)
+		_note(reach, 0)
+		_note(reach, 1)
+		var away := club.create_tween()
+		away.tween_interval(0.45 / speed)
+		away.tween_property(club, "modulate:a", 0.0, 0.25 / speed)
+		away.tween_callback(club.queue_free)
 	await _wait(0.5)
-	if not is_instance_valid(badge):
-		return
-	var leave := badge.create_tween().set_parallel()
-	leave.tween_property(badge, "modulate:a", 0.0, 0.2 / speed)
-	leave.tween_property(badge, "scale", Vector2.ONE * 0.8, 0.2 / speed)
-	leave.chain().tween_callback(badge.queue_free)
+
+
+## Walks home a boot that got nothing: the Shakedown was stopped.
+func drop_boot() -> void:
+	if _boot != null and is_instance_valid(_boot):
+		var boot := _boot
+		var speed: float = table._speed
+		var home := _at(_boot_owner)
+		var middle := boot.at(BootFx.SHAFT)
+		boot.restless = 0.0
+		var leave := boot.create_tween()
+		leave.tween_method(_boot_step.bind(boot, [BootFx.SHAFT, middle, boot.lean], [BootFx.SHAFT, middle.lerp(home, 0.3), 0.0], 16.0), 0.0, 1.0, 0.2 / speed)
+		leave.parallel().tween_property(boot, "whirl", 0.0, 0.2 / speed)
+		leave.parallel().tween_property(boot, "modulate:a", 0.0, 0.12 / speed).set_delay(0.1 / speed)
+		leave.tween_callback(boot.queue_free)
+	_boot = null
+	_boot_owner = null
+	_boot_target = null
 
 
 ## The lasso comes off the saddle and goes round overhead. It keeps turning
@@ -3567,6 +4092,8 @@ class LuteFx extends Control:
 	## Half the height of the body, column by column from its round end.
 	const BODY: Array[int] = [3, 5, 6, 7, 7, 7, 7, 6, 6, 5, 5, 4, 3, 2]
 	const BODY_AT := -9
+	## Where the middle of its belly is, from its origin.
+	const BELLY := 12.0
 
 	## How hard the strings are shaking, 1 right after a pluck.
 	var ring := 0.0
@@ -3623,6 +4150,109 @@ class LuteFx extends Control:
 	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
 		if w > 0 and h > 0:
 			draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
+
+
+## A loose hand in a white glove out of an old cartoon, reaching to the
+## right: a puffy cuff, the thumb up, three fat fingers and the three black
+## darts on its back. It is not a
+## bitmap: palm, fingers, thumb and cuff are rounded shapes filled in cells,
+## each with its own outline, so that the fingers can move. `spread` opens
+## them wide (1: a hand that has had a fright), `fidget` sets them twitching
+## and `sting` reddens it (1 right after a blow); `flipped` turns it over, for
+## a hand that reaches to the left with its thumb still up. Its origin is the
+## middle of the palm.
+class GloveFx extends Control:
+	const PIXEL := 3.0
+	## How many cells one unit of the shapes below is.
+	const SIZE := 0.9
+	const EDGE := Color("0d0b12")
+	const WHITE := Color("f6f3ea")
+	const SHADE := Color("b9bcc9")
+	const SORE := Color("e0503c")
+	## The cells it is drawn in: everything below has to fit, with two to spare.
+	const GRID := Rect2i(-15, -15, 32, 30)
+	## Where each finger leaves the palm, and how long it is.
+	const KNUCKLES: Array[float] = [-4.3, 0.0, 4.3]
+	const FINGERS: Array[float] = [6.5, 7.5, 6.5]
+
+	var flipped := false
+	var fidget := 0.0
+	var spread := 0.0:
+		set(value):
+			spread = value
+			queue_redraw()
+	var sting := 0.0:
+		set(value):
+			sting = value
+			queue_redraw()
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		_time += delta
+		if fidget > 0.0:
+			queue_redraw()
+
+	func _draw() -> void:
+		var white := WHITE.lerp(SORE, sting * 0.7)
+		var shade := SHADE.lerp(SORE.darkened(0.3), sting * 0.7)
+		var palm: Array = [[Vector2(-4.0, 0.0), Vector2(0.0, 0.0), 6.0]]
+		_stamp(palm, white, shade)
+		# One finger at a time, so that there is a line between two of them
+		# even when they are held together; none where they join the palm.
+		for i in 3:
+			var tilt := (i - 1) * (0.05 + 0.5 * spread) + sin(_time * 21.0 + i * 2.1) * 0.13 * fidget
+			var root := Vector2(3.0, KNUCKLES[i])
+			_stamp([[root, root + Vector2.from_angle(tilt) * (FINGERS[i] + 1.5 * spread), 2.7]], white, shade, palm)
+		for dart: int in [-4, -1, 2]:
+			for x in range(-5, -1):
+				_cell(Vector2i(x, dart), EDGE)
+		var thumb := Vector2(-2.0, -4.0)
+		var lifted := -1.0 - 0.6 * spread + sin(_time * 21.0 + 5.0) * 0.1 * fidget
+		_stamp([[thumb, thumb + Vector2.from_angle(lifted) * (6.0 + spread), 2.6]], white, shade)
+		_stamp([[Vector2(-10.5, -5.0), Vector2(-10.5, 5.0), 2.9]], white, shade)
+
+	## Fills in the cells inside any of `shapes` (each one [from, to, radius]:
+	## everything within `radius` of that stretch), shaded along the lower
+	## edge, with an outline all round, except where it would fall inside
+	## one of `joined`.
+	func _stamp(shapes: Array, ink: Color, shade: Color, joined: Array = []) -> void:
+		var w := GRID.size.x
+		var h := GRID.size.y
+		var filled := PackedByteArray()
+		filled.resize(w * h)
+		for gy in h:
+			for gx in w:
+				if _inside(_middle(gx, gy), shapes):
+					filled[gy * w + gx] = 1
+		var under := -w if flipped else w
+		for gy in range(2, h - 2):
+			for gx in range(1, w - 1):
+				var at := gy * w + gx
+				var cell := GRID.position + Vector2i(gx, gy)
+				if filled[at] == 1:
+					_cell(cell, shade if filled[at + under] == 0 else ink)
+				elif filled[at - 1] == 1 or filled[at + 1] == 1 or filled[at - w] == 1 or filled[at + w] == 1:
+					if joined.is_empty() or not _inside(_middle(gx, gy), joined):
+						_cell(cell, EDGE)
+
+	## The middle of the cell at `gx`, `gy` of GRID, in the units of the shapes.
+	func _middle(gx: int, gy: int) -> Vector2:
+		return (Vector2(GRID.position) + Vector2(gx + 0.5, gy + 0.5)) / SIZE
+
+	func _inside(point: Vector2, shapes: Array) -> bool:
+		for shape: Array in shapes:
+			var from: Vector2 = shape[0]
+			var to: Vector2 = shape[1]
+			if Geometry2D.get_closest_point_to_segment(point, from, to).distance_to(point) <= shape[2]:
+				return true
+		return false
+
+	func _cell(cell: Vector2i, ink: Color) -> void:
+		var y := -cell.y - 1 if flipped else cell.y
+		draw_rect(Rect2(Vector2(cell.x, y) * PIXEL, Vector2(PIXEL, PIXEL)), ink)
 
 
 ## The bomb of a Demolition: a ball of black iron with a collar and a lit
@@ -3753,3 +4383,264 @@ class BombFx extends Control:
 				draw_rect(_block(FUSE[-1] + ray), Color("ffe08a"))
 			draw_rect(Rect2(tip - Vector2(PIXEL, PIXEL), Vector2(PIXEL, PIXEL) * 2.0), Color.WHITE)
 		draw_set_transform(Vector2.ZERO, 0.0)
+
+
+## The Sheriff's boot, seen from the side with its toe to the right (`facing`
+## turns it round): a short leg cut in a V at the top, with the dark of the
+## inside showing in it, piping and a pull strap, a tooled front, a toe cap,
+## a stacked heel and a golden spur strapped on behind it, whose rowel turns (`whirl`, in radians a
+## second). The origin is where the back of the heel meets the table. It is
+## cut out of a grid like the badge: the edges that face the light are
+## bright, the ones that face away are dark. `haul` is how many coins show
+## in its mouth, and `restless` (0 to 1) makes it tremble where it is.
+##
+## It is drawn in two layers, the inside of the leg and then all the rest:
+## what is given to it with take() goes in between, so that a coin falling
+## into the mouth goes down behind the leather.
+class BootFx extends Control:
+	const PIXEL := 2.0
+	const EDGE := Color("140a06")
+	const HIDE := Color("6e3a1a")
+	const LIT := Color("96562a")
+	const SHEEN := Color("84481f")
+	const DARK := Color("4c2610")
+	const DEEP := Color("351809")
+	const LINING := Color("1e0f09")
+	const WELT := Color("221309")
+	const WELT_STITCH := Color("5a3a20")
+	const STACK := Color("3a2213")
+	const STITCH := Color("e2c084")
+	const PIPING := Color("c9973f")
+	## The spur, in gold.
+	const SPUR := Color("f2c84b")
+	const SPUR_LIT := Color("fff0a8")
+	const SPUR_DARK := Color("a8741c")
+	const GOLD := Color("ffd84a")
+	const GOLD_DARK := Color("c8902a")
+	const DUST := Color("c9b48a")
+	## The cells it is cut out of, and the shapes, in cells.
+	const GRID := Rect2i(-16, -31, 44, 33)
+	const UPPER: Array[Vector2] = [
+		Vector2(0, -26), Vector2(5.5, -22.5), Vector2(11, -27), Vector2(11.5, -13), Vector2(13, -9.5),
+		Vector2(17, -7.5), Vector2(21, -6), Vector2(24, -4), Vector2(24, -2), Vector2(9, -2), Vector2(7, -4.5),
+		Vector2(-0.5, -4.5), Vector2(-1, -10), Vector2(0, -15),
+	]
+	const INSIDE: Array[Vector2] = [Vector2(0, -26), Vector2(1, -28), Vector2(10, -29), Vector2(11, -27), Vector2(5.5, -22.5)]
+	const TREAD: Array[Vector2] = [Vector2(8.5, -2), Vector2(24.5, -2), Vector2(24, 0), Vector2(9, 0)]
+	const BLOCK: Array[Vector2] = [Vector2(-0.5, -4.5), Vector2(7.5, -4.5), Vector2(6.5, 0), Vector2(1, 0)]
+	## What is stitched into the front of the leg: a flame over a diamond,
+	## and the studs beside them.
+	const TOOLING: Array[Vector2i] = [
+		Vector2i(5, -21), Vector2i(4, -20), Vector2i(6, -20), Vector2i(3, -19), Vector2i(7, -19), Vector2i(3, -18),
+		Vector2i(7, -18), Vector2i(4, -17), Vector2i(6, -17), Vector2i(5, -16), Vector2i(5, -19), Vector2i(5, -18),
+		Vector2i(4, -14), Vector2i(5, -15), Vector2i(6, -14), Vector2i(5, -13),
+	]
+	const STUDS: Array[Vector2i] = [Vector2i(2, -16), Vector2i(8, -16), Vector2i(2, -15), Vector2i(8, -15)]
+	## Where the leather folds at the ankle.
+	const CREASES: Array[Vector2i] = [Vector2i(9, -11), Vector2i(10, -10), Vector2i(11, -10), Vector2i(8, -9)]
+	## Places on it, in cells: the middle of the rowel, the middle of the
+	## mouth, the middle of the leg and the back of the heel on the table.
+	const ROWEL := Vector2(-8.5, -5.5)
+	const MOUTH := Vector2(5.5, -25.0)
+	const SHAFT := Vector2(5.5, -14.0)
+	const HEEL := Vector2(1.0, 0.0)
+	## How many points the rowel has, and how long they are, in cells: a
+	## long one and a short one in turn.
+	const POINTS := 8
+	const POINT := 5
+	const POINT_SHORT := 3
+	## How tall it stands, in px.
+	const TALL := 58.0
+
+	var facing := 1.0:
+		set(value):
+			facing = value
+			_redraw()
+	var haul := 0:
+		set(value):
+			haul = value
+			queue_redraw()
+	var whirl := 0.0
+	var restless := 0.0
+	## How far it is tipped back, toe up, in radians (see pose).
+	var lean := 0.0
+	var _spin := 0.0
+	## What a knock added to the turning of the rowel: it dies down by itself.
+	var _kick := 0.0
+	var _time := 0.0
+	var _inside: Array[Vector2i] = []
+	var _cells: Dictionary = {}  # Vector2i -> Color: everything in front of the inside
+	var _front := Control.new()
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_front.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_front.draw.connect(_draw_front)
+		add_child(_front)
+		_cut()
+
+	## Where `cell` is, in px from the origin.
+	func spot(cell: Vector2) -> Vector2:
+		return Vector2(cell.x * facing, cell.y) * PIXEL
+
+	## Where `cell` is on the screen.
+	func at(cell: Vector2) -> Vector2:
+		return position + (spot(cell) * scale).rotated(rotation)
+
+	## Puts `cell` at `where` on the screen, the boot tipped back by `tip`
+	## radians: toe up, heel down (toe down, if negative).
+	func pose(cell: Vector2, where: Vector2, tip: float) -> void:
+		lean = tip
+		rotation = -tip * facing
+		position = where - (spot(cell) * scale).rotated(rotation)
+
+	## Takes `node` between its two layers.
+	func take(node: Control) -> void:
+		if node.get_parent() != null:
+			node.reparent(self, false)
+		else:
+			add_child(node)
+		move_child(node, 0)
+
+	## Sets the rowel turning at `kick` radians a second, if it is not
+	## turning faster already.
+	func spur(kick: float) -> void:
+		_kick = maxf(_kick, kick)
+
+	func _process(delta: float) -> void:
+		_time += delta
+		if whirl != 0.0 or _kick > 0.1 or restless > 0.0:
+			_spin += (whirl + _kick) * delta
+			_kick *= exp(-3.0 * delta)
+			_redraw()
+
+	func _redraw() -> void:
+		queue_redraw()
+		_front.queue_redraw()
+
+	func _cut() -> void:
+		var upper := PackedVector2Array(UPPER)
+		var inside := PackedVector2Array(INSIDE)
+		var tread := PackedVector2Array(TREAD)
+		var block := PackedVector2Array(BLOCK)
+		var leather := {}
+		for y in range(GRID.position.y, GRID.end.y):
+			for x in range(GRID.position.x, GRID.end.x):
+				var cell := Vector2i(x, y)
+				var middle := Vector2(x + 0.5, y + 0.5)
+				if Geometry2D.is_point_in_polygon(middle, upper):
+					leather[cell] = true
+				elif Geometry2D.is_point_in_polygon(middle, inside):
+					_inside.append(cell)
+				elif Geometry2D.is_point_in_polygon(middle, tread):
+					_cells[cell] = WELT
+				elif Geometry2D.is_point_in_polygon(middle, block):
+					# The lifts the heel is stacked from.
+					_cells[cell] = STACK if posmod(y, 2) == 1 else WELT
+		for cell: Vector2i in leather:
+			var lit := not leather.has(cell + Vector2i.UP) or not leather.has(cell + Vector2i.LEFT)
+			var shaded := not leather.has(cell + Vector2i.DOWN) or not leather.has(cell + Vector2i.RIGHT)
+			# The toe cap and the counter round the heel are of a darker hide.
+			var capped := cell.x - 0.9 * (cell.y + 2) >= 21.5 \
+					or (cell.x < 4 and cell.y > -12 and cell.x + (cell.y + 12) * 0.35 < 4.0)
+			var ink := DARK if capped else HIDE
+			if lit != shaded:
+				ink = DEEP if shaded else (HIDE if capped else LIT)
+			elif not capped and cell.y < -12 and cell.x >= 9:
+				# The leg is round: it turns away from the light before its edge.
+				ink = DARK
+			elif not capped and cell.y < -13 and (cell.x == 2 or cell.x == 3):
+				# And catches it just inside the edge that faces it.
+				ink = SHEEN
+			_cells[cell] = ink
+		# Piping along the cut of the top, and the pull strap at the front of it.
+		for x in range(0, 11):
+			var y := roundi(-26.0 + x * 3.5 / 5.5) if x < 5.5 else roundi(-22.5 - (x - 5.5) * 4.5 / 5.5)
+			_tool(leather, Vector2i(x, y), PIPING)
+		for y in range(-24, -20):
+			_tool(leather, Vector2i(10, y), DEEP)
+		for cell: Vector2i in TOOLING:
+			_tool(leather, cell, STITCH)
+		for cell: Vector2i in STUDS:
+			_tool(leather, cell, PIPING)
+		for cell: Vector2i in CREASES:
+			_tool(leather, cell, DARK)
+		# The seam down the side, the stitches of the toe cap and of the counter.
+		for y in range(-12, -4, 2):
+			_tool(leather, Vector2i(6, y), DARK)
+		for y: int in [-6, -4]:
+			_tool(leather, Vector2i(roundi(21.5 + 0.9 * (y + 2)) - 1, y), STITCH)
+		_tool(leather, Vector2i(21, -4), STITCH)
+		_tool(leather, Vector2i(2, -10), STITCH)
+		_tool(leather, Vector2i(3, -8), STITCH)
+		# The welt is sewn on, and the heel nailed.
+		for x in range(10, 24, 2):
+			_cells[Vector2i(x, -2)] = WELT_STITCH
+		_cells[Vector2i(2, -1)] = SPUR_DARK
+		_cells[Vector2i(5, -1)] = SPUR_DARK
+		# The spur: its strap over the instep with a buckle on it, the band
+		# round the heel, and the shank with its hook.
+		for x in range(3, 12):
+			_cells[Vector2i(x, roundi(-7.0 - (x - 3) * 0.4))] = DEEP
+		_cells[Vector2i(7, -9)] = SPUR
+		_cells[Vector2i(8, -9)] = SPUR_LIT
+		_cells[Vector2i(8, -8)] = SPUR_DARK
+		for x in range(-1, 3):
+			_cells[Vector2i(x, -7)] = SPUR_LIT if x < 1 else SPUR
+			_cells[Vector2i(x, -6)] = SPUR_DARK
+		_cells[Vector2i(3, -7)] = SPUR
+		for x in range(-6, -1):
+			_cells[Vector2i(x, -6)] = SPUR
+		for x in range(-5, -1):
+			_cells[Vector2i(x, -5)] = SPUR_DARK
+		_cells[Vector2i(-3, -7)] = SPUR
+		var solid := _cells.duplicate()
+		for cell: Vector2i in _inside:
+			solid[cell] = LINING
+		for cell: Vector2i in solid:
+			for step: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+				if not solid.has(cell + step):
+					_cells[cell + step] = EDGE
+
+	func _tool(leather: Dictionary, cell: Vector2i, ink: Color) -> void:
+		if leather.has(cell):
+			_cells[cell] = ink
+
+	## The inside of the leg, through the cut of the top, and the coins in it.
+	func _draw() -> void:
+		draw_set_transform(_tremble())
+		# The coins lie in the bottom of the cut: the more of them, the higher.
+		var level := -23 - mini(haul, 3)
+		for cell: Vector2i in _inside:
+			var ink := LINING
+			if haul > 0 and cell.y >= level:
+				ink = GOLD if posmod(cell.x + cell.y, 3) != 0 else GOLD_DARK
+			_dot(self, cell, ink)
+
+	func _draw_front() -> void:
+		_front.draw_set_transform(_tremble())
+		for cell: Vector2i in _cells:
+			_dot(_front, cell, _cells[cell])
+		# The rowel, on the end of the shank: its points, and a rim to each
+		# so that it reads against anything.
+		var points := {}
+		for k in POINTS:
+			var out := Vector2.from_angle(_spin + TAU * k / POINTS)
+			var reach := POINT if k % 2 == 0 else POINT_SHORT
+			for i in range(1, reach + 1):
+				points[Vector2i((ROWEL + out * i * 0.95).floor())] = SPUR_LIT if i == reach else (SPUR if i > 1 else SPUR_DARK)
+		for cell: Vector2i in points:
+			for step: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+				if not points.has(cell + step) and not _cells.has(cell + step):
+					_dot(_front, cell + step, EDGE)
+		for cell: Vector2i in points:
+			_dot(_front, cell, points[cell])
+		_dot(_front, Vector2i(ROWEL.floor()), SPUR_LIT)
+
+	## How far off its place it is drawn this instant, held back and itching.
+	func _tremble() -> Vector2:
+		return (Vector2(sin(_time * 47.0), cos(_time * 39.0)) * 1.2 * restless).round()
+
+	func _dot(on: Control, cell: Vector2i, ink: Color) -> void:
+		var x := cell.x if facing > 0.0 else -cell.x - 1
+		on.draw_rect(Rect2(Vector2(x, cell.y) * PIXEL, Vector2(PIXEL, PIXEL)), ink)

@@ -694,6 +694,93 @@ def fx_lute_flourish():
     return out
 
 
+def slack_string(freq, seconds, decay, drop, wobble, seed):
+    """A string knocked out of tune: it starts on its note and sags `drop`
+    of the way down from it, warbling as it goes."""
+    def bent(n):
+        return lambda t: (freq * n * (1.0 - drop * (1.0 - math.exp(-t * 7.0)))
+                          * (1.0 + wobble * math.exp(-t * 4.0) * math.sin(TAU * 11.0 * t + seed)))
+    out = silence(seconds)
+    for n in range(1, 7):
+        mix(out, tone(bent(n), seconds, 0.002, decay / n ** 0.8), 0.0, 1.0 / n ** 1.1)
+    mix(out, highpass(noise(0.01, 0.0005, 0.004, seed), 2000), 0.0, 0.3)
+    return out
+
+
+def fx_lute_bonk():
+    """The belly of a lute brought down on knuckles: a hollow knock, and
+    every string on it jangling and going flat, each by its own amount.
+    Nobody would take it for a chord."""
+    out = silence(1.1)
+    mix(out, wood_knock(67), 0.0, 1.0)
+    mix(out, tone(150, 0.25, 0.001, 0.1, glide=0.6), 0.0, 0.7)
+    # The weight of it: the whole body of the lute landing, low and heavy.
+    mix(out, tone(78, 0.5, 0.002, 0.24, glide=0.5), 0.0, 1.5)
+    mix(out, tone(46, 0.45, 0.004, 0.2, glide=0.8), 0.0, 0.8)
+    mix(out, lowpass(noise(0.3, 0.003, 0.13, 313), 240), 0.0, 1.3)
+    strings = ((196.0, 0.10, 0.030), (277.2, 0.16, 0.045), (370.0, 0.07, 0.025), (466.2, 0.20, 0.050), (622.3, 0.13, 0.035))
+    for i, (freq, drop, wobble) in enumerate(strings):
+        mix(out, slack_string(freq, 1.0, 0.55, drop, wobble, 300 + i), 0.006 * i, 0.3)
+    # The wires rattling on the frets right after the blow.
+    mix(out, bandpass(noise(0.2, 0.004, 0.12, 311), 2200, 6500), 0.01, 0.12)
+    return drive(out, 1.3)
+
+
+def spur(seconds, turns, seed, pitch=1.0):
+    """The rowel of a spur set turning: `turns` little rings of steel on its
+    pin, close together at first and further apart as it slows."""
+    rng = random.Random(seed)
+    out = silence(seconds + 0.3)
+    for i in range(turns):
+        at = seconds * (i / turns) ** 1.7
+        strength = 1.0 - 0.6 * i / turns
+        for freq, gain, decay in ((3520, 1.0, 0.11), (5270, 0.6, 0.07), (7900, 0.3, 0.04)):
+            mix(out, tone(freq * pitch * rng.uniform(0.985, 1.015), 0.25, 0.0005, decay), at, 0.4 * gain * strength)
+        mix(out, highpass(noise(0.004, 0.0002, 0.0015, rng.randrange(1 << 30)), 5000), at, 0.5 * strength)
+    return out
+
+
+def fx_boot_step():
+    """A boot heel put down on the boards, and the spur behind it."""
+    out = silence(0.4)
+    mix(out, lowpass(noise(0.05, 0.0005, 0.016, 331), 1400), 0.0, 1.0)
+    mix(out, tone(120, 0.16, 0.001, 0.06, glide=0.7), 0.0, 0.9)
+    mix(out, tone(310, 0.1, 0.0006, 0.03), 0.0, 0.35)
+    mix(out, spur(0.12, 3, 333), 0.012, 0.3)
+    return out
+
+
+def fx_spur():
+    """The boot drawn back, heel up: leather creaking, and the rowel
+    thumbed into a long, bright spin."""
+    out = silence(1.0)
+    mix(out, bandpass(noise(0.2, 0.08, 0.1, 335), 500, lambda t: 900 + 5000 * t), 0.0, 0.35)
+    mix(out, spur(0.75, 16, 337, 1.06), 0.1, 0.7)
+    return out
+
+
+def fx_boot_stomp():
+    """The heel brought down with everything behind it: the boards take it,
+    the spur rings like a struck bell and the coins jump out of their pile."""
+    out = silence(1.3)
+    # The heel and the floor under it.
+    mix(out, lowpass(noise(0.03, 0.0003, 0.01, 341), 3000), 0.0, 1.2)
+    mix(out, tone(64, 0.5, 0.001, 0.2, glide=0.5), 0.0, 2.0)
+    mix(out, wood_knock(343), 0.0, 1.1)
+    mix(out, lowpass(noise(0.35, 0.002, 0.12, 345), 380), 0.0, 0.9)
+    # The rowel on the coin: steel on brass, doubled a hair apart so it beats.
+    for freq, gain, decay in ((1976, 0.5, 0.7), (3310, 0.4, 0.5), (5120, 0.28, 0.3), (7350, 0.16, 0.18)):
+        for detune in (1.0, 1.009):
+            mix(out, tone(freq * detune, 1.1, 0.0006, decay), 0.004, gain * 0.5)
+    mix(out, highpass(noise(0.012, 0.0002, 0.004, 347), 3500), 0.004, 1.0)
+    # And then it spins.
+    mix(out, spur(0.7, 14, 349, 0.94), 0.05, 0.3)
+    # The pile, shaken loose.
+    for i, at in enumerate((0.03, 0.07, 0.12, 0.18)):
+        mix(out, coin(((0.0, 1.0), (0.012, 0.4)), 0.94 + 0.04 * i, 351 + i), at, 0.22)
+    return drive(out[:int(1.3 * RATE)], 1.7)
+
+
 def fx_cash():
     """A cash register: the bell, the drawer, the change."""
     out = silence(0.9)
@@ -1198,7 +1285,11 @@ SOUNDS = {
     "fx_shade": fx_shade,
     "fx_lute": fx_lute,
     "fx_lute_flourish": fx_lute_flourish,
+    "fx_lute_bonk": fx_lute_bonk,
     "fx_cash": fx_cash,
+    "fx_boot_step": fx_boot_step,
+    "fx_spur": fx_spur,
+    "fx_boot_stomp": fx_boot_stomp,
     "fx_gavel": fx_gavel,
     "fx_scales_chain": fx_scales_chain,
     "fx_scales": fx_scales,
@@ -1262,6 +1353,7 @@ PEAKS = {
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
     "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
     "fx_scales_chain": 0.4, "fx_scales": 0.9,
+    "fx_boot_step": 0.45, "fx_spur": 0.4, "fx_boot_stomp": 0.92,
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
     "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,

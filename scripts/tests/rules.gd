@@ -35,6 +35,11 @@ static func run() -> int:
 		"a swindle caught lying takes nothing": _swindle_caught,
 		"the first to fall loses: the blow in the air is void": _first_to_fall,
 		"a demolition goes past shield and mirror": _demolition,
+		"a shakedown takes 3 coins from one player": _shakedown.bind(&"", 3),
+		"a shakedown takes no more than there is": _shakedown.bind(&"broke", 2),
+		"a shield stops a shakedown": _shakedown.bind(&"shield", 0),
+		"a mirror turns a shakedown round": _shakedown.bind(&"mirror", -3),
+		"a silver tongue keeps the coins from a shakedown": _shakedown.bind(&"bard", 0),
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -119,6 +124,37 @@ static func _demolition() -> String:
 	if table.engine.players[0].coins != coins:
 		return "it cost %d coins" % (coins - table.engine.players[0].coins)
 	return "" if table.held(1) == [&"shield", &"mirror"] else "kept %s" % [table.held(1)]
+
+
+## Player 0 shakes player 1 down. `defence` is what player 1 has against it
+## (an item, the Bard, or only 2 coins: "broke") and `haul` how many coins
+## should end up changing hands (negative: the other way).
+static func _shakedown(defence: StringName, haul: int) -> String:
+	var table := Table.new(true, [&"sheriff", &"bard"])
+	var engine := table.engine
+	var sheriff: PlayerState = engine.players[0]
+	var target: PlayerState = engine.players[1]
+	sheriff.cards = [&"sheriff", &"judge"]
+	match defence:
+		&"broke":
+			target.coins = 2
+		&"bard":
+			target.cards = [&"bard", &"judge"]
+			table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+				for option: Dictionary in d.options:
+					if option.kind == &"ability" and option.ability.id == &"bard.silver_tongue":
+						return option
+				return null
+		&"shield", &"mirror":
+			table.give(1, [defence])
+	var before: Array = [sheriff.coins, target.coins]
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return target
+	await engine.claim(sheriff, table.ability(&"sheriff.shakedown"))
+	if sheriff.coins != before[0] + haul or target.coins != before[1] - haul:
+		return "coins: %d / %d" % [sheriff.coins, target.coins]
+	if engine.players[2].coins != 20:
+		return "the third player was touched"
+	return "" if table.held(1) == [] else "kept %s" % [table.held(1)]
 
 
 ## The target calls LIAR! on a true claim, pays for it, and still gets to

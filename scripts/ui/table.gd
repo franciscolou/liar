@@ -1575,6 +1575,8 @@ func present(e: GameEvent) -> void:
 		&"coins":
 			await _anim_coins(d)
 		&"claim_declared":
+			# A claim made in the middle of a borrowed action is nobody's copy.
+			_play_fx.step_in(d.play)
 			await _anim_claim(d.play)
 		&"doubt_declared":
 			await _anim_doubt(d.doubter)
@@ -1585,6 +1587,7 @@ func present(e: GameEvent) -> void:
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolved":
 			_play_fx.put_away()
+			_play_fx.step_out(d.play)
 			if d.play.aimed() != d.play:
 				# The Impostor's borrowed action is over, and so is its look.
 				_play_fx.cleanse()
@@ -2097,6 +2100,20 @@ func _anim_coins(d: Dictionary) -> void:
 	# A Cash Out pays out of the vault standing open on the table.
 	if d.reason == &"vault" and _play_fx.vault_mouth(p) != Vector2.INF:
 		there = _play_fx.vault_mouth(p)
+	# A Shakedown: the boot stamps the coins out of the pile and carries
+	# them home itself.
+	if d.reason == &"stolen" and delta < 0 and _play_fx.booting(d.other, p):
+		await _play_fx.boot_stomp(d)
+		if bar != null:
+			bar.coin_bias = 0
+		_float("%+d" % delta, here + Vector2(0, -18), UI.RED, 22)
+		return
+	if d.reason == &"steal" and _play_fx.boot_loaded(p):
+		await _play_fx.boot_pour(d)
+		if bar != null:
+			bar.coin_bias = 0
+		_float("+%d" % delta, here + Vector2(0, -18), UI.GOLD, 22)
+		return
 	if d.reason == &"steal":
 		# The coins already flew out of the victim's pile, and were counted
 		# in as they landed.
@@ -2246,6 +2263,10 @@ func _dance_coins(d: Dictionary) -> void:
 	var bar := _stat_bar(p)
 	var other_bar := _stat_bar(d.other)
 	var from := _coin_anchor(d.other) if d.other != null else _bank()
+	# Swindled out of the boot that had just stamped them loose.
+	var boot: Vector2 = _play_fx.boot_robbed(d.other)
+	if boot != Vector2.INF:
+		from = boot
 	var total: int = d.delta
 	var coins := clampi(total, 1, MAX_COINS_SHOWN)
 	if bar != null:

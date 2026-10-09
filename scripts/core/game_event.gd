@@ -15,7 +15,8 @@ extends RefCounted
 ##     went somewhere else, see bard.gd)
 ##   coins {player, delta, reason, other}       other = counterpart player or null (bank)
 ##   payment_short {player, amount, allowed}    set allowed to let the player go into debt
-##   before_steal {thief, victim, amount, play} cancellable
+##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
+##     for coins still on their way to the victim: see bard.gd)
 ##   item_buying {player, item, slot}           before the item is shown in the inventory
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
 ##   shop_restocked {slot} / shop_rerolled {player}

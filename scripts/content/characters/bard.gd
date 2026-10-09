@@ -40,6 +40,12 @@ class Swindle extends Ability:
 		var amount: int = gain.data.amount
 		if amount <= 0:
 			return
+		# Taking them on the way is stealing them: a Silver Tongue keeps them.
+		var steal := await play.engine.fire(&"before_steal", {
+			"thief": play.actor, "victim": gain.data.player, "amount": amount, "play": play,
+		})
+		if steal.cancelled or play.engine.over:
+			return
 		gain.data.amount = 0
 		await play.engine.gain_coins(play.actor, amount, HAUL, gain.data.player)
 
@@ -58,6 +64,7 @@ class SilverTongue extends Ability:
 		trigger_text = "When someone steals coins from you"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
+		# Coins already theirs, or still on their way to them (a Swindle).
 		return event.type == &"before_steal" and event.data.victim == player
 
 	func resolve(play: Play) -> void:

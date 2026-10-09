@@ -89,6 +89,11 @@ func _ready() -> void:
 	back.size = Vector2(150, 48)
 	back.pressed.connect(_on_back)
 	add_child(back)
+	var settings := UI.button("SETTINGS", UI.BORDER, 20)
+	settings.position = Vector2(938, 16)
+	settings.size = Vector2(190, 48)
+	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
+	add_child(settings)
 
 
 func _panel(rect: Rect2) -> VBoxContainer:

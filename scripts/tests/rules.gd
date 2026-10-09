@@ -33,6 +33,7 @@ static func run() -> int:
 		"a disguise repeats the last action, at its price": _disguise_repeats,
 		"a swindle takes coins on their way to someone": _swindle,
 		"a swindle caught lying takes nothing": _swindle_caught,
+		"a silver tongue keeps the coins from a swindle": _swindle_talked_down,
 		"the first to fall loses: the blow in the air is void": _first_to_fall,
 		"a demolition goes past shield and mirror": _demolition,
 		"a shakedown takes 3 coins from one player": _shakedown.bind(&"", 3),
@@ -340,10 +341,31 @@ static func _swindle() -> String:
 	if bard.coins != 24 or engine.players[1].coins != 21:
 		return "coins: %d / %d" % [bard.coins, engine.players[1].coins]
 	for d: Decision in table.asked(1, Decision.Kind.REACT) + table.asked(2, Decision.Kind.REACT):
-		if d.context.event.data.reason == &"swindle":
+		if d.context.event.data.get("reason") == &"swindle":
 			return "the haul was offered to %s" % d.player.name
 	await engine.gain_coins(bard, 4, &"bounty")
 	return "" if bard.coins == 28 else "the Bard swindled their own coins"
+
+
+## The one the coins were going to holds a Bard too: the Swindle is announced
+## and takes nothing.
+static func _swindle_talked_down() -> String:
+	var table := Table.new(true, [&"bard"])
+	var engine := table.engine
+	var bard: PlayerState = engine.players[0]
+	var target: PlayerState = engine.players[1]
+	bard.cards = [&"bard", &"judge"]
+	target.cards = [&"bard", &"judge"]
+	table.puppets[0].answers[Decision.Kind.REACT] = _swindles
+	table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		for option: Dictionary in d.options:
+			if option.kind == &"ability" and option.ability.id == &"bard.silver_tongue":
+				return option
+		return null
+	await engine.gain_coins(target, 4, &"bounty")
+	if bard.coins != 20 or target.coins != 24:
+		return "coins: %d / %d" % [bard.coins, target.coins]
+	return ""
 
 
 static func _swindle_caught() -> String:

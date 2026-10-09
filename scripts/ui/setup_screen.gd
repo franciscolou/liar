@@ -45,7 +45,7 @@ const OPEN_ICON: Array[String] = [
 	"...#...",
 ]
 ## The character being read, behind the text: its art in one colour, faint,
-## melting into the panel at the edges.
+## melting into the panel on the left, where the text is.
 const GHOST_SHADER := "shader_type canvas_item;
 
 uniform vec3 tint : source_color = vec3(0.86, 0.68, 0.36);
@@ -54,10 +54,12 @@ uniform float strength = 0.3;
 void fragment() {
 	vec4 art = texture(TEXTURE, UV);
 	float light = dot(art.rgb, vec3(0.299, 0.587, 0.114));
-	float edge = smoothstep(0.0, 0.3, UV.x) * smoothstep(1.0, 0.8, UV.x)
-			* smoothstep(0.0, 0.12, UV.y) * smoothstep(1.0, 0.6, UV.y);
+	float edge = smoothstep(0.0, 0.3, UV.x);
 	COLOR = vec4(tint * (0.25 + light * 1.1), art.a * strength * edge * COLOR.a);
 }"
+## How far the ghost runs past the reader, below and to the right: over the
+## padding of the panel, up to its border.
+const GHOST_BLEED := 12.0
 
 ## Whether the house rules are unfolded. Folded away, their place is where
 ## the abilities of the characters are read. It is kept for the next time
@@ -84,12 +86,14 @@ var _summary: Label
 var _start: Button
 var _resets: Array = []  # {button, is_default: Callable}
 var _problem: Label
+var _address_line: Label
 var _rules: VBoxContainer
 var _rules_arrow: Control
 ## Where the abilities of a character are read, in the place of the rules.
 var _reader: RichTextLabel
 var _read: StringName  # the character in the reader
 var _ghost: TextureRect
+var _rules_line: HSeparator
 var _ghost_tween: Tween
 
 
@@ -132,6 +136,11 @@ func _ready() -> void:
 	if _host:
 		TipLayer.attach(back, "Closes the room for everyone.")
 	add_child(back)
+	var settings := UI.button("SETTINGS", UI.BORDER, 20)
+	settings.position = Vector2(938, 10)
+	settings.size = Vector2(190, 44)
+	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
+	add_child(settings)
 	_start = UI.button("DEAL THE CARDS", UI.GOLD, 22)
 	_start.position = Vector2(868, 584)
 	_start.size = Vector2(260, 48)
@@ -139,9 +148,11 @@ func _ready() -> void:
 	_start.visible = _host
 	add_child(_start)
 	_problem = UI.label("", 14, UI.RED)
-	_problem.position = Vector2(210, 598)
-	_problem.size = Vector2(644, 20)
+	_problem.position = Vector2(500, 584)
+	_problem.size = Vector2(354, 48)
 	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_problem.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_problem.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(_problem)
 	if not _host:
 		var waiting := UI.label("Waiting for the host to deal...", 18, UI.MUTED, true)
@@ -158,28 +169,48 @@ func _exit_tree() -> void:
 	Settings.save()
 
 
-## Top right: where the others find this room, or whose rules these are.
+## The language was changed in the settings: the lines this screen writes
+## itself are written again.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_TRANSLATION_CHANGED and is_node_ready() and _summary != null:
+		_write_address()
+		_redraw()
+
+
+## Beside the button that leaves: where the others find this room, or whose rules these are.
 func _build_address() -> void:
 	var line := UI.label("Only the host changes the table. You may change your name.", 16, UI.MUTED)
-	line.position = Vector2(408, 22)
-	line.size = Vector2(720, 28)
-	line.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	line.position = Vector2(206, 584)
+	line.size = Vector2(280 if _host else 510, 48)
+	line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(line)
+	_address_line = line
 	if not _host:
 		return
 	var addresses: Array = Room.addresses()
 	line.add_theme_color_override("font_color", UI.CREAM)
 	line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_write_address()
 	if addresses.is_empty():
-		line.text = Loc.t("This computer has no network address to share.")
 		return
-	line.text = Loc.t("ROOM ADDRESS:  %s") % addresses[0]
 	line.mouse_filter = Control.MOUSE_FILTER_PASS
-	var tip := Loc.t("What your friends type to join. With Radmin VPN it is the address that starts with 26.")
-	if addresses.size() > 1:
-		tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1))
-	tip += "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % Room.PORT
-	TipLayer.attach(line, tip)
+	TipLayer.attach(line, func() -> String:
+		var tip := Loc.t("What your friends type to join. With Radmin VPN it is the address that starts with 26.")
+		if addresses.size() > 1:
+			tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1))
+		return tip + "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % Room.PORT)
+
+
+## The host's line is formatted here, so it does not translate itself.
+func _write_address() -> void:
+	if not _host:
+		return
+	var addresses: Array = Room.addresses()
+	if addresses.is_empty():
+		_address_line.text = Loc.t("This computer has no network address to share.")
+	else:
+		_address_line.text = Loc.t("ROOM ADDRESS:  %s") % addresses[0]
 
 
 func _panel(rect: Rect2) -> VBoxContainer:
@@ -238,7 +269,8 @@ func _build_players(box: VBoxContainer) -> void:
 		list.add_child(row)
 		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove})
 
-	box.add_child(HSeparator.new())
+	_rules_line = HSeparator.new()
+	box.add_child(_rules_line)
 	box.add_child(_rules_header())
 	_rules = VBoxContainer.new()
 	_rules.add_theme_constant_override("separation", 2)
@@ -262,19 +294,29 @@ func _build_players(box: VBoxContainer) -> void:
 	_reader.add_theme_font_size_override("normal_font_size", 15)
 	_reader.add_theme_font_size_override("bold_font_size", 15)
 	box.add_child(_reader)
+	# A child of the line above the rules, not of the reader: the reader
+	# clips what it holds, and the line is drawn before the text.
 	_ghost = TextureRect.new()
-	_ghost.show_behind_parent = true
 	_ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ghost.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_ghost.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	# The right side of the reader, where the lines of text end.
-	_ghost.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_ghost.anchor_left = 0.56
 	var look := ShaderMaterial.new()
 	look.shader = Shader.new()
 	look.shader.code = GHOST_SHADER
 	_ghost.material = look
-	_reader.add_child(_ghost)
+	_rules_line.add_child(_ghost)
+	_reader.resized.connect(_place_ghost)
+	_place_ghost()
+
+
+## The ghost fills the right side of the whole section, from the line above
+## the title of the rules to the bottom of the panel.
+func _place_ghost() -> void:
+	var top := _rules_line.size.y * 0.5
+	var height := _reader.position.y + _reader.size.y + GHOST_BLEED - _rules_line.position.y - top
+	var width := height * CardView.BASE.x / CardView.BASE.y
+	_ghost.position = Vector2(_rules_line.size.x + GHOST_BLEED - width, top)
+	_ghost.size = Vector2(width, height)
 
 
 ## Takes the padding above and below the text out of `control`, so that it
@@ -348,6 +390,7 @@ func _redraw_reader() -> void:
 	_rules.visible = _rules_open
 	_rules_arrow.queue_redraw()
 	_reader.visible = not _rules_open
+	_ghost.visible = not _rules_open
 	var def := Content.character(_read) if _read != &"" else null
 	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Hover a character to read its abilities here.")]
 	if def != null:

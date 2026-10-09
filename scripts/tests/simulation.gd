@@ -19,7 +19,7 @@ static func run(games: int, verbose := false, first := 0) -> int:
 	var length := {}  # character id -> [games it was in, turns they took]
 	for g in range(first, first + games):
 		var config := GameConfig.new()
-		var seats := 2 + g % 5
+		var seats := 2 + g % 7
 		for s in seats:
 			config.seats.append({"name": "Bot%d" % s, "bot": true})
 		# From a small cast up to every character at once.

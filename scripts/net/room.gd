@@ -34,12 +34,12 @@ const GAME := "res://scenes/main.tscn"
 const PORT := 24565
 ## The room's name under the root. No scene may call its own root this.
 const NODE_NAME := "NetRoom"
-const MAX_SEATS := 6
+const MAX_SEATS := 8
 const NAME_LENGTH := 12
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 8
+const PROTOCOL := 9
 const JOIN_TIMEOUT := 8.0
-const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent"]
+const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent", "Dolores", "Ezekiel"]
 
 ## The room this machine is in, or null.
 static var current: Node

@@ -207,6 +207,11 @@ func _build_players(box: VBoxContainer) -> void:
 	_add_bot.visible = _host
 	head.add_child(_add_bot)
 	box.add_child(head)
+	# Tighter than the rest of the panel: a full room and the house rules have
+	# to fit in it together.
+	var list := VBoxContainer.new()
+	list.add_theme_constant_override("separation", 2)
+	box.add_child(list)
 	for i in Room.MAX_SEATS:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
@@ -215,7 +220,8 @@ func _build_players(box: VBoxContainer) -> void:
 		row.add_child(number)
 		var name_edit := LineEdit.new()
 		name_edit.max_length = Room.NAME_LENGTH
-		name_edit.custom_minimum_size = Vector2(170, 28)
+		name_edit.custom_minimum_size = Vector2(170, 24)
+		_slim(name_edit, [&"normal", &"focus", &"read_only"])
 		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_edit.text_changed.connect(_on_renamed.bind(i))
 		row.add_child(name_edit)
@@ -224,17 +230,18 @@ func _build_players(box: VBoxContainer) -> void:
 		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		row.add_child(tag)
 		var remove := UI.button("X", UI.RED, 13)
-		remove.custom_minimum_size = Vector2(30, 28)
+		remove.custom_minimum_size = Vector2(30, 24)
+		_slim(remove, [&"normal", &"hover", &"pressed"])
 		remove.pressed.connect(func(): _room.remove_bot(i))
 		TipLayer.attach(remove, "Take this bot out of the room.")
 		row.add_child(remove)
-		box.add_child(row)
+		list.add_child(row)
 		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove})
 
 	box.add_child(HSeparator.new())
 	box.add_child(_rules_header())
 	_rules = VBoxContainer.new()
-	_rules.add_theme_constant_override("separation", 5)
+	_rules.add_theme_constant_override("separation", 2)
 	box.add_child(_rules)
 	_rules.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
 			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
@@ -268,6 +275,20 @@ func _build_players(box: VBoxContainer) -> void:
 	look.shader.code = GHOST_SHADER
 	_ghost.material = look
 	_reader.add_child(_ghost)
+
+
+## Takes the padding above and below the text out of `control`, so that it
+## can be as short as its row.
+func _slim(control: Control, states: Array) -> void:
+	for state: StringName in states:
+		# The control is not in the tree yet: it cannot see the theme of the screen.
+		var worn: StyleBox = control.get_theme_stylebox(state)
+		if not control.has_theme_stylebox_override(state) and theme.has_stylebox(state, control.get_class()):
+			worn = theme.get_stylebox(state, control.get_class())
+		var box: StyleBox = worn.duplicate()
+		box.content_margin_top = 1
+		box.content_margin_bottom = 1
+		control.add_theme_stylebox_override(state, box)
 
 
 ## The title of the house rules, which folds them away and brings them back.

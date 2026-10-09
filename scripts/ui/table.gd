@@ -7,6 +7,13 @@ signal answered(value: Variant)
 
 const ARC_CENTER := Vector2(576, 322)
 const ARC_RADIUS := Vector2(450, 240)
+## Where the opponents sit when they are too many for the arc (their boxes
+## would overlap on it): one at each side and the others in a row along the
+## top, left to right in turn order. By number of opponents.
+const CROWDED_SEATS := {
+	6: [Vector2(141, 262), Vector2(291, 92), Vector2(481, 82), Vector2(671, 82), Vector2(861, 92), Vector2(1011, 262)],
+	7: [Vector2(141, 262), Vector2(196, 96), Vector2(386, 84), Vector2(576, 82), Vector2(766, 84), Vector2(956, 96), Vector2(1011, 262)],
+}
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
@@ -639,7 +646,10 @@ func _layout_seats() -> void:
 			degrees = 270.0 - spread / 2.0 + spread * i / (others.size() - 1)
 		var angle := deg_to_rad(degrees)
 		var radius := Vector2(410, 222) if full_circle else ARC_RADIUS
-		seat.position = ARC_CENTER + Vector2(cos(angle), sin(angle)) * radius - SeatView.SIZE / 2.0
+		var at := ARC_CENTER + Vector2(cos(angle), sin(angle)) * radius
+		if not full_circle and CROWDED_SEATS.has(others.size()):
+			at = CROWDED_SEATS[others.size()][i]
+		seat.position = at - SeatView.SIZE / 2.0
 	_set_active(engine.current)
 
 

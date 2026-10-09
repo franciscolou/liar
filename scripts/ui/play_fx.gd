@@ -46,9 +46,18 @@ const BOMB_STRAY := 22.0
 const BOMB_HOPS: Array = [[0.6, 1.0, 96.0, 0.54], [0.84, 0.5, 38.0, 0.36], [0.95, 0.15, 15.0, 0.24], [1.0, 0.0, 5.0, 0.14]]
 ## Radians a second it spins at as it is thrown; each bounce takes some off.
 const BOMB_SPIN := 9.0
-## When each note of the Bard's tune is played, in seconds from its start
-## (fx_serenade in gen_sfx.py): the lute is plucked on every one of them.
-const SERENADE: Array[float] = [0.0, 0.4, 1.2, 1.4, 1.6, 1.8, 2.2, 2.4, 2.8]
+## The Bard's tunes, one of them drawn for each Swindle: the sound (see
+## fx_serenade* in gen_sfx.py) and when each of its notes is played, in seconds
+## from its start. The lute is plucked on every one of them. `long` is the
+## notes that are held, by their place in `notes`, and for how many seconds:
+## the strings go on shaking for as long as those sound.
+const SERENADES: Array[Dictionary] = [
+	{"sound": "fx_serenade", "notes": [0.0, 0.4, 1.2, 1.4, 1.6, 1.8, 2.2, 2.4, 2.8], "long": {8: 2.5}},
+	{"sound": "fx_serenade_2", "notes": [0.0, 0.4, 1.2, 1.4, 1.6, 1.8, 2.2], "long": {1: 0.8, 6: 2.5}},
+	{"sound": "fx_serenade_3", "notes": [0.0, 0.6, 1.2, 1.6, 1.8, 2.2, 2.4, 2.8], "long": {6: 0.4, 7: 1.8}},
+	{"sound": "fx_serenade_4", "notes": [0.0, 0.2, 0.4, 0.6, 1.2, 1.4, 1.6, 1.8, 2.2], "long": {8: 2.3}},
+	{"sound": "fx_serenade_5", "notes": [0.0, 0.4, 1.0, 1.2, 1.6, 2.2], "long": {5: 0.8}},
+]
 ## How long the lute stays out: the tune and what rings on after it.
 const SERENADE_LENGTH := 5.0
 const DRAIN_FRAMES := 12
@@ -95,6 +104,9 @@ var _doll_target: PlayerState
 var _bomb: BombFx
 ## What makes a borrowed action look and sound wrong (see corrupt).
 var _glitch: GlitchFx
+## The plays that stepped in while it was on (see step_in): they are nobody's
+## copy, and it is held back for as long as any of them is on the table.
+var _guests: Array[Play] = []
 
 
 func _init(match_table: Variant) -> void:
@@ -110,8 +122,15 @@ func has_effect(play: Play) -> bool:
 ## Plays the effect of `play`, if it has one, and waits for it.
 func play_effect(play: Play) -> void:
 	var method := _method(play.source.id)
-	if has_method(method):
-		await call(method, play)
+	if not has_method(method):
+		return
+	# An item used in the middle of a borrowed action is not part of the copy.
+	var guest := _glitch != null and not _guests.has(play) and not _borrowed(play)
+	if guest:
+		step_in(play)
+	await call(method, play)
+	if guest:
+		step_out(play)
 
 
 ## A passive item giving itself up to protect `holder`.
@@ -200,7 +219,10 @@ func _fx_bard_swindle(play: Play) -> void:
 	lute.scale = Vector2(0.5, 0.5)
 	lute.modulate.a = 0.0
 	add_child(lute)
-	_snd("fx_serenade")
+	# Which tune is only what this screen hears: the global dice will do.
+	var tune: Dictionary = SERENADES.pick_random()
+	var notes: Array = tune.notes
+	_snd(tune.sound)
 	ring(lute.position, UI.GOLD, 10.0, 60.0, 0.4)
 	var played := lute.create_tween()
 	played.tween_property(lute, "modulate:a", 1.0, 0.12 / speed)
@@ -210,18 +232,19 @@ func _fx_bard_swindle(play: Play) -> void:
 	played.tween_property(lute, "modulate:a", 0.0, 0.4 / speed)
 	played.tween_callback(lute.queue_free)
 	# Plucked on every note of the tune, and a note of music let go with it.
-	for i in SERENADE.size():
-		var strike := get_tree().create_timer(maxf(SERENADE[i], 0.01) / speed)
-		strike.timeout.connect(_pluck.bind(lute, i))
+	for i in notes.size():
+		var strike := get_tree().create_timer(maxf(notes[i], 0.01) / speed)
+		strike.timeout.connect(_pluck.bind(lute, i, float(tune.long.get(i, 0.0)) / speed))
 	await _wait(0.25)
 
 
-## The lute is plucked for note `index` of the tune: its strings shake, it
-## tips a little the other way, and a note drifts up from it.
-func _pluck(lute: LuteFx, index: int) -> void:
+## The lute is plucked for note `index` of the tune: its strings shake (for
+## `held` seconds, if the note is one that is held), it tips a little the
+## other way, and a note drifts up from it.
+func _pluck(lute: LuteFx, index: int, held := 0.0) -> void:
 	if not is_instance_valid(lute):
 		return
-	lute.pluck()
+	lute.pluck(held)
 	lute.create_tween().tween_property(lute, "rotation", -0.5 + (0.07 if index % 2 == 0 else -0.07), 0.18 / table._speed) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	_note(lute.position, index)
@@ -965,15 +988,16 @@ func _fx_impostor_perfect_disguise(play: Play) -> void:
 	burst(here, PORCELAIN, 18, 150.0, 0.5, -30.0, 9.0)
 	ring(here, UI.GOLD, 20.0, 96.0, 0.35, 4.0)
 	if play.aimed() != play:
-		corrupt()
+		corrupt(play)
 	await _wait(0.5)
 
 
 ## From here on every effect is seen and heard wrong, until cleanse(): what
 ## the Impostor does behind the mask is somebody else's action, badly copied.
-func corrupt() -> void:
+func corrupt(disguise: Play) -> void:
 	cleanse()
 	_glitch = GlitchFx.new(self)
+	_glitch.disguise = disguise
 	add_child(_glitch)
 
 
@@ -982,6 +1006,31 @@ func cleanse() -> void:
 	if _glitch != null and is_instance_valid(_glitch):
 		_glitch.fade()
 	_glitch = null
+	_guests.clear()
+
+
+## Another play comes on in the middle of a borrowed action (a reaction to
+## it, say): that one is the real thing, so the borrowed look is held back
+## until step_out(). What it puts on the table stays clean for good.
+func step_in(play: Play) -> void:
+	if _glitch == null or not is_instance_valid(_glitch) or _borrowed(play) or _guests.has(play):
+		return
+	_guests.append(play)
+	_glitch.hush()
+
+
+## `play` is over: the borrowed action is the one on the table again.
+func step_out(play: Play) -> void:
+	if not _guests.has(play):
+		return
+	_guests.erase(play)
+	if _guests.is_empty() and _glitch != null and is_instance_valid(_glitch):
+		_glitch.resume()
+
+
+# Whether `play` is the disguise that is on, or the action it carries out.
+func _borrowed(play: Play) -> bool:
+	return _glitch != null and (play == _glitch.disguise or play == _glitch.disguise.aimed())
 
 
 ## Chips pushed forward; the coin itself is flown by coin_flip.
@@ -2012,7 +2061,9 @@ func _ready() -> void:
 ## what spoils them (see GlitchFx) spoils all of it.
 func _share_look(node: Node) -> void:
 	if node is CanvasItem:
-		node.use_parent_material = true
+		# What a guest of a borrowed action (see step_in) puts down is its
+		# own: it keeps out of the look of the effects, and its parts follow it.
+		node.use_parent_material = node.get_parent() != self or _guests.is_empty()
 	if not node.child_entered_tree.is_connected(_share_look):
 		node.child_entered_tree.connect(_share_look)
 	for child: Node in node.get_children():
@@ -2429,8 +2480,11 @@ void fragment() {
 
 	## 0 to 1: how much of it shows.
 	var strength := 0.0
+	## The Perfect Disguise this is the look of.
+	var disguise: Play
 
 	var _host: PlayFx
+	var _fade: Tween
 	var _look := ShaderMaterial.new()
 	var _time := 0.0
 	var _leaving := false
@@ -2446,7 +2500,7 @@ void fragment() {
 
 	func _ready() -> void:
 		_host.material = _look
-		create_tween().tween_property(self, "strength", 1.0, 0.18 / _host.table._speed)
+		_show(1.0, 0.18)
 		_bend_sounds()
 		_toll("fx_bell", 0.4, -7.0)
 		_toll("fx_hex", 0.55, -9.0)
@@ -2462,9 +2516,27 @@ void fragment() {
 			return
 		_leaving = true
 		_straighten_sounds()
-		var leave := create_tween()
-		leave.tween_property(self, "strength", 0.0, 0.3 / _host.table._speed)
-		leave.tween_callback(queue_free)
+		_show(0.0, 0.3).tween_callback(queue_free)
+
+	## Held back while a play that is nobody's copy is on the table.
+	func hush() -> void:
+		if _leaving:
+			return
+		_straighten_sounds()
+		_show(0.0, 0.12)
+
+	## The borrowed action goes on. Only the look comes back: bending the
+	## sounds again would bend what the other play left ringing.
+	func resume() -> void:
+		if not _leaving:
+			_show(1.0, 0.18)
+
+	func _show(to: float, seconds: float) -> Tween:
+		if _fade != null:
+			_fade.kill()
+		_fade = create_tween()
+		_fade.tween_property(self, "strength", to, seconds / _host.table._speed)
+		return _fade
 
 	func _process(delta: float) -> void:
 		_time += delta
@@ -3498,17 +3570,25 @@ class LuteFx extends Control:
 
 	## How hard the strings are shaking, 1 right after a pluck.
 	var ring := 0.0
+	## How hard they go on shaking while a held note sounds.
+	const HELD := 0.6
+	var _held := 0.0
 	var _time := 0.0
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	func pluck() -> void:
+	## The strings are struck. A note that is held for `held` seconds keeps
+	## them shaking that long, and they come to rest as it dies away.
+	func pluck(held := 0.0) -> void:
 		ring = 1.0
+		_held = held
 
 	func _process(delta: float) -> void:
 		_time += delta
-		ring = maxf(ring - delta * 2.4, 0.0)
+		# The last stretch of a held note is the strings settling.
+		_held = maxf(_held - delta, 0.0)
+		ring = maxf(ring - delta * 2.4, HELD if _held > HELD / 2.4 else 0.0)
 		queue_redraw()
 
 	func _draw() -> void:

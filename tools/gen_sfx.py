@@ -446,51 +446,104 @@ def fx_lute():
     return out
 
 
-def fx_serenade():
-    """The Bard's tune, played while the coins of a Swindle dance over to him.
-    The melody is given, note for note and to the hundredth of a second (3/4
-    at 75 to the minute): nine plucked notes of 0.3 s each (the last one is
-    held instead: struck as B flat and slid up to C with a vibrato on it),
-    nothing added to it and none of its rests filled. Everything else is the room around it:
-    noir, slow and unresolved. A bass that barely moves (F, C, D flat, C), a
-    low drone, dark chords on a vibraphone (F minor 9, D flat major 7, and a
-    C7 with a sharp nine left hanging) and a brush on the second and third
-    beats."""
-    note = 0.3
-    f4, gs4, as4, c5, ds5 = 349.23, 415.30, 466.16, 523.25, 622.25
-    melody = ((f4, 0.0), (f4, 0.4), (gs4, 1.2), (f4, 1.4), (gs4, 1.6), (ds5, 1.8), (c5, 2.2), (as4, 2.4), (c5, 2.8))
+def harp(freq, seconds, decay):
+    """A harp string, plucked with the flesh of the finger: the instrument
+    the Bard's tunes are played on. Soft and round where pluck() is bright:
+    the overtones fall away as on a real string plucked two fifths of the
+    way along it (a little brighter than 1/n squared, which was found
+    muffled; every fifth one missing), the higher
+    ones die much sooner than the note, they are a hair sharp as on a
+    stretched string, and the attack is a small thump instead of a click.
+    `freq` may be a function of t, for a note that is bent."""
+    pitch = freq if callable(freq) else (lambda t: freq)
+    out = silence(seconds)
+    for n in range(1, 15):
+        level = abs(math.sin(n * math.pi * 0.4)) / n ** 1.5
+        if level < 0.004:
+            continue
+        sharp = n * math.sqrt(1.0 + 0.00012 * n * n)
+        partial = tone(lambda t, k=sharp: pitch(t) * k, seconds, 0.005, decay / (1.0 + 0.16 * (n - 1) ** 1.2))
+        mix(out, partial, 0.0, level)
+    mix(out, lowpass(noise(0.02, 0.001, 0.008, int(pitch(0.0))), 2200), 0.0, 0.1)
+    return out
+
+
+def bent(below, freq, climb=0.06):
+    """The pitch of a note bent into: it starts at `below` and is at `freq`
+    within `climb` seconds (a smooth scoop, easing out, like the way a
+    saxophone gets to a note; quick unless told otherwise), and just after
+    that it has a very slight vibrato (5 Hz, 12 cents each way)."""
+    scoop = 1200.0 * math.log2(below / freq)
+
+    def pitch(t):
+        left = max(1.0 - t / climb, 0.0)
+        waver = 12.0 * math.sin(TAU * 5.0 * (t - climb - 0.01)) if t > climb + 0.01 else 0.0
+        return freq * 2.0 ** ((scoop * left * left + waver) / 1200.0)
+    return pitch
+
+
+def serenade_lead(melody, hold=True):
+    """The melody of one of the Bard's tunes, played while the coins of a
+    Swindle dance over to him, with nothing under it yet. It is given, note
+    for note and to the hundredth of a second (3/4 at 75 to the minute), as
+    (frequency, start, duration): notes plucked on a harp, nothing added to
+    them and none of their rests filled. A fourth value is the pitch a note
+    is bent into from (see bent), and a fifth how long the bend takes. With
+    `hold`, the last one is held instead: struck as written (a B flat) and
+    slid up a whole tone to C with a vibrato on it. Each tune then builds
+    its own room around it, and is passed through lowpass(out, 4800) at the
+    end."""
+    # How loud the harp is over what is under it.
+    lead = 1.5
+    # A string that is stopped is damped by the hand, not cut: this much
+    # of it is still heard after the time the note was given.
+    release = 0.12
     out = silence(4.6)
-    for freq, at in melody[:-1]:
-        pick = pluck(freq, note, 0.5)
-        # Stopped at the end of its 0.3 s, without a click. Where the notes
-        # come 0.2 s apart, each rings a little into the next.
-        fade = int(0.02 * RATE)
+    for entry in melody[:-1] if hold else melody:
+        freq, at, note = entry[:3]
+        # A long note is let ring for its whole time instead of dying early.
+        decay = max(0.5, note * 1.4)
+        # A note held for more than a second is let go of slowly, inside its
+        # own time, instead.
+        short = note <= 1.0
+        pick = harp(freq if len(entry) == 3 else bent(entry[3], freq, *entry[4:]), note + (release if short else 0.0), decay)
+        fade = int((release if short else 0.7) * RATE)
         pick = [s * min(1.0, (len(pick) - i) / fade) for i, s in enumerate(pick)]
-        mix(out, pick, at, 0.85)
+        mix(out, pick, at, lead)
+    if not hold:
+        return out
     # The last note alone is held (asked for after the rest was fixed). It
-    # is struck as B flat, like the one before it, and is carried up to the
-    # C it used to be: a slow slide of a whole tone with an even vibrato on
-    # it all the way, the same small amount above and below.
-    _was, at = melody[-1]
+    # is struck as B flat and carried up to C: a slow slide of a whole tone
+    # with an even vibrato on it all the way, the same small amount above
+    # and below.
+    low, at, _note = melody[-1]
     held = 2.5
     # It is let go of gently: the last stretch of it fades to nothing.
     fade_out = 1.0
 
-    def sliding(n):
-        def pitch(t):
-            # Still on B flat for a moment, then up, easing in and out.
-            up = min(max(t - 0.25, 0.0) / 0.95, 1.0)
-            up = up * up * (3.0 - 2.0 * up)
-            waver = 14.0 * min(t / 0.2, 1.0) * math.sin(TAU * 5.5 * t)
-            return as4 * n * 2.0 ** ((200.0 * up + waver) / 1200.0)
-        return pitch
+    def sliding(t):
+        # Still on B flat for a moment, then up, easing in and out.
+        up = min(max(t - 0.25, 0.0) / 0.95, 1.0)
+        up = up * up * (3.0 - 2.0 * up)
+        waver = 14.0 * min(t / 0.2, 1.0) * math.sin(TAU * 5.5 * t)
+        return low * 2.0 ** ((200.0 * up + waver) / 1200.0)
 
-    for n in range(1, 8):
-        # It dies away slowly, so that the slide is heard to its end.
-        ringing = tone(sliding(n), held, 0.002, 2.6 / n ** 0.5)
-        ringing = [s * min(1.0, (len(ringing) - i) / (fade_out * RATE)) for i, s in enumerate(ringing)]
-        mix(out, ringing, at, 0.85 / n ** 1.1)
-    mix(out, highpass(noise(0.01, 0.0005, 0.004, int(as4)), 2000), at, 0.85 * 0.3)
+    # It dies away slowly, so that the slide is heard to its end.
+    ringing = harp(sliding, held, 4.5)
+    ringing = [s * min(1.0, (len(ringing) - i) / (fade_out * RATE)) for i, s in enumerate(ringing)]
+    mix(out, ringing, at, lead)
+    return out
+
+
+def fx_serenade():
+    """The first tune: nine notes of 0.3 s each. The room around it is noir,
+    slow and unresolved: a bass that barely moves (F, C, D flat, C), a low
+    drone, dark chords on a vibraphone (F minor 9, D flat major 7, and a C7
+    with a sharp nine left hanging) and a brush on the second and third
+    beats."""
+    f4, gs4, as4, c5, ds5 = 349.23, 415.30, 466.16, 523.25, 622.25
+    starts = ((f4, 0.0), (f4, 0.4), (gs4, 1.2), (f4, 1.4), (gs4, 1.6), (ds5, 1.8), (c5, 2.2), (as4, 2.4), (as4, 2.8))
+    out = serenade_lead([(freq, at, 0.3) for freq, at in starts])
     mix(out, lowpass(tone(43.65, 4.4, 0.6, 5.0), 200), 0.0, 0.5)
     for freq, at, ring in ((87.31, 0.0, 1.5), (130.81, 1.6, 0.8), (69.30, 2.4, 0.6), (65.41, 2.8, 1.7)):
         mix(out, upright_bass(freq, ring, ring * 0.8), at, 0.75)
@@ -501,6 +554,124 @@ def fx_serenade():
             mix(out, vibes(freq, ring, ring * 0.8), at + i * 0.012, 0.16)
     for at in (0.8, 1.6, 3.2, 4.0):
         mix(out, brush(0.16, 43 + int(at * 10)), at, 0.22)
+    return lowpass(out, 4800)
+
+
+def fx_serenade_2():
+    """The second tune: seven notes, a blues riff that climbs only as far as
+    the B flat and waits there. Its room is its own, a con being walked up to
+    and pulled off: no drone and no pad. The bass walks up under the riff (F,
+    A flat, B flat, a B natural slipped into the rest, C), a piano answers
+    in the gaps (a dry F minor 7, then the bare tritone of C7 under the held
+    B flat), and when the note gets to C the tune lands, where the first one
+    is left hanging: F minor with its sixth and ninth rolled on the
+    vibraphone, the low F under it and a brush stirred on the snare."""
+    f4, gs4, as4 = 349.23, 415.30, 466.16
+    out = serenade_lead(((f4, 0.0, 0.2), (f4, 0.4, 0.8), (gs4, 1.2, 0.2), (f4, 1.4, 0.2), (gs4, 1.6, 0.2),
+                         (as4, 1.8, 0.2), (as4, 2.2, 0.2)))
+    walk = ((87.31, 0.0, 0.7, 0.75), (103.83, 0.8, 0.7, 0.7), (116.54, 1.6, 0.4, 0.7), (123.47, 2.0, 0.2, 0.55),
+            (130.81, 2.4, 0.8, 0.8), (87.31, 3.2, 1.5, 0.85))
+    for freq, at, ring, gain in walk:
+        mix(out, upright_bass(freq, ring, ring * 0.8), at, gain)
+    # The piano, short and dry, under the long F and in the rest.
+    for freq in (207.65, 261.63, 311.13):
+        mix(out, piano(freq, 0.35, 0.22), 0.8, 0.14)
+    for freq in (164.81, 233.08):
+        mix(out, piano(freq, 0.8, 0.6), 2.4, 0.16)
+    # Home: the chord is rolled upwards as the held note arrives.
+    for i, freq in enumerate((207.65, 293.66, 392.0, 587.33)):
+        mix(out, vibes(freq, 1.5, 1.3), 3.2 + i * 0.05, 0.15)
+    mix(out, lowpass(tone(43.65, 1.5, 0.3, 2.0), 200), 3.2, 0.45)
+    for at in (0.8, 1.6, 2.0):
+        mix(out, brush(0.12, 43 + int(at * 10)), at, 0.2)
+    mix(out, brush(1.2, 77), 3.2, 0.1)
+    return lowpass(out, 4800)
+
+
+def fx_serenade_3():
+    """The third tune ("aguda", the high one): eight short notes that come
+    down from a high F and then rock between A flat and C, the first and the
+    seventh bent into from a whole tone below (the seventh slowly, in 0.2 s,
+    and lasting until the next note: at the 0.06 s it was given, with the
+    bass coming in under it, the bend could not be heard). The last one, an
+    A flat, is
+    left ringing where it is (asked for; no slide on this one). Its room is the darkest of the three and the slowest: nothing
+    in it keeps time. Three long chords on the vibraphone, each rolled, over
+    a bass that sinks by half a step into the last one: B flat minor 11 (a
+    cluster, C against D flat), the G flat seventh a tritone away from the
+    dominant, in which the A flat and C of the lute are the ninth and the
+    sharp eleventh, and F minor 11, stacked low and close under the A flat
+    the lute is left on (B minor and B flat minor were tried there and
+    turned down). A low F comes in under it and a brush is stirred, not
+    tapped. Nothing is added above the tune."""
+    gs4, as4, c5, ds5, f5 = 415.30, 466.16, 523.25, 622.25, 698.46
+    out = serenade_lead(((f5, 0.0, 0.2, ds5), (ds5, 0.6, 0.2), (as4, 1.2, 0.2), (gs4, 1.6, 0.2), (c5, 1.8, 0.2),
+                         (gs4, 2.2, 0.2), (c5, 2.4, 0.4, as4, 0.2), (gs4, 2.8, 1.8)), False)
+    for freq, at, ring, slide in ((58.27, 0.0, 1.6, 1.0), (92.50, 1.6, 0.8, 1.0), (87.31, 2.4, 2.2, 1.0)):
+        mix(out, upright_bass(freq, ring, ring * 0.8, slide), at, 0.75)
+    mix(out, lowpass(tone(43.65, 2.2, 0.5, 2.6), 200), 2.4, 0.45)
+    chords = (((207.65, 261.63, 277.18, 311.13), 0.0, 1.7), ((164.81, 233.08, 277.18), 1.6, 0.9),
+              ((155.56, 207.65, 233.08, 261.63), 2.5, 2.1))
+    # (The last chord waits a tenth of a second: the lute bends into its C
+    # at 2.4, and with the chord struck on top of it the bend was not heard.)
+    for chord, at, ring in chords:
+        for i, freq in enumerate(chord):
+            mix(out, vibes(freq, ring, ring * 0.8), at + i * 0.035, 0.15)
+    for at, seed in ((0.0, 81), (2.4, 83)):
+        stir = noise(1.5, 0.5, 1.0, seed)
+        mix(out, bandpass(stir, 1500, 5000), at, 0.05)
+    return lowpass(out, 4800)
+
+
+def fx_serenade_4():
+    """The fourth tune ("volta", the way back): nine short notes, a quick
+    leap up and a turn around B flat, the last one a C bent into from a
+    whole tone below. That one is held (asked for, with the bend drawn out
+    to match: it takes 0.7 s to get up to the C) and rings to the end. Its
+    room is slow and dark like the third's, but it is a felt piano that
+    plays the chords here, low and rolled, and it ends where it began: D
+    flat major 9 under the leap, a C with its fourth and a flat nine under
+    the turn (B flat minor over a C in the bass), and where F minor was due,
+    D flat again, with a sharp eleventh and the C of the lute as its major
+    seventh. That last chord comes in with the note before the last (asked
+    for), so that the held note climbs over it. The bass goes D flat, C, D flat, a low D flat comes in under
+    the last chord and a brush is stirred as it rings."""
+    ds4, f4, gs4, as4, c5, ds5 = 311.13, 349.23, 415.30, 466.16, 523.25, 622.25
+    out = serenade_lead(((ds4, 0.0, 0.2), (f4, 0.2, 0.2), (ds5, 0.4, 0.2), (as4, 0.6, 0.2), (as4, 1.2, 0.2),
+                         (gs4, 1.4, 0.2), (f4, 1.6, 0.2), (as4, 1.8, 0.2), (c5, 2.2, 2.3, as4, 0.7)), False)
+    for freq, at, ring in ((69.30, 0.0, 1.2), (65.41, 1.2, 0.6), (69.30, 1.8, 2.8)):
+        mix(out, upright_bass(freq, ring, ring * 0.8), at, 0.75)
+    mix(out, lowpass(tone(34.65, 2.8, 0.5, 3.2), 200), 1.8, 0.45)
+    chords = (((174.61, 207.65, 261.63, 311.13), 0.0, 1.3), ((233.08, 277.18, 349.23), 1.2, 0.7),
+              ((174.61, 207.65, 261.63, 392.0), 1.8, 2.8))
+    for chord, at, ring in chords:
+        for i, freq in enumerate(chord):
+            mix(out, piano(freq, ring, ring * 0.8), at + i * 0.04, 0.12)
+    mix(out, bandpass(noise(1.5, 0.5, 1.0, 87), 1500, 5000), 1.8, 0.05)
+    return lowpass(out, 4800)
+
+
+def fx_serenade_5():
+    """The fifth tune ("harmonia"): the lute plays two strings at a time,
+    five pairs and one note alone, and the last pair (F and D) is held for
+    0.8 s, both strings struck and stopped together. No bend, no vibrato and
+    nothing held beyond that: the notes are as given. The tune brings its
+    own harmony, so its room is the barest of them: a bass in long notes (A
+    flat, F, B flat) and two or three soft bars of the vibraphone under each
+    stretch, only the notes the lute leaves out: A flat major 9, F minor 9
+    and, under the last pair, a B flat ninth left open. A brush is stirred
+    as it rings."""
+    ds4, f4, gs4, as4, c5, d5, ds5 = 311.13, 349.23, 415.30, 466.16, 523.25, 587.33, 622.25
+    out = serenade_lead(((ds5, 0.0, 0.2), (as4, 0.0, 0.2), (gs4, 0.4, 0.2), (ds5, 0.4, 0.2), (ds4, 1.0, 0.2),
+                         (f4, 1.2, 0.2), (c5, 1.2, 0.2), (gs4, 1.6, 0.2), (c5, 1.6, 0.2),
+                         (f4, 2.2, 0.8), (d5, 2.2, 0.8)), False)
+    for freq, at, ring in ((51.91, 0.0, 1.2), (87.31, 1.2, 1.0), (58.27, 2.2, 2.4)):
+        mix(out, upright_bass(freq, ring, ring * 0.8), at, 0.75)
+    chords = (((196.0, 261.63), 0.0, 1.3), ((155.56, 196.0, 207.65), 1.2, 1.1), ((207.65, 261.63, 293.66), 2.2, 2.4))
+    for chord, at, ring in chords:
+        for i, freq in enumerate(chord):
+            mix(out, vibes(freq, ring, ring * 0.8), at + i * 0.035, 0.14)
+    mix(out, bandpass(noise(1.5, 0.5, 1.0, 91), 1500, 5000), 2.2, 0.05)
     return lowpass(out, 4800)
 
 
@@ -1042,6 +1213,10 @@ SOUNDS = {
     "fx_shimmer": fx_shimmer,
     "fx_sniper_aim": fx_sniper_aim,
     "fx_serenade": fx_serenade,
+    "fx_serenade_2": fx_serenade_2,
+    "fx_serenade_3": fx_serenade_3,
+    "fx_serenade_4": fx_serenade_4,
+    "fx_serenade_5": fx_serenade_5,
     "fx_doll_hit": fx_doll_hit,
     "chalk": chalk,
     "fx_sniper": fx_sniper,
@@ -1082,7 +1257,7 @@ PEAK = 0.7
 PEAKS = {
     "truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38, "item_roulette": 0.5,
     "fx_hush": 0.4, "fx_shutter": 0.5, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5, "fx_lute": 0.55,
-    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "chalk": 0.28, "fx_serenade": 0.8, "fx_doll_hit": 0.6, "fx_sniper_aim": 0.3, "fx_sniper": 0.95, "fx_hex": 0.75,
+    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "chalk": 0.28, "fx_serenade": 0.8, "fx_serenade_2": 0.8, "fx_serenade_3": 0.8, "fx_serenade_4": 0.8, "fx_serenade_5": 0.8, "fx_doll_hit": 0.6, "fx_sniper_aim": 0.3, "fx_sniper": 0.95, "fx_hex": 0.75,
     "item_death": 0.9,
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
     "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,

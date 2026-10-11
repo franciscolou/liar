@@ -109,6 +109,12 @@ var viewer: PlayerState  # whose hand is on screen; null while spectating
 var _speed := 1.0
 var _room: Node  # the room the match is played in (room.gd); null offline
 var _pending: Decision
+## What a hovered LIAR! button is showing as about to be lost (see _threaten):
+## [player, statuses], the chips turned red as [chip, its own stylebox], and
+## what makes them beat.
+var _threat_on: Array = []
+var _threatened: Array = []
+var _threat_pulse: Tween
 var _handoff: Dictionary = {}  # a picked card waiting for its animation: {veil, player, card, lifted}
 var _seats: Dictionary = {}  # player id -> SeatView
 var _hero: HeroPanel
@@ -1138,9 +1144,14 @@ func _doubt_buttons(d: Decision) -> Array:
 	var cost := engine.config.doubt_cost
 	var stakes: Array = d.options
 	var bluff := Loc.t("Call the bluff.\nIf %s lied, they lose 1 Morale and the ability fails.") % play.actor.name
+	# What the call throws away, whoever turns out to be lying.
+	var dooms: Array = d.player.statuses.keys().filter(func(status_id: StringName) -> bool:
+		return Content.statuses.get(status_id, {}).has("doubt_warning"))
 	var buttons := []
 	for stake: StringName in stakes:
 		var spec := {"text": "LIAR!", "stake": stake, "accent": UI.RED, "action": _answer.bind(stake)}
+		if not dooms.is_empty():
+			spec["dooms"] = {"player": d.player, "statuses": dooms}
 		match stake:
 			GameEngine.STAKE_COINS:
 				spec["price"] = {"icon": COIN_ICON, "amount": str(cost), "color": UI.GOLD}
@@ -1499,6 +1510,9 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 		b.pressed.connect(spec.action)
 		if spec.has("tip"):
 			TipLayer.attach(b, spec.tip)
+		if spec.has("dooms"):
+			b.mouse_entered.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, true))
+			b.mouse_exited.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, false))
 		row.add_child(b)
 	_prompt.visible = true
 	_prompt.reset_size()
@@ -1546,7 +1560,38 @@ func _make_shady(b: Button) -> void:
 		b.add_theme_color_override(state, UI.MUTED.darkened(0.2))
 
 
+## A hand on a button that would cost `who` these statuses (or off it
+## again): their looks and their chips go red on the box, so that it is seen
+## before it is done. Nothing is asked: the call is as quick as ever.
+func _threaten(who: PlayerState, statuses: Array, on: bool) -> void:
+	var box: Variant = _node_of(who)
+	if _threat_pulse != null:
+		_threat_pulse.kill()
+		_threat_pulse = null
+	for entry: Array in _threatened:
+		if is_instance_valid(entry[0]):
+			entry[0].modulate = Color.WHITE
+			entry[0].add_theme_stylebox_override("panel", entry[1])
+	_threatened.clear()
+	if box == null:
+		return
+	for status_id: StringName in statuses:
+		box.status_threatened(status_id, on)
+		var chip: Control = box.status_chip(status_id)
+		if not on or chip == null:
+			continue
+		_threatened.append([chip, chip.get_theme_stylebox("panel")])
+		chip.add_theme_stylebox_override("panel", UI.box(UI.RED.darkened(0.35), UI.RED.lightened(0.35), 1, 3, 3))
+		if _threat_pulse == null:
+			_threat_pulse = create_tween().set_loops()
+		_threat_pulse.tween_property(chip, "modulate", Color(1.7, 1.5, 1.5), 0.12)
+		_threat_pulse.tween_property(chip, "modulate", Color.WHITE, 0.12)
+	_threat_on = [who, statuses] if on else []
+
+
 func _hide_prompt() -> void:
+	if not _threat_on.is_empty():
+		_threaten(_threat_on[0], _threat_on[1], false)
 	_prompt.visible = false
 	UI.clear(_prompt)
 

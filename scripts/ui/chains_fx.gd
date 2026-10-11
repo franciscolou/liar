@@ -24,6 +24,9 @@ const STEEL_DARK := Color("8f96c4")
 const RED := Color(1.0, 0.16, 0.36)
 const CYAN := Color(0.1, 0.95, 1.0)
 const VIOLET := Color("9b6bff")
+const ALARM := Color("ff2a3c")
+const ALARM_DARK := Color("8a0f1e")
+const VOID := Color("05030a")
 const STAR := [
 	"....#....",
 	"....#....",
@@ -49,6 +52,11 @@ var bound := 0.0:
 		bound = value
 		visible = bound > 0.0
 		set_process(visible)
+
+## How close they are to being thrown away, 0 to 1: the player in them has
+## a hand on the LIAR! that would cost them (see StatusFx.threaten). They go
+## red and strain at the box, and a hole starts where the star was.
+var doomed := 0.0
 
 ## One entry per chain: the middle of every link, first to last.
 var _chains: Array = []
@@ -118,15 +126,22 @@ func _draw() -> void:
 		return
 	var split := lerpf(SPLIT_BINDING, SPLIT, bound * bound)
 	var centre := box.get_center()
-	draw_circle(centre, 20.0 + 3.0 * sin(_time * 2.1), Color(VIOLET, 0.1 * bound))
+	# About to go: everything they are is red, beating fast.
+	var beat := 0.5 + 0.5 * sin(_time * 13.0)
+	split += 3.0 * doomed * beat
+	draw_circle(centre, 20.0 + 3.0 * sin(_time * 2.1), Color(VIOLET.lerp(ALARM, doomed), (0.1 + 0.16 * doomed * beat) * bound))
 	for image: int in 3:
-		var ink: Color = [RED, CYAN, STEEL][image]
+		var ink: Color = [RED, CYAN, STEEL][image].lerp(ALARM, doomed)
 		var apart := Vector2([-split, split, 0.0][image], 0)
 		for c: int in _chains.size():
 			var chain: Array = _chains[c]
 			var shown := _shown(chain)
 			for i: int in shown:
 				var at: Vector2 = chain[i] + apart
+				if doomed > 0.0:
+					# Pulled taut towards where they cross, and shivering.
+					at += (centre - at).limit_length(2.0 * doomed * beat)
+					at += Vector2(sin(_time * 41.0 + i * 1.9 + c), cos(_time * 35.0 + i * 2.3)) * 1.2 * doomed
 				var way: Vector2 = chain[mini(i + 1, chain.size() - 1)] - chain[maxi(i - 1, 0)]
 				draw_set_transform(at.round(), way.angle())
 				if image < 2:
@@ -136,17 +151,21 @@ func _draw() -> void:
 				var lit := _glow(c, i, chain.size())
 				var head := bound < 1.0 and i >= shown - 2
 				var bright: Color = Color.WHITE if head else STEEL.lerp(_hue(c, i), lit)
-				_link(i, bright, bright if head else STEEL_DARK.lerp(_hue(c, i), lit))
+				var shade: Color = bright if head else STEEL_DARK.lerp(_hue(c, i), lit)
+				var hot := ALARM.lerp(Color.WHITE, 0.55 * maxf(beat, lit))
+				_link(i, bright.lerp(hot, doomed), shade.lerp(ALARM_DARK.lerp(ALARM, beat), doomed))
 	draw_set_transform(Vector2.ZERO)
 	if bound < 1.0:
 		return
 	_drift(centre)
 	# The star that holds them where they cross.
 	var pulse := 0.5 + 0.5 * sin(_time * 3.3)
-	draw_circle(centre, 9.0 + 3.0 * pulse, Color(VIOLET, 0.22))
+	draw_circle(centre, 9.0 + 3.0 * pulse, Color(VIOLET.lerp(ALARM, doomed), 0.22 + 0.2 * doomed * beat))
 	_star(centre + Vector2(-split, 0), Color(RED, 0.6), Color(RED, 0.6))
 	_star(centre + Vector2(split, 0), Color(CYAN, 0.6), Color(CYAN, 0.6))
-	_star(centre, VIOLET.lerp(Color.WHITE, 0.4 + 0.4 * pulse), Color.WHITE)
+	_star(centre, VIOLET.lerp(Color.WHITE, 0.4 + 0.4 * pulse).lerp(ALARM, doomed), Color.WHITE)
+	if doomed > 0.0:
+		_maw(centre, (5.0 + 2.0 * beat) * doomed)
 
 
 ## One link at the origin, lying along +x: every other one is seen face on,
@@ -192,6 +211,17 @@ func _drift(centre: Vector2) -> void:
 		if i % 3 == 0:
 			for arm: Vector2 in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
 				draw_rect(Rect2(corner + arm * CELL, Vector2(CELL, CELL)), Color(ink, alpha * 0.5))
+
+
+## The hole that would take them, starting to open on the star: a black
+## disc in blocks with a red rim.
+func _maw(at: Vector2, radius: float) -> void:
+	var cells := ceili(radius / CELL) + 2
+	for y: int in range(-cells, cells + 1):
+		for x: int in range(-cells, cells + 1):
+			var far := (Vector2(x + 0.5, y + 0.5) * CELL).length()
+			if far <= radius + CELL:
+				draw_rect(Rect2((at / CELL).round() * CELL + Vector2(x, y) * CELL, Vector2(CELL, CELL)), VOID if far <= radius else ALARM)
 
 
 func _star(at: Vector2, edge: Color, core: Color) -> void:

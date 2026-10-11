@@ -36,6 +36,8 @@ const TURBULENCE := 1.0
 const FADE := 0.25
 ## Seconds the chains take to be thrown round the box.
 const BIND := 0.55
+## Seconds a look takes to turn on its player when threatened (see threaten).
+const THREAT := 0.1
 ## Seconds the wax takes to cool and set once the seal is pressed, seconds a
 ## seal pressed ahead of its status waits for it (see press_seal), and
 ## seconds a jolt of it lasts.
@@ -184,6 +186,7 @@ var _level := {}  # status id -> 0..1, how far its look has faded in
 var _urgent := false
 var _time := 0.0
 var _borrowed := {}  # status id -> bool, see set_borrowed
+var _threat := {}  # status id -> bool, see threaten
 ## What a borrowed status is drawn with: the material of PlayFx.GlitchFx,
 ## kept going here.
 var _spoiled: ShaderMaterial
@@ -225,6 +228,8 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 		_urgent = engine.current == player and planted < engine.turn_count
 	if not _wanted[ENTROPY]:
 		_chains.bound = 0.0
+		_chains.doomed = 0.0
+		_threat.erase(ENTROPY)
 	_sworn = _wanted[SWORN]
 	if _sworn and _level.get(SWORN, 0.0) <= 0.0:
 		# Nobody pressed it: it sets by itself as it shows.
@@ -249,6 +254,15 @@ func set_borrowed(id: StringName, on: bool) -> void:
 	for id_and_canvas: Array in [[GROGGY, _near], [GROGGY, back], [HEXED, _doll], [TICKING, _bomb], [ENTROPY, _chains], [SWORN, _seal]]:
 		var canvas: CanvasItem = id_and_canvas[1]
 		canvas.material = _spoiled if _borrowed.get(id_and_canvas[0], false) else null
+
+
+## The player is about to do what would throw status `id` away (a hand on
+## the LIAR! button, in chains): its look says so until `on` is false again.
+## Only the chains of an Entropy have anything to say.
+func threaten(id: StringName, on: bool) -> void:
+	_threat[id] = on
+	if _wanted.values().has(true):
+		set_process(true)
 
 
 func borrowed(id: StringName) -> bool:
@@ -355,6 +369,7 @@ func _process(delta: float) -> void:
 	# not fade, they break (see PlayFx.chains_break).
 	_chains.bound = move_toward(_chains.bound, 1.0, delta / BIND) if _wanted.get(ENTROPY, false) else 0.0
 	_level[ENTROPY] = 1.0 if _wanted.get(ENTROPY, false) else 0.0
+	_chains.doomed = move_toward(_chains.doomed, 1.0 if _threat.get(ENTROPY, false) else 0.0, delta / THREAT)
 	if not busy:
 		set_process(false)
 	if _spoiled != null:

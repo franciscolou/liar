@@ -399,6 +399,12 @@ func seal_jolt() -> void:
 	_status_fx.jolt_seal()
 
 
+## The look of status `id` shows that it is about to be thrown away, or
+## stops showing it (see StatusFx.threaten).
+func status_threatened(id: StringName, on: bool) -> void:
+	_status_fx.threaten(id, on)
+
+
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).
 func status_pieces(id: StringName) -> Array[Vector2]:
 	return _status_fx.pieces(id)

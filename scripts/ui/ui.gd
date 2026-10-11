@@ -23,8 +23,9 @@ const ITEM_BACK := "res://assets/Item.png"
 const CARD_FRAME := "res://assets/ui/card_frame.png"
 ## Folder of an alternative set of card art, looked up by file name; a card
 ## missing from it keeps its own art. "" uses the art each character names.
-## "res://assets/cards_proto/" and "res://assets/cards_proto2/" are cut from
-## assets/prototype and assets/prototype2 by tools/gen_proto_cards.py.
+## "res://assets/cards_proto2/" is cut from assets/prototype2 by
+## tools/gen_proto_cards.py; the art in assets/cards/ that the characters
+## still name is gone, so only the file name of their path matters.
 const CARD_ART_DIR := "res://assets/cards_proto2/"
 ## The reroll of the shop: two arrows chasing each other (see draw_reroll).
 const REROLL_ICON := [

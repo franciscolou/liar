@@ -54,7 +54,8 @@ static func run() -> int:
 		"an untraceable hand keeps its copy through a last call": _untraceable.bind(&"recall"),
 		"nobody is untraceable from themselves": _untraceable_own,
 		"an item thrown away costs nothing and takes no turn": _discard,
-	}
+		"two swindles: the human is heard before the bot": _swindle_race.bind(false),
+		"two swindles: only one of them takes the coins": _swindle_race.bind(true),	}
 	var failed := 0
 	for title: String in scenes:
 		var problem: String = await scenes[title].call()
@@ -593,6 +594,24 @@ static func _discard() -> String:
 	if seen.of(&"item_discarded").size() != 1 or seen.of(&"item_discarded")[0].data.index != 0:
 		return "the table was not told"
 	return "" if engine.claim_block_reason(p, table.ability(&"entity.entropy")) == "" else "it took up the turn"
+
+
+## Players 0 and 1 both swindle the coins on their way to player 2: one of
+## them gets all of it. With player 1 a human, it is theirs, whatever the
+## seats say; between `bots` it is either's, and only one's.
+static func _swindle_race(bots: bool) -> String:
+	var table := Table.new(bots, [&"bard"])
+	var engine := table.engine
+	for i: int in 2:
+		engine.players[i].cards = [&"bard", &"judge"]
+		table.puppets[i].answers[Decision.Kind.REACT] = _swindles
+	await engine.gain_coins(engine.players[2], 4, &"bounty")
+	var hauls: Array = [engine.players[0].coins - 20, engine.players[1].coins - 20]
+	if engine.players[2].coins != 20:
+		return "the coins still got there"
+	if bots:
+		return "" if hauls == [4, 0] or hauls == [0, 4] else "hauls: %s" % [hauls]
+	return "" if hauls == [0, 4] else "hauls: %s" % [hauls]
 
 
 static func _vanishes(d: Decision) -> Variant:

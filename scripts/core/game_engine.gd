@@ -144,10 +144,14 @@ func fire_event(event: GameEvent) -> void:
 func _reaction_window(event: GameEvent) -> void:
 	if over or _reaction_depth >= MAX_REACTION_DEPTH:
 		return
+	# What only one of them can get is raced for first; the rest goes round
+	# the table, each in their turn.
+	await _contested_window(event)
 	for p in seat_order(current):
 		if over or event.cancelled:
 			return
-		var options := reaction_options(p, event)
+		var options := reaction_options(p, event).filter(func(option: Dictionary) -> bool:
+			return not _contested(option))
 		if options.is_empty():
 			continue
 		var choice: Variant = null
@@ -170,12 +174,113 @@ func _reaction_window(event: GameEvent) -> void:
 			choice = await ask(d)
 		if choice == null:
 			continue
-		_reaction_depth += 1
-		if choice.kind == &"ability":
-			await claim(p, choice.ability, event)
-		else:
-			await use_item(p, choice.item, event)
-		_reaction_depth -= 1
+		await _react(p, choice, event)
+
+
+## `player` answers `event` with reaction option `choice`.
+func _react(player: PlayerState, choice: Dictionary, event: GameEvent) -> void:
+	_reaction_depth += 1
+	if choice.kind == &"ability":
+		await claim(player, choice.ability, event)
+	else:
+		await use_item(player, choice.item, event)
+	_reaction_depth -= 1
+
+
+## Whether reaction `option` plays something only one player can get (see
+## Playable.contested).
+func _contested(option: Dictionary) -> bool:
+	var source: Playable = option.ability if option.kind == &"ability" else option.item.def
+	return source.contested
+
+
+## The reactions to `event` that only one player can get (Playable.contested)
+## go to whoever plays them first, not by seat: everyone who could is asked at
+## once and the first answer closes the round, as in a doubt window. Bots hold
+## back until every human has passed, and one of those willing is drawn. If
+## what the winner played came to nothing (a lie caught, coins talked out of
+## it) and the event is still there to be answered, those who had not
+## answered yet are asked again.
+func _contested_window(event: GameEvent) -> void:
+	var heard := {}  # player id -> true: they played it or let it go
+	while not over and not event.cancelled:
+		var taker: PlayerState = null
+		var choice: Variant = null
+		var humans: Array = []
+		var bots: Array = []
+		for p: PlayerState in seat_order(current):
+			if heard.has(p.id):
+				continue
+			var options := reaction_options(p, event).filter(_contested)
+			if options.is_empty():
+				continue
+			var early: Dictionary = _early_reactions(event).get(p.id, {})
+			var ahead: Variant = _same_option(options, early.get("answer"))
+			if ahead != null:
+				# Answered back in the doubt window: nobody was quicker than that.
+				if taker == null:
+					taker = p
+					choice = ahead
+					early.answer = null
+				continue
+			# What they saw there and let through is not offered again.
+			options = options.filter(func(option: Dictionary) -> bool:
+				return _same_option(early.get("offered", []), option) == null)
+			if options.is_empty():
+				continue
+			var d := Decision.new(Decision.Kind.REACT, p)
+			d.options = options
+			d.context = {"event": event}
+			(bots if p.is_bot else humans).append(d)
+		if taker == null and not humans.is_empty():
+			var poll := DoubtPoll.new()
+			poll.open = humans.size()
+			for d: Decision in humans:
+				_poll_reaction(d, poll, heard)
+			if not poll.done:
+				await poll.settled
+			for d: Decision in humans:
+				if not d.context.get("answered", false):
+					controllers[d.player.id].withdraw(d)
+			if over:
+				return
+			if not poll.result.is_empty():
+				taker = poll.result.player
+				choice = poll.result.choice
+		if taker == null:
+			var willing := []
+			for d: Decision in bots:
+				if over:
+					return
+				var answer: Variant = _same_option(d.options, await ask(d))
+				heard[d.player.id] = true
+				if answer != null:
+					willing.append({"player": d.player, "choice": answer})
+			if not willing.is_empty():
+				# Whoever of them reaches for it first.
+				var first: Dictionary = willing[rng.randi_range(0, willing.size() - 1)]
+				taker = first.player
+				choice = first.choice
+		if taker == null:
+			return
+		heard[taker.id] = true
+		await _react(taker, choice, event)
+
+
+## Waits for one human's answer in a contested window that others are in too.
+func _poll_reaction(d: Decision, poll: DoubtPoll, heard: Dictionary) -> void:
+	var answer: Variant = await ask(d)
+	d.context["answered"] = true
+	if poll.done:
+		return
+	heard[d.player.id] = true
+	poll.open -= 1
+	var choice: Variant = _same_option(d.options, answer)
+	if choice != null:
+		poll.result = {"player": d.player, "choice": choice}
+	if poll.open <= 0 or not poll.result.is_empty():
+		poll.done = true
+		poll.settled.emit()
 
 
 ## Answers given ahead of time, in the doubt window, to the reaction window

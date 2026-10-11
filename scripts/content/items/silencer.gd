@@ -8,6 +8,7 @@ func _init() -> void:
 	price = 6
 	texture_path = "res://assets/items/silencer.png"
 	kind = Kind.REACTION
+	contested = true
 
 
 func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:

@@ -60,6 +60,7 @@ class LastRites extends Ability:
 		display_name = "Last Rites"
 		description = "Take every coin they left behind."
 		trigger_text = "When another player is eliminated"
+		contested = true
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		return (event.type == &"player_eliminated" and event.data.player != player

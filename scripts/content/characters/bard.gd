@@ -22,6 +22,7 @@ class Swindle extends Ability:
 		description = "Those coins go to you instead."
 		trigger_text = "When another player is about to gain coins, other than the income of their turn"
 		tags = [&"steal"]
+		contested = true
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		if event.type != &"before_gain" or event.data.player == player:

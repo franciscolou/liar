@@ -26,6 +26,10 @@ var inflicts := false
 ## Nothing its target holds answers it: shields and mirrors stay as they are
 ## (see GameEngine.guards).
 var unstoppable := false
+## As a reaction, only one player can get it (the coins of a Swindle, an
+## ability to silence): it goes to whoever plays it first, not by seat (see
+## GameEngine._contested_window).
+var contested := false
 
 
 ## "" when usable, otherwise the reason shown to the player.

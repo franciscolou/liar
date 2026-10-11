@@ -29,11 +29,11 @@ const EMBER := Vector2(511, 291)
 const TRAIL := 44
 const TRAIL_STEP := 0.3
 # The man. Where each sprite was cut from (the boxes the tool prints).
-const TORSO_AT := Vector2(100, 340)
-const HEAD_AT := Vector2(298, 156)
+const TORSO_AT := Vector2(117, 340)
+const HEAD_AT := Vector2(296, 161)
 const HAND_AT := Vector2(421, 289)
 const HAND_RIM_AT := Vector2(419, 287)
-const FOREARM_AT := Vector2(518, 364)
+const FOREARM_AT := Vector2(514, 373)
 const EYE_LEFT_AT := Vector2(364, 258)
 const EYE_RIGHT_AT := Vector2(420, 246)
 const MOUTH_AT := Vector2(402, 298)
@@ -43,11 +43,19 @@ const CHEST := Vector2(400, 530)
 # The joints of the arm that holds the cigar. The forearm lies along
 # FOREARM_AXIS, from the wrist to the elbow resting on the chair; taking the
 # cigar from the mouth is sliding the forearm down that line (it tips
-# towards us), with a little turn at the elbow and at the wrist.
+# towards us), with a little turn at the elbow and at the wrist. Only the
+# hand, the watch, the cuff and the buttons move: the sleeve stays as
+# painted and they slide over it, so the axis has to be the line of the
+# grey of the sleeve (the tool measures it), or they would leave it.
 const SHOULDER := Vector2(640, 430)
 const ELBOW := Vector2(700, 545)
 const WRIST := Vector2(548, 396)
-const FOREARM_AXIS := Vector2(0.72, 0.69)
+const FOREARM_AXIS := Vector2(0.72, 0.7)
+# Along that axis, in the painting: where the cloth of the sleeve starts,
+# where its buttons end and where it ends (the tool prints them).
+const SLEEVE_RUN := Vector3(696, 787, 876.5)
+# How much darker the hand and the cuff get away from his face and the lantern.
+const AWAY_SHADE := 0.1
 const LIPS := Vector2(430, 307)
 const BREATH_AREA := Rect2(330, 0, 800, 460)
 const PUFFS := 40
@@ -201,17 +209,55 @@ void fragment() {
 const BREATH_SHADER := "shader_type canvas_item;
 // The body, breathing: every row is drawn a few whole pixels higher, the
 // shoulders the most and the waist not at all.
+//
+// And the sleeve of the arm with the cigar. The cuff and the buttons are
+// sprites that slide down it; here its cloth goes with them (all of it as far
+// as the buttons, less and less from there to the elbow, which stays: the
+// forearm tipping towards us) and the light on it changes: the stretch past
+// the buttons catches it, the elbow loses it, and the folds of the upper
+// arm, no longer behind the forearm, come up. In flat steps, dithered, like
+// the painting. With the arm at rest none of it does anything.
 
 uniform vec2 size;
 uniform float lift;
 uniform float full;
 uniform float none;
+// r: the cloth of the forearm's sleeve; g: the lit folds of the upper arm.
+uniform sampler2D folds : filter_nearest;
+uniform vec2 at;
+uniform vec2 axis;
+// Along the axis: where the cloth starts, where its buttons end, where it ends.
+uniform vec3 run;
+uniform vec2 slide;
+uniform float tipped;
+
+const float BAYER[16] = float[](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+		3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
 
 void fragment() {
 	vec2 px = floor(UV * size);
 	float share = clamp((none - px.y) / (none - full), 0.0, 1.0);
 	float up = floor(lift * share + 0.5);
-	COLOR = texture(TEXTURE, (vec2(px.x, min(px.y + up, size.y - 1.0)) + 0.5) / size);
+	vec2 spot = vec2(px.x, min(px.y + up, size.y - 1.0));
+	vec4 colour = texture(TEXTURE, (spot + 0.5) / size);
+	vec4 fold = texture(folds, (spot + 0.5) / size);
+	float grain = BAYER[int(mod(spot.y, 4.0)) * 4 + int(mod(spot.x, 4.0))] / 16.0;
+	if (fold.r > 0.5) {
+		float along = dot(spot + at, axis);
+		float gone = dot(slide, axis);
+		float held = clamp((run.z - along) / max(run.z - run.y - gone, 1.0), 0.0, 1.0);
+		vec2 from = floor(spot - slide * held + 0.5);
+		if (texture(folds, (from + 0.5) / size).r > 0.5) {
+			colour = texture(TEXTURE, (from + 0.5) / size);
+		}
+		float sheen = 1.0 - smoothstep(6.0, 30.0, abs(along - (run.y + 26.0 + gone)));
+		float shade = smoothstep(run.y + 50.0, run.z, along);
+		float change = tipped * (0.9 * sheen - 0.5 * shade);
+		colour.rgb *= 1.0 + floor(change / 0.15 + grain) * 0.15;
+	} else if (fold.g > 0.5) {
+		colour.rgb *= 1.0 + floor(tipped * 3.0 + grain) * 0.2;
+	}
+	COLOR = colour;
 }"
 
 const PUFF_SHADER := "shader_type canvas_item;
@@ -356,6 +402,8 @@ var _smoke: ShaderMaterial
 var _light: ShaderMaterial
 var _trail := PackedVector4Array()
 var _hand_rim: Sprite2D
+var _hand: Sprite2D
+var _cuff: Sprite2D
 var _trail_in := 0.0
 var _drift := Vector2.ZERO
 var _torso: ShaderMaterial
@@ -528,6 +576,10 @@ func _build_man() -> void:
 	_torso.set_shader_parameter("size", torso.texture.get_size())
 	_torso.set_shader_parameter("full", CHEST.x - TORSO_AT.y)
 	_torso.set_shader_parameter("none", CHEST.y - TORSO_AT.y)
+	_torso.set_shader_parameter("folds", UI.tex(DIR + "torso_folds.png"))
+	_torso.set_shader_parameter("at", TORSO_AT)
+	_torso.set_shader_parameter("axis", FOREARM_AXIS.normalized())
+	_torso.set_shader_parameter("run", SLEEVE_RUN)
 
 	_head = Node2D.new()
 	add_child(_head)
@@ -545,7 +597,7 @@ func _build_man() -> void:
 	_wrist = Node2D.new()
 	_wrist.position = WRIST - ELBOW
 	_elbow.add_child(_wrist)
-	_sprite("hand.png", HAND_AT - WRIST, _wrist)
+	_hand = _sprite("hand.png", HAND_AT - WRIST, _wrist)
 	# The blended edge of the hand, for as long as the hand is where it was
 	# painted (it would drag a line of his face along if it went with it).
 	_hand_rim = _sprite("hand_rim.png", HAND_RIM_AT - WRIST, _wrist)
@@ -554,7 +606,7 @@ func _build_man() -> void:
 	var add := CanvasItemMaterial.new()
 	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	_ember_glow.material = add
-	_sprite("forearm.png", FOREARM_AT - ELBOW, _elbow)
+	_cuff = _sprite("forearm.png", FOREARM_AT - ELBOW, _elbow)
 
 	var breath := ColorRect.new()
 	breath.position = BREATH_AREA.position
@@ -662,7 +714,14 @@ func _move_man(delta: float) -> void:
 	var press := _span(0.0, DRAW.x) * (1.0 - _span(AWAY.x, AWAY.x + 0.3))
 	var reach := away * hand_reach - press * 3.0
 	_shoulder.position = SHOULDER + Vector2(0, -lerpf(head, chest, away))
-	_elbow.position = ELBOW - SHOULDER + (FOREARM_AXIS.normalized() * reach).round()
+	var slide := (FOREARM_AXIS.normalized() * reach).round()
+	_elbow.position = ELBOW - SHOULDER + slide
+	# The sleeve goes with it, and the light on the arm changes as it tips.
+	_torso.set_shader_parameter("slide", slide)
+	_torso.set_shader_parameter("tipped", away)
+	var shaded := Color(1, 1, 1).darkened(AWAY_SHADE * away)
+	_hand.self_modulate = shaded
+	_cuff.self_modulate = shaded
 	_elbow.rotation_degrees = away * elbow_turn
 	_wrist.rotation_degrees = away * wrist_turn
 	_hand_rim.visible = is_zero_approx(reach)

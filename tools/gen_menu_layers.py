@@ -245,30 +245,50 @@ HAND = [(421.5, 306), (424, 305.2), (431, 304.5), (437, 303.5), (441, 302.5), (4
 		(451.8, 298), (451.8, 292), (455, 289.4), (462, 289.4), (466.5, 290.6), (468.8, 293),
 		(468.8, 297.4), (477, 297.4), (478, 296.4), (483, 296), (484, 292.6), (498, 292.6),
 		(500, 289.6), (508, 289), (517, 291), (518, 304),
-		(507, 308), (511, 312), (521, 322), (533, 342), (549, 366), (560, 384), (552, 398),
+		(507, 307), (502, 311), (500.5, 320), (507, 330), (511.8, 336.5), (515.8, 341), (524, 350), (531.5, 360),
+		(541.5, 372), (546, 378), (551, 386), (552, 398),
 		(536, 414), (527, 412), (520, 402), (505, 394), (490, 388), (470, 381), (455, 378),
 		(450, 380), (443, 376), (441, 368), (432, 370), (427, 366), (428, 348), (430, 333),
 		(432, 326), (428, 321), (424, 317), (421.5, 315.5)]
-# The watch, the cuff and the sleeve down to a cut across it.
-FOREARM = [(520, 404), (532, 388), (540, 372), (552, 366), (566, 376), (572, 388), (586, 392),
-		(610, 404), (640, 424), (668, 448), (612, 510), (585, 490), (562, 468), (546, 458),
-		(536, 446), (524, 424)]
-# What of the forearm has to leave the plate: the sleeve stays (the sprite
-# slides along it), the watch, the cuff and the buttons do not.
-CUFF = [(520, 404), (532, 388), (540, 372), (552, 366), (566, 376), (572, 388), (584, 400),
-		(582, 420), (566, 444), (548, 458), (536, 446), (524, 424)]
-BUTTONS = [(570, 454, 586, 470), (584, 468, 600, 484), (596, 482, 612, 498)]
+# What slides down the sleeve with the hand: the watch, the cuff and the three
+# buttons, and nothing of the sleeve itself (the grey of it stays where it is
+# painted, and so does the upper arm, the black band behind it). They are cut
+# by what is lit, pixel by pixel, inside this line. Only its first stretch,
+# along the watch where it lies on the wrist, is a drawn edge; the rest just
+# keeps the studs of the chair out.
+WRISTBAND = [(514, 408), (519, 403.5), (527, 399.5), (533, 396), (539, 391), (543, 386), (545, 377),
+		(547, 373), (551, 369), (560, 372), (568, 382), (575, 390), (606, 408), (606, 460), (520, 460),
+		(510, 430)]
+BUTTONS = (570, 450, 614, 502)
+# Along these stretches a drawn line is not enough, and the cut follows the
+# pixels: the back of the hand over the chair, and the upper arm against the
+# wall and the blanket.
+HAND_ON_CHAIR = (495, 305, 548, 378)
+ARM_ON_WALL = (606, 396, 726, 561)
+# The lit cloth of the forearm's sleeve: the grey that holds this point,
+# inside this box. The game slides and relights it as the arm tips, so the
+# buttons do not seem to wander down a sleeve that stands still. The axis is
+# the line of its edge (FOREARM_AXIS in menu_scene.gd), which against the
+# upper arm is x = 1.033 y + 163.
+SLEEVE = (566, 398, 700, 566)
+SLEEVE_HOLDS = (610, 450)
+SLEEVE_AXIS = (0.72, 0.7)
 # His face under the hand: inside this line is him, outside is the room.
 JAW = [(392, 284), (470, 284), (470, 300), (467, 312), (461, 324), (452, 336), (442, 346),
 		(428, 350), (392, 350)]
-HEAD = [(298, 300), (298, 224), (316, 190), (350, 166), (400, 156), (450, 160), (482, 176),
-		(502, 206), (508, 240), (503, 270), (494, 290), (482, 306), (472, 326), (458, 342),
-		(444, 352), (425, 357), (395, 357), (372, 352), (356, 346), (338, 356), (310, 352),
-		(298, 340)]
-TORSO = [(350, 356), (344, 374), (320, 380), (290, 390), (255, 398), (225, 404), (200, 412),
-		(178, 428), (158, 448), (140, 470), (122, 496), (106, 522), (100, 560), (760, 560),
-		(745, 525), (730, 500), (700, 472), (668, 446), (640, 422), (610, 402), (586, 390),
-		(560, 392), (530, 392), (500, 378), (470, 360), (458, 344), (425, 358), (395, 358)]
+HEAD = [(296, 226), (300, 212), (310, 198), (326, 184), (344, 172), (360, 164), (380, 161), (399, 162),
+		(416, 167), (436, 168), (457, 175), (468, 190), (478, 208), (485, 228), (488, 250), (489, 275),
+		(487, 292), (482, 306), (472, 326), (458, 342),
+		(444, 352), (425, 357), (395, 357), (372, 352), (356, 346), (346, 353), (342, 358),
+		(336, 357), (334, 351), (327, 349), (325.5, 341), (326, 333), (318, 332.5), (310.5, 326),
+		(307.5, 312), (305, 299), (296, 297)]
+TORSO = [(349, 355), (343, 366), (334, 368.5), (320, 372), (295, 375.5), (270, 379), (235, 385.5),
+		(223, 388.5), (211, 391), (205, 400), (199, 412), (194.5, 428), (189.5, 444), (182, 452),
+		(174, 458), (171, 470), (164, 479), (153, 494), (146, 506), (139, 521), (128, 529), (123, 539),
+		(119, 546), (117, 560), (720, 560), (720, 522), (712, 507.5), (702, 499), (691, 492.5),
+		(682, 490), (676, 479), (668, 465), (658, 459), (656.5, 446), (648.5, 437), (644, 432), (640, 420.5),
+		(610, 400.5), (586, 390), (560, 392), (530, 392), (500, 378), (470, 360), (458, 344),
+		(425, 358), (395, 358)]
 
 EYE_L = (364, 258, 396, 274)
 EYE_R = (420, 246, 448, 260)
@@ -417,23 +437,111 @@ def mouth_frames(bare):
 	return [bare[y0:y1, x0:x1], blow]
 
 
-def cut_man(clean):
+def biggest(mask):
+	"""The largest connected piece of `mask`."""
+	pieces, count = ndimage.label(mask)
+	if count == 0:
+		return mask
+	return pieces == 1 + np.argmax(ndimage.sum(mask, pieces, range(1, count + 1)))
+
+
+def inside(shape, box):
+	x0, y0, x1, y1 = box
+	mask = np.zeros(shape[:2], bool)
+	mask[y0:y1, x0:x1] = True
+	return mask
+
+
+def cut_hand(clean):
+	"""The hand with the cigar. Over the chair its edge is the edge of the
+	lit skin, plus the one dark pixel that outlines it: a line drawn by eye
+	there takes carving and studs along."""
 	shape = clean.shape
 	hand = poly_mask(shape, HAND)
-	fore = poly_mask(shape, FOREARM)
-	cuff = poly_mask(shape, CUFF)
-	for x0, y0, x1, y1 in BUTTONS:
-		cuff[y0:y1, x0:x1] = True
-	# Every bright bit of the cuff and the watch.
-	cuff |= fore & (lum(clean) > 40.0)
-	fore |= ndimage.binary_dilation(cuff, iterations=2)
+	r, b = clean[..., 0], clean[..., 2]
+	skin = (lum(clean) > 30.0) & (b > 0.08 * r)
+	wide = ndimage.binary_dilation(hand, iterations=2)
+	edge = inside(shape, HAND_ON_CHAIR) & wide & ~ndimage.binary_erosion(hand, iterations=4)
+	return hand & ~edge | edge & ndimage.binary_dilation(biggest(skin & wide))
+
+
+def cut_forearm(clean):
+	"""The watch and the cuff in one piece, and the buttons of the sleeve,
+	each with the dark ring around it. Returns the two masks."""
+	shape = clean.shape
+	light = lum(clean)
+	band = poly_mask(shape, WRISTBAND)
+	cuff = biggest(ndimage.binary_closing((light > 24.0) & band, iterations=2) & band)
+	cuff = ndimage.binary_fill_holes(cuff)
+	# Its outline.
+	cuff |= ndimage.binary_dilation(cuff) & (light < 14.0) & band
+	yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+	shine = (light > 13.0) & inside(shape, BUTTONS)
+	pieces, count = ndimage.label(ndimage.binary_dilation(shine))
+	buttons = np.zeros(shape[:2], bool)
+	for i in range(1, count + 1):
+		face = (pieces == i) & shine
+		if face.sum() < 8:
+			continue
+		cy, cx = ndimage.center_of_mass(face)
+		# The ring around it: the dark that touches it. Below and to the
+		# left the ring runs into the black line along the edge of the
+		# sleeve, which is not the button's, so it is cut shorter there.
+		far = np.hypot(xx - cx, yy - cy)
+		cloth_side = (xx - cx) * 0.78 - (yy - cy) * 0.63 > -2.0
+		near, _ = ndimage.label(face | (light < 6.5) & ((far <= 7.0) | (far <= 9.5) & cloth_side))
+		buttons |= ndimage.binary_fill_holes(np.isin(near, np.unique(near[face])))
+	return cuff, buttons
+
+
+def cut_torso(bare):
+	"""His body. The upper arm is black against the lit wall and the blanket
+	on the arm of the chair, so there the cut is everything that is neither."""
+	shape = bare.shape
+	torso = poly_mask(shape, TORSO)
+	area = inside(shape, ARM_ON_WALL)
+	r, g = bare[..., 0], bare[..., 1]
+	lit = (lum(bare) > 11.5) | (r > 2.2 * g) & (r > 9.0)
+	# The wall and the blanket are the lit pieces that reach outside the line.
+	pieces, _ = ndimage.label(lit & area)
+	wide = ndimage.binary_dilation(torso, iterations=3)
+	room = np.isin(pieces, np.unique(pieces[area & ~wide])) & (pieces > 0)
+	return torso & ~area | area & wide & ~room
+
+
+def arm_light(bare, torso, buttons):
+	"""Which pixels of his body are the cloth of the forearm's sleeve (red)
+	and which are the lit folds of the upper arm behind it (green). Prints
+	where the cloth starts, where its buttons end and where it ends, along
+	the sleeve (SLEEVE_RUN in menu_scene.gd)."""
+	shape = bare.shape
+	light = lum(bare)
+	pieces, _ = ndimage.label((light > 6.5) & inside(shape, SLEEVE) & torso)
+	cloth = ndimage.binary_fill_holes(pieces == pieces[SLEEVE_HOLDS[1], SLEEVE_HOLDS[0]])
+	yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+	behind = torso & inside(shape, ARM_ON_WALL) & (light > 3.5) & (xx > 1.033 * yy + 167.0)
+	behind &= ~ndimage.binary_dilation(cloth, iterations=2)
+	along = (xx * SLEEVE_AXIS[0] + yy * SLEEVE_AXIS[1]) / np.hypot(*SLEEVE_AXIS)
+	print("sleeve run", round(float(along[cloth].min()), 1), round(float(along[buttons].max()) + 3.0, 1),
+			round(float(along[cloth].max()), 1))
+	return np.dstack([cloth, behind, np.zeros(shape[:2], bool)]) * 255.0
+
+
+def cut_man(clean):
+	shape = clean.shape
+	hand = cut_hand(clean)
+	cuff, buttons = cut_forearm(clean)
+	fore = cuff | buttons
 	jaw = poly_mask(shape, JAW)
 	# The edge of the hand is a pixel or two of it blended into what is
 	# behind. That rim leaves the plate too, but not with the hand (it would
 	# drag a line of his face along): it is a sprite of its own, shown only
-	# while the hand is where the painting has it.
-	rim = ndimage.binary_dilation(hand, iterations=2) & ~hand & ~fore
-	gone = hand | fore & ndimage.binary_dilation(cuff, iterations=2) | rim
+	# while the hand is where the painting has it. The cuff and the buttons
+	# have the same blended edge, and it goes in the same sprite.
+	bald = ndimage.binary_dilation(buttons, iterations=3)
+	seam = (ndimage.binary_dilation(fore, iterations=2) | bald) & ~fore & ~hand
+	rim = ndimage.binary_dilation(hand, iterations=2) & ~hand & ~fore | seam
+	gone = hand | cuff | rim
 	bare = clean.copy()
 	# The room behind the hand: whatever is nearest, never his face.
 	room = nearest_fill(bare, gone | jaw | (lum(bare) > 40.0))
@@ -445,11 +553,24 @@ def cut_man(clean):
 	dark = np.array([7.0, 4.0, 2.0]) * (0.6 + cv2.GaussianBlur(blocky_noise(shape[:2], 4, rng), (0, 0), 1.5))[..., None]
 	fade = np.clip((yy - 298) / 20.0, 0.0, 1.0)[..., None]
 	room = np.where(((yy < 348) & (xx < 512))[..., None], wall * (1.0 - fade) + dark * fade, room)
-	# Behind the cuff there is only the dark of his jacket.
-	room = np.where(((yy >= 392) & (xx >= 496))[..., None], dark, room)
+	# Behind the cuff there is only the black of his jacket.
+	room = np.where(((yy >= 392) & (xx >= 496))[..., None], dark * 0.2, room)
 	bare[gone & ~jaw] = room[gone & ~jaw]
 	paint_face(bare, gone & jaw)
-	return bare, hand, fore, rim
+	# Around where the cuff was, the black gives way to what is beside it.
+	mend = seam & ~bald
+	grown = cv2.inpaint(np.clip(np.round(bare), 0, 255).astype(np.uint8), mend.astype(np.uint8) * 255, 3,
+			cv2.INPAINT_TELEA)
+	bare[mend] = grown[mend]
+	# Where a button was there is the cloth of the sleeve: the plain cloth
+	# nearest to it (not grown in from the edge, which is the dark of the
+	# ring fading out and would leave a smudge). The black beside a button
+	# stays black.
+	light = lum(clean)
+	cloth = (light > 5.0) & (light < 11.5) & ~bald & inside(shape, BUTTONS)
+	bald &= buttons | (light >= 4.5)
+	bare[bald] = nearest_fill(clean, ~cloth)[bald]
+	return bare, hand, fore, rim, buttons
 
 
 def sprite(name, a, mask, pad=0):
@@ -548,15 +669,27 @@ def main():
 	save("sky.png", still)
 	save("clouds.png", np.repeat(clouds[..., None], 3, axis=2) * 255)
 	save("light.png", light_mask(a))
-	bare, hand, fore, rim = cut_man(clean)
+	bare, hand, fore, rim, buttons = cut_man(clean)
 	save("plate.png", bare, alpha=(~sky).astype(float))
+	head, torso = poly_mask(a.shape, HEAD), cut_torso(bare)
+	if DEBUG:
+		# Every cut drawn over the painting, enlarged, to check the lines.
+		k, (x0, y0, x1, y1) = 4, (100, 150, 780, 570)
+		seen = np.repeat(np.repeat(255.0 * (clean[y0:y1, x0:x1] / 255.0) ** 0.42, k, 0), k, 1)
+		for mask, colour in ((torso, (255, 60, 60)), (head, (255, 255, 0)), (hand, (0, 255, 0)), (fore, (0, 200, 255))):
+			big = np.repeat(np.repeat(mask[y0:y1, x0:x1], k, 0), k, 1)
+			seen[big & ~ndimage.binary_erosion(big)] = colour
+		debug("cuts.png", seen)
 	boxes = {
 		"hand": sprite("hand.png", clean, hand),
 		"rim": sprite("hand_rim.png", clean, rim),
 		"forearm": sprite("forearm.png", clean, fore),
-		"head": sprite("head.png", bare, poly_mask(a.shape, HEAD)),
-		"torso": sprite("torso.png", bare, poly_mask(a.shape, TORSO), pad=4),
+		"head": sprite("head.png", bare, head),
+		"torso": sprite("torso.png", bare, torso, pad=4),
 	}
+	# The same piece of the painting as the torso, pixel for pixel.
+	x0, y0, x1, y1 = boxes["torso"]
+	save("torso_folds.png", arm_light(bare, torso, buttons)[y0:y1, x0:x1])
 	left, right = eye_frames(bare)
 	strip("eye_left.png", left)
 	strip("eye_right.png", right)

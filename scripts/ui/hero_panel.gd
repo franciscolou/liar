@@ -6,6 +6,8 @@ extends Control
 
 signal character_clicked(def: CharacterDef, view: CardView)
 signal item_clicked(instance: ItemInstance, view: ItemView)
+## A right click or a double click on an item: use it, no menu.
+signal item_picked(instance: ItemInstance)
 signal end_turn_pressed
 signal extra_pressed(option: Dictionary)
 
@@ -379,6 +381,15 @@ func use_option(instance: ItemInstance) -> Variant:
 	return null
 
 
+func discard_option(instance: ItemInstance) -> Variant:
+	if _options == null:
+		return null
+	for option: Dictionary in _options.discard:
+		if option.item == instance:
+			return option
+	return null
+
+
 func _sync_hand() -> void:
 	while _hand_cards.size() > player.cards.size():
 		_hand_cards.pop_back().queue_free()
@@ -428,14 +439,16 @@ func _sync_inventory() -> void:
 		var option: Variant = use_option(instance)
 		var usable: bool = option != null and option.enabled
 		view.set_enabled(usable or instance.def.kind != ItemDef.Kind.ACTIVE)
-		view.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if usable else Control.CURSOR_ARROW
+		# On the player's turn every item opens its menu: any of them can be discarded.
+		view.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if option != null else Control.CURSOR_ARROW
 		if instance.hidden:
 			view.note = "Hidden from the other players."
 		elif option != null and not option.enabled and instance.def.kind == ItemDef.Kind.ACTIVE:
 			view.note = option.reason
 		elif usable:
-			view.note = "Click to use."
+			view.note = "Double click or right click to use."
 		view.clicked.connect(func(): item_clicked.emit(instance, view))
+		view.picked.connect(func(): item_picked.emit(instance))
 		frame.add_child(view)
 
 

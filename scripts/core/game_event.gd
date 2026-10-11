@@ -21,6 +21,8 @@ extends RefCounted
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
 ##   shop_restocked {slot} / shop_rerolled {player}
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item, index}
+##   item_discarded {player, item, index}       thrown away by its holder, for nothing
+##     (see GameEngine.discard_item)
 ##   item_stolen {thief, victim, item, index}   a held item changes inventory as it is
 ##     (index: where it was in the victim's inventory)
 ##   item_missed {thief, victim}                the victim had no item to take

@@ -10,7 +10,7 @@ extends Controller
 ## never the objects themselves.
 
 ## The lists of a TURN decision's options an answer may come from.
-const TURN_LISTS := ["abilities", "buy", "use", "extras"]
+const TURN_LISTS := ["abilities", "buy", "use", "discard", "extras"]
 
 ## The screen of this machine, for the seat played on it. Null for a seat
 ## played somewhere else.

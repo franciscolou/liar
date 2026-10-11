@@ -435,6 +435,10 @@ const MESSAGES := {
 
 	# --- table ----------------------------------------------------------------
 	"Pause, settings and quit (Esc).": "Pausa, configurações e sair (Esc).",
+	"Use": "Usar",
+	"Discard": "Descartar",
+	"Throw it away for nothing. It doesn't take up your turn.": "Jogue fora, sem ganhar nada. Não ocupa o seu turno.",
+	"Double click or right click to use.": "Clique duplo ou botão direito para usar.",
 	"[b]Emotes[/b]\nShow the table how you feel (keys 1 to 6).": "[b]Reações[/b]\nMostre à mesa o que você está sentindo (teclas 1 a 6).",
 	"Laugh": "Risada",
 	"Sad": "Triste",

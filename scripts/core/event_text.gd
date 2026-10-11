@@ -23,6 +23,8 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s takes %s from %s.") % [d.thief.name, _item(d.item), d.victim.name]
 		&"item_missed":
 			return Loc.t("%s finds nothing to take from %s.") % [d.thief.name, d.victim.name]
+		&"item_discarded":
+			return Loc.t("%s throws %s away.") % [d.player.name, _item(d.item)]
 		&"item_broken":
 			return Loc.t("%s's %s breaks.") % [d.player.name, d.item.def.display_name]
 		&"claim_declared":

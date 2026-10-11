@@ -371,6 +371,7 @@ func _build() -> void:
 	_hero.position = Vector2(0, 478)
 	_hero.character_clicked.connect(_on_character_clicked)
 	_hero.item_clicked.connect(_on_item_clicked)
+	_hero.item_picked.connect(_use_now)
 	_hero.end_turn_pressed.connect(func(): _answer_turn({"kind": &"end"}))
 	_hero.extra_pressed.connect(_answer_turn)
 	add_child(_hero)
@@ -1005,7 +1006,31 @@ func _shop_point(slot: int, def: ItemDef) -> Vector2:
 	return _bank()
 
 
-func _on_item_clicked(instance: ItemInstance, _view: ItemView) -> void:
+## The menu of an item the viewer holds, on their turn: use it (if it is one
+## to be used) or throw it away.
+func _on_item_clicked(instance: ItemInstance, view: ItemView) -> void:
+	var discard: Variant = _hero.discard_option(instance)
+	if discard == null:
+		return
+	var def := instance.def
+	var rows := []
+	var use: Variant = _hero.use_option(instance)
+	if use != null and def.kind == ItemDef.Kind.ACTIVE:
+		rows.append({
+			"text": "Use", "tip": UI.item_tip(def), "enabled": use.enabled,
+			"accent": UI.BLUE, "action": _answer_turn.bind(use), "reason": use.reason,
+		})
+	rows.append({
+		"text": "Discard", "enabled": discard.enabled, "accent": UI.RED,
+		"action": _answer_turn.bind(discard),
+		"note": Loc.t("Throw it away for nothing. It doesn't take up your turn."),
+	})
+	_open_popup(view.get_global_rect(), def.display_name.to_upper(), def.description, UI.MUTED, rows, _use_now.bind(instance))
+
+
+## Uses an item of the viewer without asking again: a right click or a double
+## click on it.
+func _use_now(instance: ItemInstance) -> void:
 	var option: Variant = _hero.use_option(instance)
 	if option != null and option.enabled:
 		_answer_turn(option)
@@ -2144,6 +2169,8 @@ func present(e: GameEvent) -> void:
 				_log_line(line, e.type)
 		&"item_broken":
 			await _anim_item_broken(d)
+		&"item_discarded":
+			await _anim_item_discarded(d)
 		&"item_stolen":
 			await _anim_item_stolen(d)
 		&"item_missed":
@@ -3034,6 +3061,33 @@ func _anim_item_broken(d: Dictionary) -> void:
 	tween.tween_property(icon, "modulate:a", 0.0, 0.3)
 	tween.tween_callback(icon.queue_free)
 	await _stamp("%s!" % d.item.def.display_name.to_upper(), UI.BLUE)
+
+
+## An item thrown away by whoever held it: tossed out of its slot, away from
+## the middle of the table, and gone. A quick thing: it is no move of the turn.
+func _anim_item_discarded(d: Dictionary) -> void:
+	var instance: ItemInstance = d.item
+	var concealed: bool = instance.hidden and d.player != viewer
+	var at := _item_spot(d.player, d.get("index", 0))
+	var held: Variant = _node_of(d.player)
+	if held != null:
+		held.sync()
+	var icon := _sprite(UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path), at,
+			ItemView.BASE * (0.8 if d.player == viewer else 0.4))
+	icon.pivot_offset = icon.size / 2.0
+	_play_sfx("card_draw")
+	var side := 1.0 if at.x > size.x / 2.0 else -1.0
+	var toss := icon.create_tween().set_parallel()
+	toss.tween_property(icon, "position:x", icon.position.x + 26.0 * side, 0.45 / _speed)
+	toss.tween_property(icon, "rotation", 1.4 * side, 0.45 / _speed)
+	toss.tween_property(icon, "modulate:a", 0.0, 0.2 / _speed).set_delay(0.25 / _speed)
+	var fall := icon.create_tween()
+	fall.tween_property(icon, "position:y", icon.position.y - 16.0, 0.15 / _speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	fall.tween_property(icon, "position:y", icon.position.y + 34.0, 0.3 / _speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	fall.tween_callback(icon.queue_free)
+	await _wait(0.45)
 
 
 ## An item taken from one inventory into another, at the end of a rope. Only

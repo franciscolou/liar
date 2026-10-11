@@ -272,7 +272,7 @@ func think(seconds: float) -> void:
 
 
 func turn_options(player: PlayerState) -> Dictionary:
-	var out := {"abilities": [], "buy": [], "use": [], "extras": [], "reroll": null}
+	var out := {"abilities": [], "buy": [], "use": [], "discard": [], "extras": [], "reroll": null}
 	for def in characters:
 		for ability: Ability in def.abilities:
 			if ability.on_turn:
@@ -307,6 +307,8 @@ func turn_options(player: PlayerState) -> Dictionary:
 			if reason == "" and def.targeting != Playable.Targeting.NONE and _candidates_for(player, def).is_empty():
 				reason = Loc.t("No valid target")
 		out.use.append({"kind": &"use", "item": instance, "enabled": reason == "", "reason": reason})
+		# Anything held can be thrown away, whatever it is and however new.
+		out.discard.append({"kind": &"discard", "item": instance, "enabled": true, "reason": ""})
 	return out
 
 
@@ -408,6 +410,8 @@ func _play_turn(p: PlayerState) -> void:
 				await reroll_shop(p)
 			&"use":
 				await use_item(p, choice.item)
+			&"discard":
+				await discard_item(p, choice.item)
 			&"extra":
 				p.turn["busy"] = true
 				await choice.run.call(p, self)
@@ -606,6 +610,17 @@ func break_item(player: PlayerState, instance: ItemInstance) -> void:
 	player.items.erase(instance)
 	instance.hidden = false
 	await fire(&"item_broken", {"player": player, "item": instance, "index": index})
+
+
+## `player` throws a held item away, on their own turn: it costs nothing, pays
+## nothing and is no move of the turn (what takes a fresh turn still has one).
+## A hidden item goes as it was: nobody is shown what it was.
+func discard_item(player: PlayerState, instance: ItemInstance) -> void:
+	var index := player.items.find(instance)
+	if index == -1:
+		return
+	player.items.erase(instance)
+	await fire(&"item_discarded", {"player": player, "item": instance, "index": index})
 
 
 ## Moves a held item from one inventory to another. A hidden item stays

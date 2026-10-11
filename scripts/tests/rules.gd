@@ -53,6 +53,7 @@ static func run() -> int:
 		"an untraceable hand can't be swapped": _untraceable.bind(&"swap"),
 		"an untraceable hand keeps its copy through a last call": _untraceable.bind(&"recall"),
 		"nobody is untraceable from themselves": _untraceable_own,
+		"an item thrown away costs nothing and takes no turn": _discard,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -570,6 +571,28 @@ static func _untraceable_own() -> String:
 	if spy.cards[0] != &"bartender":
 		return "their own swap missed"
 	return "" if table.asked(1, Decision.Kind.REACT).is_empty() else "asked about their own swap"
+
+
+## Player 0 throws one of two items away: any of them may go, the purse stays
+## as it was and the turn is as fresh as before (Entropy is still on offer).
+static func _discard() -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	table.give(0, [&"shield", &"potion"])
+	var offered: Array = engine.turn_options(p).discard
+	if offered.size() != 2 or not offered.all(func(option: Dictionary) -> bool: return option.enabled):
+		return "%d items offered to be thrown away" % offered.size()
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	await engine.discard_item(p, offered[0].item)
+	if table.held(0) != [&"potion"]:
+		return "kept %s" % [table.held(0)]
+	if p.coins != 20:
+		return "purse went by %d" % (p.coins - 20)
+	if seen.of(&"item_discarded").size() != 1 or seen.of(&"item_discarded")[0].data.index != 0:
+		return "the table was not told"
+	return "" if engine.claim_block_reason(p, table.ability(&"entity.entropy")) == "" else "it took up the turn"
 
 
 static func _vanishes(d: Decision) -> Variant:

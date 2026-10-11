@@ -15,7 +15,10 @@ extends RefCounted
 ##   REACT  -> one of the option dictionaries, or null to pass
 ##   PICK   -> index into `options` ([{label, description, card, item}]), -1 to cancel
 ##             (context.weights: how much a bot likes each option, default 1;
-##             context.foreign: the cards offered are not from the player's hand)
+##             context.foreign: the cards offered are not from the player's hand;
+##             context.look: &"cosmos" hangs item options in the dark instead of
+##             in a window, each with `coins` going round it: what picking it
+##             gives the purse, or takes from it)
 
 enum Kind { TURN, TARGET, DOUBT, REACT, PICK }
 

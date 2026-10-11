@@ -10,6 +10,8 @@ const STAKE := 2
 const PRIZE := 6
 ## Play.params key on a doubted claim: [{player, lie}], one per bet placed.
 const BETS := "side_bets"
+## The tag of the notes that settle a bet, and the reason of its prize.
+const SIDE_BET := &"side_bet"
 
 
 func _init() -> void:
@@ -32,10 +34,10 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 		if engine.over or not gambler.alive:
 			continue
 		if bet.lie == lied:
-			await engine.note(gambler, "%s wins the side bet.")
-			await engine.gain_coins(gambler, PRIZE, &"side_bet")
+			await engine.note(gambler, "%s wins the side bet.", true, SIDE_BET)
+			await engine.gain_coins(gambler, PRIZE, SIDE_BET)
 		else:
-			await engine.note(gambler, "%s loses the side bet.", false)
+			await engine.note(gambler, "%s loses the side bet.", false, SIDE_BET)
 	bets.clear()
 
 

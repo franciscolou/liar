@@ -51,7 +51,7 @@ extends RefCounted
 ##   hand_redrawn {player, count}               the whole hand went back for new cards
 ##   coin_flipped {player, heads, won}          a coin tossed for everyone to see;
 ##     won: it fell on the side the player was hoping for
-##   note {player, text, good}                  news from content that no other event
+##   note {player, text, good, tag}             news from content that no other event
 ##     carries: `text` is an English key with one %s for the player's name
 ##   status_added / status_removed {player, status}
 ##   counter_changed {player, counter, value, delta}  a private counter is its owner's secret

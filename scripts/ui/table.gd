@@ -17,6 +17,7 @@ const CROWDED_SEATS := {
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
+const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
@@ -61,10 +62,6 @@ const HEART_ICON := "res://assets/ui/heart.png"
 const PICK_SCALE := 1.9
 ## A peeked card held up to whoever peeks: how big (for a human, for a bot)
 ## and how far from them (from the hand on screen, from a seat).
-const PEEK_SCALE := 2.0
-const PEEK_SCALE_BOT := 1.1
-const PEEK_REACH := 265.0
-const PEEK_REACH_SEAT := 150.0
 ## How a card looks tipped towards someone else: its length along the way to
 ## them (1: not at all) and how far it is sheared across it.
 const PEEK_SQUASH := 0.6
@@ -1067,6 +1064,15 @@ func _open_pick(d: Decision) -> void:
 		_seats[holder.id].set_item_pick(true)
 		_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click one of the highlighted items.")], [])
 		return
+	if d.context.get("look") == &"cosmos":
+		# Not a window: the options hang in the dark (see cosmos_pick.gd).
+		UI.clear(_modal)
+		var sky := CosmosPick.new()
+		sky.setup(d)
+		sky.picked.connect(_answer)
+		_modal.add_child(sky)
+		_play_sfx("fx_stardust")
+		return
 	var panel := _open_modal(d.prompt)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1564,6 +1570,7 @@ func present(e: GameEvent) -> void:
 			await _banner("WELCOME TO CARCAJ", "The last one standing takes the crown", UI.GOLD, 1.4)
 		&"turn_started":
 			_drop_transient_stage()
+			_play_fx.drop_bets()
 			for q: PlayerState in engine.players:
 				var bar := _stat_bar(q)
 				if bar != null:
@@ -1676,9 +1683,16 @@ func present(e: GameEvent) -> void:
 		&"note":
 			_float((Loc.t(d.text) % d.player.name).trim_suffix(".").to_upper(), _anchor(d.player) + Vector2(0, -24),
 					UI.GREEN.lightened(0.25) if d.good else UI.MUTED, 16)
-			await _wait(0.45)
+			if d.get("tag") == &"side_bet" and _play_fx.betting(d.player):
+				# The stake goes back to who laid it, or to the house.
+				await _play_fx.bet_settled(d.player, d.good)
+			else:
+				await _wait(0.45)
 		&"card_peeked":
-			await _anim_peek(d)
+			await _play_fx.card_snatched(d)
+			if d.viewer == viewer:
+				# It was a quick look: what they saw stays written down.
+				_log_line(Loc.t("You saw %s's %s.") % [d.owner.name, Content.character(d.card).display_name], &"coins")
 		&"status_added":
 			if d.status == &"hexed" and _play_fx.doll_thrown_at(d.player):
 				# The doll that was thrown becomes the one the player carries.
@@ -2778,105 +2792,6 @@ func _anim_cards_swapped(d: Dictionary) -> void:
 		if view != null and is_instance_valid(view):
 			UI.pop(view, 1.15, 0.2)
 	await _wait(0.25)
-
-
-## The card being peeked at leaves its hand and is held up next to whoever
-## peeks, then goes back the way it came. The player at this screen, when it
-## is them who peeks, sees it turn face up and keeps it there until they have
-## looked. Everyone else only sees its back, tipped towards the one it is
-## being shown to.
-func _anim_peek(d: Dictionary) -> void:
-	var peeker: PlayerState = d.viewer
-	var owner: PlayerState = d.owner
-	var asks := peeker == viewer
-	var view := _card_view(owner, d.index)
-	var from := _card_center(owner, d.index)
-	var small: float = (view.size.x if view != null else 44.0) / CardView.BASE.x
-	var big := PEEK_SCALE if asks else PEEK_SCALE_BOT
-	# Held out between the peeker and the middle of the table.
-	var near := _anchor(peeker)
-	var to := near + (ARC_CENTER - near).normalized() * (PEEK_REACH if peeker == viewer else PEEK_REACH_SEAT)
-
-	var layer := _modal if asks else _fx
-	var veil: ColorRect = null
-	if asks:
-		UI.clear(_modal)
-		veil = ColorRect.new()
-		veil.color = Color(0, 0, 0, 0.0)
-		veil.set_anchors_preset(Control.PRESET_FULL_RECT)
-		layer.add_child(veil)
-		veil.create_tween().tween_property(veil, "color:a", 0.5, 0.2 / _speed)
-	# The card hangs from two nodes: one carries it about and sizes it, the
-	# other tips it (see _lean_card).
-	var mover := Node2D.new()
-	mover.position = from
-	mover.scale = Vector2.ONE * small
-	layer.add_child(mover)
-	var tilt := Node2D.new()
-	mover.add_child(tilt)
-	var card := CardView.new()
-	card.interactive = false
-	card.position = -CardView.BASE / 2.0
-	if not asks:
-		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Out of the hand on screen it leaves as it was there: face up.
-	card.set_card(d.card if owner == viewer else &"", owner == viewer)
-	tilt.add_child(card)
-	_set_cards_shown([view], false)
-	_play_sfx("card_draw")
-	var out := mover.create_tween().set_parallel()
-	out.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-	out.tween_property(mover, "position", to, 0.5 / _speed)
-	out.tween_property(mover, "scale", Vector2.ONE * big, 0.5 / _speed)
-	await _wait(0.22)
-	if not is_instance_valid(card):
-		return
-	if asks:
-		card.set_card(d.card, true, true)
-	else:
-		# Its face goes to the peeker: turned away from everyone else, and
-		# tipped towards them.
-		card.set_card(&"", false, true)
-		mover.create_tween().tween_method(_lean_card.bind(tilt, (near - to).normalized()), 0.0, 1.0, 0.38 / _speed) \
-				.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	await _wait(0.33)
-
-	if asks:
-		var title := UI.label(Loc.t("One of %s's cards") % owner.name, 20, UI.CREAM, true)
-		layer.add_child(title)
-		title.reset_size()
-		title.position = to + Vector2(-title.size.x / 2.0, -CardView.BASE.y * big / 2.0 - title.size.y - 8.0)
-		var ok := UI.button("Got it", UI.GOLD, 16)
-		layer.add_child(ok)
-		ok.reset_size()
-		ok.position = to + Vector2(CardView.BASE.x * big / 2.0 + 16.0, -ok.size.y / 2.0)
-		await ok.pressed
-		if engine.aborted:
-			return
-		title.queue_free()
-		ok.queue_free()
-		veil.create_tween().tween_property(veil, "color:a", 0.0, 0.25 / _speed)
-	else:
-		await _wait(0.85)
-
-	if is_instance_valid(mover):
-		if asks:
-			card.set_card(&"", false, true)
-		else:
-			mover.create_tween().tween_method(_lean_card.bind(tilt, (near - to).normalized()), 1.0, 0.0, 0.22 / _speed)
-			if owner == viewer:
-				card.set_card(d.card, true, true)
-		var back := mover.create_tween().set_parallel()
-		back.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-		back.tween_property(mover, "position", from, 0.4 / _speed)
-		back.tween_property(mover, "scale", Vector2.ONE * small, 0.4 / _speed)
-	await _wait(0.4)
-	_play_sfx("card_draw")
-	_set_cards_shown([view], true)
-	if asks:
-		UI.clear(_modal)
-	elif is_instance_valid(mover):
-		mover.queue_free()
 
 
 ## Tips a card held up to someone, as seen from behind and above: squashed

@@ -115,6 +115,10 @@ const MESSAGES := {
 	"Spend your whole turn. When your next one starts, recover 1 Morale and gain 3 coins; Morale you can't recover becomes 2 more coins.": "Gaste o turno inteiro. Quando o seu próximo turno começar, recupere 1 de Moral e ganhe 3 moedas; a Moral que você não puder recuperar vira mais 2 moedas.",
 	"Turn 1 Morale into an item worth up to 6 coins: pay the difference for a dearer one, keep the change from a cheaper one. It doesn't end your turn, but the item can't be used during it. Never your last Morale.": "Transforme 1 de Moral em um item de até 6 moedas: pague a diferença por um mais caro, fique com o troco de um mais barato. Não encerra o seu turno, mas o item não pode ser usado nele. Nunca a sua última Moral.",
 	"What does your Morale become?": "No que a sua Moral se transforma?",
+	"Comes with %d coins of change.": "Vem com %d moedas de troco.",
+	"Asks %d coins more than the Morale is worth.": "Pede %d moedas além do que a Moral vale.",
+	"An even trade for the Morale.": "Uma troca justa pela Moral.",
+	"You saw %s's %s.": "Você viu %s com a carta %s.",
 	"Not with your last Morale": "Não com a sua última Moral",
 
 	# --- abilities ------------------------------------------------------------

@@ -89,11 +89,15 @@ class Materialize extends Ability:
 		d.cancellable = true
 		d.context = {
 			"play": play,
+			# Not a menu: the table hangs the options in the dark, each with
+			# what it does to the purse going round it (`coins`).
+			"look": &"cosmos",
 			"weights": defs.map(func(def: ItemDef) -> float: return def.ai_buy_weight(play.actor, engine)),
 		}
 		d.options = defs.map(func(def: ItemDef) -> Dictionary: return {
 			"label": _label(def, _change(def) - engine.price(play.actor, _owed(def))),
 			"description": def.description, "item": def,
+			"coins": _change(def) - engine.price(play.actor, _owed(def)),
 		})
 		var index: int = await engine.ask(d)
 		if index < 0 or index >= defs.size():

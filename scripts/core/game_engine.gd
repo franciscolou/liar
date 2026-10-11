@@ -865,9 +865,10 @@ func flip_coin(player: PlayerState, lucky_heads := true) -> bool:
 
 
 ## Something content wants the table to hear about and that no other event
-## tells. `text` is an English key with one %s, for the player's name.
-func note(player: PlayerState, text: String, good := true) -> void:
-	await fire(&"note", {"player": player, "text": text, "good": good})
+## tells. `text` is an English key with one %s, for the player's name; `tag`
+## names what the news is about, for a table that shows it its own way.
+func note(player: PlayerState, text: String, good := true, tag := &"") -> void:
+	await fire(&"note", {"player": player, "text": text, "good": good, "tag": tag})
 
 
 func set_counter(player: PlayerState, counter_id: StringName, value: int) -> void:

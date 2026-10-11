@@ -1395,6 +1395,53 @@ def ui_unlock():
     return out
 
 
+def fx_creep():
+    """A sleeve sliding over the cloth, in three careful starts."""
+    out = silence(0.8)
+    for i, at in enumerate((0.0, 0.27, 0.52)):
+        mix(out, bandpass(noise(0.2, 0.08, 0.09, 431 + i), 900, 3200 + 300 * i), at, 0.5)
+    return out
+
+
+def fx_snatch():
+    """A card whipped off the table before anyone looks: one quick swish
+    and the flick of the card leaving the cloth."""
+    out = silence(0.3)
+    mix(out, bandpass(noise(0.11, 0.05, 0.04, 441), 1500, lambda t: 2500 + 60000 * t), 0.0, 0.9)
+    mix(out, card_flick(443, 1.25), 0.07, 0.9)
+    return out
+
+
+def fx_bills():
+    """Banknotes counted down onto the table, and a coin set on them."""
+    out = silence(0.95)
+    for i, at in enumerate((0.0, 0.13, 0.26)):
+        mix(out, bandpass(noise(0.1, 0.012, 0.045, 451 + i), 2200, 9000), at, 0.6)
+        mix(out, highpass(noise(0.02, 0.0005, 0.008, 455 + i), 3500), at + 0.07, 0.4)
+    mix(out, coin(((0.0, 1.0), (0.06, 0.4), (0.1, 0.2)), 0.9, 459), 0.52, 0.8)
+    mix(out, tone(170, 0.08, 0.0005, 0.03), 0.52, 0.3)
+    return out
+
+
+def fx_syringe():
+    """A syringe: the flick of a nail on the glass, a squirt, the jab and
+    the plunger pushed home, bubbling."""
+    rng = random.Random(461)
+    out = silence(1.5)
+    for at in (0.0, 0.11):
+        mix(out, bell(2900, 0.12, 0.03, ((1.0, 1.0), (2.7, 0.4))), at, 0.5)
+    mix(out, bandpass(noise(0.12, 0.01, 0.06, 463), 3500, 11000), 0.26, 0.35)
+    mix(out, lowpass(noise(0.05, 0.0005, 0.018, 465), 1500), 0.55, 1.0)
+    mix(out, tone(120, 0.14, 0.001, 0.05, glide=0.6), 0.55, 0.7)
+    mix(out, bandpass(noise(0.5, 0.2, 0.2, 467), 500, lambda t: 700 + 2600 * t), 0.66, 0.45)
+    mix(out, tone(300, 0.5, 0.1, 0.3, glide=2.1), 0.66, 0.25)
+    for i in range(9):
+        mix(out, tone(rng.uniform(500, 1100), 0.05, 0.004, 0.02, glide=1.5), 0.7 + 0.05 * i + rng.uniform(-0.01, 0.01), 0.3)
+    mix(out, bell(1320, 0.4, 0.14), 1.14, 0.35)
+    mix(out, bell(1980, 0.4, 0.14), 1.2, 0.25)
+    return out
+
+
 def card_flick(seed, pitch=1.0):
     """One card leaving the deck in a hurry."""
     out = silence(0.09)
@@ -1441,6 +1488,10 @@ def ui_gather():
 
 
 SOUNDS = {
+    "fx_creep": fx_creep,
+    "fx_snatch": fx_snatch,
+    "fx_bills": fx_bills,
+    "fx_syringe": fx_syringe,
     "ui_lock": ui_lock,
     "ui_unlock": ui_unlock,
     "ui_deal": ui_deal,
@@ -1538,6 +1589,7 @@ PEAKS = {
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
     "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
     "ui_gather": 0.5,
+    "fx_creep": 0.22, "fx_snatch": 0.5, "fx_bills": 0.5, "fx_syringe": 0.6,
     "fx_entropy": 0.6, "fx_chains": 0.7, "fx_supernova": 0.97, "fx_stardust": 0.45, "fx_singularity": 0.65,
     "fx_spaghettify": 0.8, "fx_materialize": 0.85,
 }

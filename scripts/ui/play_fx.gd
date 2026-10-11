@@ -117,6 +117,30 @@ const NOODLE := 1.5
 const MADE := Vector2(61, 64)
 ## A card thrown on the tray of a Last Call, and where one is held up to be
 ## seen before it goes in (from the middle of the tray).
+## The shadow of a Sneak Peek: how far short of the hand its hat stops, the
+## seconds it takes to creep there, to reach for the card, to hold it up
+## (for the table: the player who is the one looking says when they have
+## seen it), to put it back and to slide home.
+const LURK_SHY := 58.0
+const LURK_CREEP := 1.0
+const LURK_REACH := 0.16
+const LURK_LIFT := 0.2
+const LURK_GLANCE := 0.55
+const LURK_RETURN := 0.18
+const LURK_HOME := 0.4
+## How big the card is while it is looked at, by the viewer and by others,
+## and how far it is lifted then: clear of the hat's side for the viewer,
+## off its place for the others.
+const LURK_SHOWN := 1.7
+const LURK_SHOWN_AWAY := 1.25
+const LURK_LIFTED := 34.0
+const LURK_LIFTED_AWAY := 14.0
+## How far from the box of the Gambler a side bet is laid.
+const BET_REACH := 52.0
+## How far off the box the needle of an Antidote waits, and how deep it goes.
+const NEEDLE_OFF := 24.0
+const NEEDLE_IN := 12.0
+const SERUM := Color("6fe08a")
 const TOSSED := Vector2(44, 80)
 const TOSS_SHOWN := Vector2(0, -112)
 const TOSS_SHOWN_ZOOM := 2.2
@@ -170,6 +194,11 @@ var _hole_owner: PlayerState
 var _made: PrismFx
 var _made_at := Vector2.INF
 ## What makes a borrowed action look and sound wrong (see corrupt).
+## The shadow of a Sneak Peek, out and waiting for card_peeked.
+var _lurk: LurkFx
+var _lurk_owner: PlayerState
+## The side bets lying on the table: player id -> BillsFx.
+var _bets: Dictionary = {}
 var _glitch: GlitchFx
 ## The plays that stepped in while it was on (see step_in): they are nobody's
 ## copy, and it is held back for as long as any of them is on the table.
@@ -763,6 +792,8 @@ func put_away() -> void:
 	drop_doll()
 	drop_bomb()
 	drop_hole()
+	drop_lurk()
+	drop_bets()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -1056,16 +1087,189 @@ func drop_vault() -> void:
 	_vault_owner = null
 
 
-## A lens finds its subject; the shutter does the rest.
+## The Spy's shadow, hat and all, stretches out of his box across the table
+## towards the hand of whoever is being peeked at, slowly, and stops short
+## of it to look left and right. There it waits: which card it takes is only
+## known in card_peeked (card_snatched).
 func _fx_spy_sneak_peek(play: Play) -> void:
-	var there := _at(play.target)
-	ring(there, UI.BLUE, 120.0, 30.0, 0.3, 3.0)
-	line(there + Vector2(-46, 0), there + Vector2(46, 0), UI.BLUE, 3.0, 0.35)
-	line(there + Vector2(0, -46), there + Vector2(0, 46), UI.BLUE, 3.0, 0.35)
-	await _wait(0.3)
-	_snd("fx_shutter")
-	flash(Color(1.0, 1.0, 1.0, 0.3), 0.18)
-	await _wait(0.25)
+	drop_lurk()
+	if play.target == null:
+		return
+	var speed: float = table._speed
+	var lurk := _lurk_out(play.actor, _hand_middle(play.target))
+	_lurk = lurk
+	_lurk_owner = play.actor
+	_snd("fx_creep")
+	lurk.create_tween().tween_property(lurk, "length", lurk.span, LURK_CREEP / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await _wait(LURK_CREEP + 0.08)
+	if not is_instance_valid(lurk):
+		return
+	# Is anybody watching?
+	var look := lurk.create_tween()
+	look.tween_property(lurk, "peer", -1.0, 0.12 / speed)
+	look.tween_interval(0.12 / speed)
+	look.tween_property(lurk, "peer", 1.0, 0.16 / speed)
+	look.tween_interval(0.12 / speed)
+	look.tween_property(lurk, "peer", 0.0, 0.1 / speed)
+	await _wait(0.64)
+
+
+## A shadow for `who`, still under their box, to be sent out towards `at`.
+func _lurk_out(who: PlayerState, at: Vector2) -> LurkFx:
+	var lurk := LurkFx.new()
+	# From under the box itself: whatever of it the box covers is not drawn.
+	lurk.position = _at(who)
+	var box: Control = table._node_of(who)
+	if box != null:
+		lurk.behind = box.get_global_rect()
+	lurk.aim(at, LURK_SHY)
+	add_child(lurk)
+	return lurk
+
+
+## The middle of the cards `p` holds, as they lie on the table.
+func _hand_middle(p: PlayerState) -> Vector2:
+	if p.cards.is_empty():
+		return _at(p)
+	return (table._card_center(p, 0) + table._card_center(p, p.cards.size() - 1)) / 2.0
+
+
+## The peek itself (`d` is the data of card_peeked): an arm comes out of the
+## shadow, takes the card by its edge and lifts it off its place; it is
+## held up and put back, the arm going with it all the way, and the shadow
+## slides home. The player at this screen sees its face when the look is
+## theirs, for as long as they like (a button says they have seen it);
+## everybody else sees its back, tipped towards the shadow, for a moment.
+func card_snatched(d: Dictionary) -> void:
+	var peeker: PlayerState = d.viewer
+	var owner: PlayerState = d.owner
+	var speed: float = table._speed
+	var asks: bool = peeker == table.viewer
+	var mine: bool = owner == table.viewer
+	var view: CardView = table._card_view(owner, d.index)
+	var from: Vector2 = table._card_center(owner, d.index)
+	var small: float = (view.size.x if view != null else 44.0) / CardView.BASE.x
+	var lurk := _lurk
+	if lurk == null or not is_instance_valid(lurk) or _lurk_owner != peeker:
+		# Nobody saw it coming (a peek turned round by a Mirror).
+		drop_lurk()
+		lurk = _lurk_out(peeker, from)
+		lurk.create_tween().tween_property(lurk, "length", lurk.span, 0.35 / speed) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		await _wait(0.4)
+		if not is_instance_valid(lurk):
+			return
+	_lurk = null
+	_lurk_owner = null
+	# The arm goes for the near edge of the card: fast, but there to be seen.
+	var way := (from - lurk.head()).normalized()
+	lurk.reach_for(from - way * minf(CardView.BASE.y * small * 0.4, from.distance_to(lurk.head()) * 0.5))
+	_snd("fx_snatch")
+	lurk.create_tween().tween_property(lurk, "arm", 1.0, LURK_REACH / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await _wait(LURK_REACH + 0.06)
+	if not is_instance_valid(lurk):
+		return
+	# The card hangs from two nodes: one carries it and sizes it, the other
+	# tips it (see table._lean_card).
+	var mover := Node2D.new()
+	mover.position = from
+	mover.scale = Vector2.ONE * small
+	add_child(mover)
+	var tilt := Node2D.new()
+	mover.add_child(tilt)
+	var card := CardView.new()
+	card.interactive = false
+	card.tips = false
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.position = -CardView.BASE / 2.0
+	# Out of the hand on screen it leaves as it was there: face up.
+	card.set_card(d.card if mine else &"", mine)
+	tilt.add_child(card)
+	table._set_cards_shown([view], false)
+	_snd("card_draw")
+	# The arm goes where the card goes, from here until it is put down.
+	lurk.carried = mover
+	# Lifted off its place: a little towards the shadow for the table. For
+	# the player who is looking it is drawn over beside the hat, on the side
+	# of the middle of the table, where it can be read and hides neither
+	# the shadow nor the arm that holds it.
+	var big := LURK_SHOWN if asks else small * LURK_SHOWN_AWAY
+	var held := from - way * LURK_LIFTED_AWAY
+	if asks:
+		var aside := way.orthogonal()
+		if (lurk.head() + aside).distance_to(POT) > (lurk.head() - aside).distance_to(POT):
+			aside = -aside
+		var half := CardView.BASE * big / 2.0
+		var room := minf(half.x / maxf(absf(aside.x), 0.001), half.y / maxf(absf(aside.y), 0.001))
+		held = lurk.head() - way * 20.0 + aside * (room + LURK_LIFTED)
+		# With room under it for the button that says it has been seen.
+		held = held.clamp(half + Vector2(8, 8), Vector2(size.x - 8.0, 420.0) - half)
+	var lift := mover.create_tween().set_parallel()
+	lift.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	lift.tween_property(mover, "position", held, LURK_LIFT / speed)
+	lift.tween_property(mover, "scale", Vector2.ONE * big, LURK_LIFT / speed)
+	if asks:
+		card.set_card(d.card, true, true)
+	else:
+		# Its face goes to the shadow: turned away from everyone else.
+		card.set_card(&"", false, true)
+		mover.create_tween().tween_method(table._lean_card.bind(tilt, -way), 0.0, 1.0, LURK_LIFT / speed)
+	await _wait(LURK_LIFT)
+	if asks:
+		# It stays up until the player says they have seen it.
+		var ok := UI.button("Got it", UI.GOLD, 16)
+		table._modal.add_child(ok)
+		ok.reset_size()
+		# Always under the card.
+		ok.position = held + Vector2(-ok.size.x / 2.0, CardView.BASE.y * big / 2.0 + 10.0)
+		await ok.pressed
+		if table.engine.aborted:
+			return
+		ok.queue_free()
+	else:
+		await _wait(LURK_GLANCE)
+	if not is_instance_valid(mover):
+		return
+	# Back where it was, as if nothing had happened.
+	if asks:
+		card.set_card(&"", false, true)
+	else:
+		mover.create_tween().tween_method(table._lean_card.bind(tilt, -way), 1.0, 0.0, LURK_RETURN / speed)
+		if mine:
+			card.set_card(d.card, true, true)
+	var back := mover.create_tween().set_parallel()
+	back.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	back.tween_property(mover, "position", from, LURK_RETURN / speed)
+	back.tween_property(mover, "scale", Vector2.ONE * small, LURK_RETURN / speed)
+	await _wait(LURK_RETURN)
+	_snd("card_draw")
+	table._set_cards_shown([view], true)
+	if is_instance_valid(lurk):
+		lurk.carried = null
+	if is_instance_valid(mover):
+		mover.queue_free()
+	if not is_instance_valid(lurk):
+		return
+	_slink(lurk)
+	await _wait(LURK_HOME)
+
+
+## Sends home a shadow that took nothing.
+func drop_lurk() -> void:
+	if _lurk != null and is_instance_valid(_lurk):
+		_slink(_lurk)
+	_lurk = null
+	_lurk_owner = null
+
+
+## The shadow draws its arm in and slides back under the box it came from.
+func _slink(lurk: LurkFx) -> void:
+	var speed: float = table._speed
+	var leave := lurk.create_tween()
+	leave.tween_property(lurk, "arm", 0.0, 0.1 / speed)
+	leave.tween_property(lurk, "length", 0.0, (LURK_HOME - 0.1) / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	leave.tween_callback(lurk.queue_free)
 
 
 func _fx_spy_low_profile(play: Play) -> void:
@@ -1268,15 +1472,81 @@ func _fx_gambler_double_down(play: Play) -> void:
 	await _wait(0.3)
 
 
-## A stack of chips slid to the middle of the table.
+## The stake of a side bet: a few banknotes counted down beside the
+## Gambler's box, and a coin set on them to keep them from blowing away.
+## They lie there until the doubt is settled (bet_settled).
 func _fx_gambler_side_bet(play: Play) -> void:
-	var here := _at(play.actor)
-	_snd("fx_chips")
-	stream(here, POT, CHIP_RED, 5, 0.35, 0.2)
-	stream(here, POT, CHIP_GREEN, 4, 0.4, 0.25)
-	await _wait(0.45)
-	ring(POT, UI.GOLD, 10.0, 46.0, 0.3, 4.0)
-	await _wait(0.2)
+	var who := play.actor
+	var speed: float = table._speed
+	_take_bet(who)
+	var here := _at(who)
+	var bills := BillsFx.new()
+	bills.position = _beside(who, BET_REACH)
+	add_child(bills)
+	_bets[who.id] = bills
+	_snd("fx_bills")
+	for i in BillsFx.NOTES:
+		bills.deal(i, here - bills.position, 0.13 * i / speed, 0.17 / speed)
+	await _wait(0.13 * BillsFx.NOTES + 0.13)
+	if not is_instance_valid(bills):
+		return
+	bills.create_tween().tween_property(bills, "coin", 1.0, 0.13 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await _wait(0.13)
+	if not is_instance_valid(bills):
+		return
+	# The coin lands: the notes give under it.
+	bills.press = 1.0
+	bills.create_tween().tween_property(bills, "press", 0.0, 0.2 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.25)
+
+
+## True while `who` has a side bet lying on the table.
+func betting(who: PlayerState) -> bool:
+	var bills: Variant = _bets.get(who.id)
+	return bills != null and is_instance_valid(bills)
+
+
+## The doubt `who` bet on is settled: a bet that won is swept back into
+## their box, one that lost is raked in by the house.
+func bet_settled(who: PlayerState, won: bool) -> void:
+	if not betting(who):
+		_bets.erase(who.id)
+		return
+	var speed: float = table._speed
+	var bills: BillsFx = _bets[who.id]
+	_bets.erase(who.id)
+	var to: Vector2 = _at(who) if won else table._bank()
+	var time := 0.28 if won else 0.46
+	_snd("fx_cash" if won else "fx_chips")
+	var go := bills.create_tween()
+	if won:
+		# Picked up first: a little hop before it is pulled in.
+		go.tween_property(bills, "position", bills.position + (bills.position - to).normalized() * 8.0, 0.09 / speed)
+	go.tween_property(bills, "position", to, time / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN if won else Tween.EASE_IN_OUT)
+	go.parallel().tween_property(bills, "scale", Vector2.ONE * 0.55, time / speed)
+	go.parallel().tween_property(bills, "modulate:a", 0.0, 0.1 / speed).set_delay((time - 0.1) / speed)
+	go.tween_callback(bills.queue_free)
+	await _wait(time + (0.09 if won else 0.0))
+
+
+## Takes the bets nobody settled off the table.
+func drop_bets() -> void:
+	for id: int in _bets.keys():
+		_fade_bet(_bets[id])
+	_bets.clear()
+
+
+func _take_bet(who: PlayerState) -> void:
+	if _bets.has(who.id):
+		_fade_bet(_bets[who.id])
+		_bets.erase(who.id)
+
+
+func _fade_bet(bills: Variant) -> void:
+	if bills != null and is_instance_valid(bills):
+		var fade: Tween = bills.create_tween()
+		fade.tween_property(bills, "modulate:a", 0.0, 0.2 / table._speed)
+		fade.tween_callback(bills.queue_free)
 
 
 ## The shovel goes into the deck twice, and something comes up.
@@ -2160,14 +2430,73 @@ func _fx_doctor_patch_up(play: Play) -> void:
 	await _wait(0.4)
 
 
+## A syringe, given to the Doctor's own box from the side of the middle of
+## the table: a flick on the glass, a squirt to clear the needle, the jab,
+## and the plunger pushed home. The status goes when the play resolves.
 func _fx_doctor_antidote(play: Play) -> void:
-	var here := _at(play.actor)
-	_snd("fx_shimmer")
-	_cross(here, 22.0, UI.GREEN.lightened(0.2))
-	ring(here, UI.GREEN, 100.0, 16.0, 0.35, 5.0)
-	await _wait(0.3)
-	rise(here, PORCELAIN, 10, 44.0)
-	await _wait(0.3)
+	var who := play.actor
+	var speed: float = table._speed
+	var here := _at(who)
+	var edge: Vector2 = table._clear_of(table._node_of(who), here, POT, 0.0)
+	var way := (here - edge).normalized() if edge.distance_to(here) > 1.0 else (here - POT).normalized()
+	var syringe := SyringeFx.new()
+	syringe.rotation = way.angle()
+	# Its needle is NEEDLE_OFF short of the box.
+	var ready := edge - way * (SyringeFx.LENGTH + NEEDLE_OFF)
+	syringe.position = ready - way * 30.0
+	syringe.modulate.a = 0.0
+	add_child(syringe)
+	_snd("fx_syringe")
+	var enter := syringe.create_tween().set_parallel()
+	enter.tween_property(syringe, "modulate:a", 1.0, 0.1 / speed)
+	enter.tween_property(syringe, "position", ready, 0.2 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# Two flicks of a nail on the glass.
+	var flick := syringe.create_tween()
+	for i in 2:
+		flick.tween_property(syringe, "rotation", way.angle() + 0.09, 0.03 / speed)
+		flick.tween_property(syringe, "rotation", way.angle(), 0.08 / speed)
+	await _wait(0.26)
+	if not is_instance_valid(syringe):
+		return
+	# A squirt, to clear the needle.
+	var tip := syringe.tip()
+	for i in 5:
+		_bits.append({
+			"p": tip, "v": way.rotated(randf_range(-0.3, 0.3)) * randf_range(70.0, 150.0),
+			"c": SERUM, "s": 4.0, "life": 0.3, "t": 0.0, "g": 260.0,
+		})
+	_wake()
+	syringe.dose = 0.92
+	var jab := syringe.create_tween()
+	jab.tween_property(syringe, "position", ready - way * 12.0, 0.2 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	jab.tween_interval(0.03 / speed)
+	jab.tween_property(syringe, "position", ready + way * (NEEDLE_OFF + NEEDLE_IN), 0.06 / speed).set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
+	jab.parallel().tween_property(syringe, "sunk", NEEDLE_IN, 0.02 / speed).set_delay(0.04 / speed)
+	await _wait(0.29)
+	if not is_instance_valid(syringe):
+		return
+	table._shake_screen(3.0)
+	burst(edge, SERUM, 6, 110.0, 0.25, 200.0, 4.0)
+	ring(edge, SERUM, 4.0, 26.0, 0.2, 3.0)
+	await _wait(0.1)
+	if not is_instance_valid(syringe):
+		return
+	# The plunger goes home, and the dose spreads through the box.
+	syringe.create_tween().tween_property(syringe, "dose", 0.0, 0.42 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	for i in 3:
+		ring(here, SERUM, 20.0 + i * 8.0, 70.0 + i * 14.0, 0.32, 3.0)
+		rise(here, SERUM.lightened(0.2), 4, 50.0)
+		await _wait(0.15)
+	if not is_instance_valid(syringe):
+		return
+	_cross(here, 20.0, SERUM)
+	flash(Color(SERUM, 0.1), 0.2)
+	var away := syringe.create_tween()
+	away.tween_property(syringe, "sunk", 0.0, 0.03 / speed)
+	away.parallel().tween_property(syringe, "position", ready - way * 26.0, 0.18 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	away.parallel().tween_property(syringe, "modulate:a", 0.0, 0.1 / speed).set_delay(0.08 / speed)
+	away.tween_callback(syringe.queue_free)
+	await _wait(0.2)
 
 
 ## A match, a fuse, and a parcel left on somebody's chair.
@@ -5363,3 +5692,339 @@ class SingularityFx extends Control:
 						Rect2(-piece / 2.0 - 0.5, -across / 2.0, piece + 1.0, across),
 						Rect2(source.x * (1.0 - float(s + 1) / slices), 0, source.x / slices, source.y),
 						Color(tint, tint.a * (1.0 - 0.5 * trail)))
+
+
+## The shadow of a Sneak Peek: the Spy's own, hat and shoulders, cast long
+## across the table from under his box, along its own x. Its origin is
+## inside the box, and nothing of it is drawn over `behind`, the box: it
+## comes out from under whatever edge it crosses. It is flat and of one
+## darkness: every cell is drawn once. `length` is how far its hat has got;
+## `peer` turns the head to one side and the other; `arm` sends an arm of
+## shadow from the shoulder to the point given to `reach_for`, or to the
+## near edge of the card it has `carried`, wherever that goes. The one thing
+## in it that is not shadow is the ember of his cigarette.
+class LurkFx extends Control:
+	const PIXEL := 3.0
+	const INK := Color(0.02, 0.012, 0.03, 0.64)
+	const EMBER := Color("ff8a3a")
+	## Hat, head and shoulders, from the crown down.
+	const BUST: Array[String] = [
+		".......#######.......",
+		"......#########......",
+		"......#########......",
+		".....###########.....",
+		"..#################..",
+		".###################.",
+		"....#############....",
+		".....###########.....",
+		".....###########.....",
+		".....###########.....",
+		"......#########......",
+		".......#######.......",
+		"........#####........",
+		".......#######.......",
+		"....#############....",
+		"..#################..",
+		".###################.",
+		"#####################",
+	]
+	## The rows that turn with the head, and the row the arm leaves from.
+	const HEAD_ROWS := 12
+	const SHOULDER_ROW := 15
+	## Half the width of the shadow where it leaves the box, in cells.
+	const ROOT := 4.0
+
+	var length := 0.0:
+		set(value):
+			length = value
+			queue_redraw()
+	## The length that leaves the hat as far from what it is aimed at as asked.
+	var span := 0.0
+	var peer := 0.0:
+		set(value):
+			peer = value
+			queue_redraw()
+	var arm := 0.0:
+		set(value):
+			arm = value
+			queue_redraw()
+	## The box it comes from under, on the screen.
+	var behind := Rect2()
+	## The card its arm holds on to (the node that carries and sizes it).
+	var carried: Node2D
+	var _arm_to := Vector2.ZERO
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Lays the shadow towards `at`, to stop `shy` short of it.
+	func aim(at: Vector2, shy: float) -> void:
+		var way := at - position
+		rotation = way.angle()
+		span = maxf(way.length() - shy, BUST.size() * PIXEL + 12.0)
+
+	## Where the crown of the hat is on the table.
+	func head() -> Vector2:
+		return position + Vector2.from_angle(rotation) * length
+
+	## The point on the table its arm goes to as `arm` goes to 1.
+	func reach_for(at: Vector2) -> void:
+		_arm_to = (at - position).rotated(-rotation)
+
+	func _process(delta: float) -> void:
+		_time += delta
+		if carried != null and is_instance_valid(carried):
+			# Its hand stays on the edge of the card that is nearest the hat.
+			var way := (head() - carried.position).normalized()
+			var half: Vector2 = CardView.BASE * carried.scale.x / 2.0
+			var edge := minf(half.x / maxf(absf(way.x), 0.001), half.y / maxf(absf(way.y), 0.001))
+			reach_for(carried.position + way * edge * 0.8)
+		# The ember breathes.
+		queue_redraw()
+
+	## True if the cell at `cx`, `cy` is out from under the box.
+	func _out(cx: int, cy: int, along: Vector2, across: Vector2) -> bool:
+		return not behind.has_point(position + along * ((cx + 0.5) * PIXEL) + across * ((cy + 0.5) * PIXEL))
+
+	func _draw() -> void:
+		var rows := BUST.size()
+		var wide := BUST[0].length()
+		var top := roundi(length / PIXEL)
+		var neck := top - rows
+		var along := Vector2.from_angle(rotation)
+		var across := along.orthogonal() * -1.0
+		# Past this many cells from the origin nothing is under the box.
+		var clear := 0
+		if behind.has_area():
+			for corner: Vector2 in [behind.position, behind.end, Vector2(behind.position.x, behind.end.y), Vector2(behind.end.x, behind.position.y)]:
+				clear = maxi(clear, ceili(corner.distance_to(position) / PIXEL) + 1)
+		# The body: one strip for each step from the box to the shoulders,
+		# wider the further the shadow is thrown.
+		for x in maxi(neck, 0):
+			var half := roundi(lerpf(ROOT, wide / 2.0, float(x) / neck))
+			if x >= clear:
+				draw_rect(Rect2(x * PIXEL, -half * PIXEL, PIXEL, half * 2.0 * PIXEL), INK)
+				continue
+			# Near the box: cell by cell, in runs, leaving out what it covers.
+			var since := -half
+			for y in range(-half, half + 1):
+				if y == half or not _out(x, y, along, across):
+					if y > since:
+						draw_rect(Rect2(x * PIXEL, since * PIXEL, PIXEL, (y - since) * PIXEL), INK)
+					since = y + 1
+		# Bust and arm share cells: gathered first, so that none is drawn twice.
+		var cells := {}
+		var turned := roundi(peer * 2.0)
+		for row in rows:
+			var cx := top - row - 1
+			var shift := turned if row < HEAD_ROWS else 0
+			for column in wide:
+				if BUST[row][column] == "#":
+					cells[Vector2i(cx, column - wide / 2 + shift)] = true
+		if arm > 0.0:
+			var side := 1.0 if _arm_to.y >= 0.0 else -1.0
+			var shoulder := Vector2(top - SHOULDER_ROW - 1, side * (wide / 2.0 - 3.0))
+			var hand := shoulder.lerp(_arm_to / PIXEL, arm)
+			var steps := int(shoulder.distance_to(hand)) + 1
+			for i in steps + 1:
+				var at := shoulder.lerp(hand, float(i) / steps)
+				# Thicker at the end: the hand.
+				var thick := 2 if i < steps - 2 else 3
+				for dy in range(-thick + 1, thick):
+					for dx in range(-thick + 1, thick):
+						if absi(dx) + absi(dy) < thick + 1:
+							cells[Vector2i(roundi(at.x) + dx, roundi(at.y) + dy)] = true
+		for cell: Vector2i in cells:
+			if cell.x >= clear or _out(cell.x, cell.y, along, across):
+				draw_rect(Rect2(cell.x * PIXEL, cell.y * PIXEL, PIXEL, PIXEL), INK)
+		if neck > 0 and (top - 10 >= clear or _out(top - 10, wide / 2 - 3 + turned, along, across)):
+			# The cigarette, at the side of the face.
+			var glow := 0.65 + 0.35 * sin(_time * 5.0)
+			var lit := Vector2((top - 10) * PIXEL, (wide / 2 - 3 + turned) * PIXEL)
+			draw_rect(Rect2(lit - Vector2(PIXEL, PIXEL), Vector2(PIXEL * 3.0, PIXEL * 3.0)), Color(EMBER, 0.25 * glow))
+			draw_rect(Rect2(lit, Vector2(PIXEL, PIXEL)), Color(EMBER.lightened(0.3 * glow), 1.0))
+
+
+## The stake of a side bet: a few banknotes counted down one on another,
+## each a little askew, and a coin set on them as a paperweight, in blocks.
+## Its origin is the middle of the pile. `coin` drops the coin (0: not there
+## yet, 1: down) and `press` is the give of the notes under it. They lie
+## still: the user did not want their ends moving in the wind.
+class BillsFx extends Control:
+	const PIXEL := 2.0
+	const NOTES := 3
+	## A note, in cells.
+	const NOTE := Vector2i(22, 10)
+	## Where each note lies, and how it is turned.
+	const PLACES: Array[Vector2] = [Vector2(-6, 5), Vector2(6, -4), Vector2(0, 0)]
+	const TURNS: Array[float] = [-0.32, 0.24, -0.05]
+	## Where the coin sits: on the left of the pile, its right end free.
+	const COIN_AT := Vector2(-10, 0)
+	const COIN_SIZE := 18.0
+	const COIN_FALL := 54.0
+	const DARK := Color("1c4a2a")
+	const GREEN := Color("4f9460")
+	const LIGHT := Color("8fc793")
+	const PALE := Color("cfe8c4")
+	const SEAL := Color("2c6b3c")
+
+	var coin := 0.0:
+		set(value):
+			coin = value
+			queue_redraw()
+	var press := 0.0:
+		set(value):
+			press = value
+			queue_redraw()
+	var _laid := PackedFloat32Array([0.0, 0.0, 0.0])
+	var _from := Vector2.ZERO
+	var _coin_art: Texture2D
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_coin_art = UI.tex(PlayFx.COIN_ART)
+
+	## Deals note `index` onto the pile from `from` (seen from the pile),
+	## after `delay` seconds, in `time`.
+	func deal(index: int, from: Vector2, delay: float, time: float) -> void:
+		_from = from
+		create_tween().tween_method(_lay.bind(index), 0.0, 1.0, time).set_delay(delay) \
+				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	func _lay(amount: float, index: int) -> void:
+		_laid[index] = amount
+		queue_redraw()
+
+	func _draw() -> void:
+		for i in NOTES:
+			var laid := _laid[i]
+			if laid <= 0.0:
+				continue
+			var at := _from.lerp(PLACES[i], laid)
+			draw_set_transform(at, TURNS[i] + (1.0 - laid) * (2.4 if i % 2 == 0 else -2.0))
+			_note(i, Color(1, 1, 1, minf(laid * 4.0, 1.0)))
+		draw_set_transform(Vector2.ZERO)
+		if coin <= 0.0:
+			return
+		var drop := (1.0 - coin) * COIN_FALL
+		var squash := 1.0 - 0.25 * press
+		var extent := Vector2(COIN_SIZE, COIN_SIZE * squash)
+		# Its shadow closes in under it as it comes down.
+		draw_rect(Rect2(COIN_AT - Vector2(7, 4) + Vector2(3, 5), Vector2(14, 8)), Color(0, 0, 0, 0.4 * coin))
+		draw_texture_rect(_coin_art, Rect2(COIN_AT - extent / 2.0 + Vector2(0, -drop + (COIN_SIZE - extent.y) / 2.0), extent), false)
+
+	## One note, its middle at the origin, column by column.
+	func _note(_index: int, tint: Color) -> void:
+		var w := NOTE.x
+		var h := NOTE.y
+		for x in w:
+			var left := (x - w / 2.0) * PIXEL
+			var top := -h / 2.0 * PIXEL
+			draw_rect(Rect2(left, top, PIXEL, h * PIXEL), DARK * tint)
+			if x == 0 or x == w - 1:
+				continue
+			draw_rect(Rect2(left, top + PIXEL, PIXEL, (h - 2) * PIXEL), GREEN * tint)
+			# A fine frame inside the edge, and the seal in the middle.
+			if x == 2 or x == w - 3:
+				draw_rect(Rect2(left, top + PIXEL * 2.0, PIXEL, (h - 4) * PIXEL), LIGHT * tint)
+			elif x > 2 and x < w - 3:
+				draw_rect(Rect2(left, top + PIXEL * 2.0, PIXEL, PIXEL), LIGHT * tint)
+				draw_rect(Rect2(left, top + (h - 3) * PIXEL, PIXEL, PIXEL), LIGHT * tint)
+			var off := absf(x - (w - 1) / 2.0)
+			if off < 3.0:
+				var tall := 6 if off < 2.0 else 4
+				draw_rect(Rect2(left, top + (h - tall) / 2.0 * PIXEL, PIXEL, tall * PIXEL), SEAL * tint)
+				if off < 1.0:
+					draw_rect(Rect2(left, top + (h / 2.0 - 1.0) * PIXEL, PIXEL, PIXEL * 2.0), PALE * tint)
+			elif x == 4 or x == w - 5:
+				# What it is worth, in each corner.
+				draw_rect(Rect2(left, top + PIXEL * 3.0, PIXEL, PIXEL), PALE * tint)
+				draw_rect(Rect2(left, top + (h - 4) * PIXEL, PIXEL, PIXEL), PALE * tint)
+
+
+## The syringe of an Antidote, in blocks, lying along its own x with the
+## needle ahead: the thumb rest and the rod of the plunger, the finger
+## flange, the glass barrel with what is left of the `dose` (1: full), the
+## hub and the needle. Its origin is the back of the thumb rest when the
+## plunger is all the way out. `sunk` is how much of the needle, from its
+## point, is inside something and not drawn.
+class SyringeFx extends Control:
+	const PIXEL := 2.0
+	const LENGTH := 78.0
+	## Where the barrel starts and ends, and how far the plunger travels.
+	const BARREL := 20.0
+	const BARREL_END := 56.0
+	const HUB_END := 60.0
+	const TRAVEL := 28.0
+	const EDGE := Color("12161c")
+	const GLASS := Color(0.78, 0.9, 0.96, 0.4)
+	const GLASS_LIGHT := Color(0.95, 0.99, 1.0, 0.85)
+	const STEEL := Color("c9d2e0")
+	const STEEL_DARK := Color("7a8494")
+	const RUBBER := Color("2a2f3a")
+
+	var dose := 1.0:
+		set(value):
+			dose = value
+			queue_redraw()
+	var sunk := 0.0:
+		set(value):
+			sunk = value
+			queue_redraw()
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func tip() -> Vector2:
+		return position + Vector2.from_angle(rotation) * LENGTH
+
+	func _process(delta: float) -> void:
+		_time += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		var pushed := roundf((1.0 - dose) * TRAVEL / PIXEL) * PIXEL
+		# The stopper sits just inside the barrel when the dose is whole.
+		var stopper := BARREL + 2.0 + pushed
+		# The plunger: thumb rest, rod.
+		_b(pushed - PIXEL, -9.0, 6.0, 18.0, EDGE)
+		_b(pushed, -7.0, PIXEL, 14.0, STEEL)
+		_b(pushed, -7.0, PIXEL, 4.0, Color.WHITE)
+		_b(pushed + 4.0, -3.0, stopper - pushed - 4.0, 6.0, EDGE)
+		_b(pushed + 4.0, -1.0, stopper - pushed - 4.0, PIXEL, STEEL_DARK)
+		# The barrel: glass, with what is in it.
+		_b(BARREL - PIXEL, -8.0, BARREL_END - BARREL + 4.0, 16.0, EDGE)
+		_b(BARREL, -6.0, BARREL_END - BARREL, 12.0, GLASS)
+		var serum := BARREL_END - stopper - 4.0
+		if serum > 0.0:
+			_b(stopper + 4.0, -6.0, serum, 12.0, PlayFx.SERUM)
+			_b(stopper + 4.0, 2.0, serum, 4.0, PlayFx.SERUM.darkened(0.25))
+			# Bubbles going up it.
+			for bubble in 3:
+				var along := fposmod(_time * (14.0 + bubble * 5.0) + bubble * 11.0, maxf(serum - 2.0, 1.0))
+				_b(BARREL_END - PIXEL - roundf(along / PIXEL) * PIXEL, -4.0 + bubble * 4.0, PIXEL, PIXEL, Color(1, 1, 1, 0.7))
+		_b(stopper, -6.0, 4.0, 12.0, RUBBER)
+		_b(BARREL, -6.0, BARREL_END - BARREL, PIXEL, GLASS_LIGHT)
+		# The marks of the measure.
+		var mark := BARREL + 8.0
+		while mark < BARREL_END - 2.0:
+			_b(mark, 0.0, PIXEL, 6.0, Color(EDGE, 0.55))
+			mark += 6.0
+		# The flange the fingers pull against.
+		_b(BARREL - 4.0, -13.0, 6.0, 26.0, EDGE)
+		_b(BARREL - PIXEL, -11.0, PIXEL, 22.0, STEEL)
+		_b(BARREL - PIXEL, -11.0, PIXEL, 6.0, Color.WHITE)
+		# The hub and the needle.
+		_b(BARREL_END + PIXEL, -5.0, HUB_END - BARREL_END, 10.0, EDGE)
+		_b(BARREL_END + PIXEL, -3.0, HUB_END - BARREL_END - PIXEL, 6.0, STEEL_DARK)
+		var needle := LENGTH - HUB_END - PIXEL - sunk
+		if needle > 0.0:
+			_b(HUB_END + PIXEL, -1.0, needle, PIXEL, STEEL)
+			if sunk <= 0.0:
+				_b(LENGTH - PIXEL, -1.0, PIXEL, PIXEL, Color.WHITE)
+
+	func _b(x: float, y: float, w: float, h: float, ink: Color) -> void:
+		draw_rect(Rect2(x, y, w, h), ink)

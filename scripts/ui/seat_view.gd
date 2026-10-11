@@ -23,7 +23,7 @@ const BRACKET := [
 	"##...",
 	"#....",
 ]
-## The eye shown to somebody looking on, over a hand they may see.
+## An eye in blocks: what the table draws in its button that shows every hand.
 const EYE := [
 	"...#####...",
 	".##.....##.",
@@ -36,14 +36,15 @@ const EYE := [
 ## How dull the cards of an eliminated player are, and how they lie.
 const LEFT_TINT := Color(0.5, 0.46, 0.44)
 const LEFT_TURN := 0.06
+## How long the case takes to be dragged off the table, and how far it goes.
+const LEAVE := 0.5
+const LEAVE_REACH := 48.0
 
 var player: PlayerState
 var engine: GameEngine
 
 var _bg: Control
 var _edge := UI.BORDER
-var _eye: Control
-var _hovered := false
 var _gone := false
 ## How many items the player may carry: a socket is drawn for each.
 var _sockets := 0
@@ -128,17 +129,12 @@ func _init() -> void:
 	_status_fx.doll_drain = SIZE / 2.0
 	_status_fx.bomb_foot = Vector2(-9, SIZE.y + 1)
 	_status_fx.chain_box = Rect2(Vector2.ZERO, SIZE)
+	# The seal of an oath is set on the end of the name plate, over its top edge.
+	_status_fx.seal_at = Vector2(SIZE.x - 22, 7)
 	add_child(_status_fx)
 	# The chips are for reading: nothing a status draws goes over them.
 	move_child(_chips, -1)
 
-	_eye = Control.new()
-	_eye.position = Vector2(SIZE.x - 32, 5)
-	_eye.size = Vector2(EYE[0].length(), EYE.size()) * PX
-	_eye.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_eye.visible = false
-	_eye.draw.connect(_draw_eye)
-	add_child(_eye)
 	TipLayer.attach(self, _tip)
 
 	mouse_entered.connect(_hover.bind(true))
@@ -166,7 +162,7 @@ func sync() -> void:
 	_chips.sync(player, engine)
 	_status_fx.sync(player, engine)
 	if not player.alive and not _gone:
-		_leave()
+		leave()
 	# Out of the match, what is shown is what they left on the table.
 	var hand: Array = player.cards if player.alive else player.left
 	while _cards.size() > hand.size():
@@ -181,14 +177,8 @@ func sync() -> void:
 		if player.alive:
 			card.position = Vector2(i * 41, 0)
 			card.set_card(hand[i] if _revealed else &"", _revealed)
-		else:
-			# Dropped where they sat: side by side in the middle, none straight.
-			card.position = Vector2((SIZE.x - 16 - hand.size() * 41 + 2) / 2.0 + i * 41, 0)
-			card.pivot_offset = card.size / 2.0
-			card.rotation = LEFT_TURN * (1.0 if i % 2 == 0 else -1.4)
-			card.modulate = LEFT_TINT
-			card.interactive = false
-			card.set_card(hand[i], true)
+		elif not card.has_meta(&"laid"):
+			_lay(i, true, 0.0)
 	var signature := ""
 	for instance: ItemInstance in player.items:
 		signature += "%s%s," % [instance.def.id, "?" if instance.hidden else ""]
@@ -204,24 +194,82 @@ func sync() -> void:
 		_mark_items()
 
 
-## The player is out: the case and everything in it go, and the name moves
-## under the cards left behind.
-func _leave() -> void:
+## The player is out. The case and everything in it are dragged off the
+## table, away from the middle of it; what stays is the cards, which slide
+## to the middle of where it stood as it goes, and the name under them.
+## With `face_up` they turn over on the way; without, each one waits for
+## `turn_up` (the table shows them one by one first). `pace` is the speed
+## the table is playing at.
+func leave(face_up := true, pace := 1.0) -> void:
+	if _gone:
+		return
 	_gone = true
 	_targetable = false
 	_peekable = false
 	_revealed = false
 	_active = false
+	scale = Vector2.ONE
 	_set_cursor()
 	_restyle()
-	for part: Control in [_bg, _stats, _items, _marks, _chips]:
-		var fade := part.create_tween()
-		fade.tween_property(part, "modulate:a", 0.0, 0.35)
-		fade.tween_callback(part.hide)
-	_eye.hide()
+	var parts: Array[Control] = [_bg, _stats, _items, _marks, _chips]
+	if not is_inside_tree():
+		for part in parts:
+			part.hide()
+		_name_under()
+		return
+	var time := LEAVE / maxf(pace, 0.01)
+	var out := global_position + SIZE / 2.0 - get_viewport_rect().size / 2.0
+	out = (out.normalized() if out.length() > 1.0 else Vector2.UP) * LEAVE_REACH
+	for part in parts:
+		var go := part.create_tween().set_parallel()
+		go.tween_property(part, "position", part.position + out, time).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		go.tween_property(part, "modulate:a", 0.0, time).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		go.chain().tween_callback(part.hide)
+	var rename := _name.create_tween()
+	rename.tween_property(_name, "modulate:a", 0.0, time * 0.4)
+	rename.tween_callback(_name_under)
+	rename.tween_property(_name, "modulate:a", 1.0, time * 0.6)
+	for i in _cards.size():
+		_lay(i, face_up, time)
+
+
+## The name of somebody who is out goes under the cards they left.
+func _name_under() -> void:
 	_name.position = Vector2(8, 48 + CardView.BASE.y * 0.7 + 2)
 	_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_name.add_theme_color_override("font_color", UI.MUTED)
+
+
+## Puts the card at `index` where it is left on the table: side by side with
+## the others in the middle of the seat, none of them straight, gone dull.
+## It gets there in `time` seconds, turning over as it goes if `face_up`.
+func _lay(index: int, face_up: bool, time: float) -> void:
+	var card: CardView = _cards[index]
+	var place := Vector2((SIZE.x - 16 - _cards.size() * 41 + 2) / 2.0 + index * 41, 0)
+	var turn := LEFT_TURN * (1.0 if index % 2 == 0 else -1.4)
+	card.set_meta(&"laid", true)
+	card.interactive = false
+	card.pivot_offset = card.size / 2.0
+	if face_up and index < player.left.size():
+		card.set_card(player.left[index], true, time > 0.0)
+	if time <= 0.0:
+		card.position = place
+		card.rotation = turn
+		card.modulate = LEFT_TINT
+		return
+	var lay := card.create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	lay.tween_property(card, "position", place, time)
+	lay.tween_property(card, "rotation", turn, time)
+	lay.tween_property(card, "modulate", LEFT_TINT, time)
+
+
+## Turns the card left at `index` face up where it lies: the table has shown
+## it to everybody and has just put it back down.
+func turn_up(index: int) -> void:
+	if index < 0 or index >= _cards.size() or index >= player.left.size():
+		return
+	_cards[index].set_card(player.left[index], true)
+	_cards[index].modulate = LEFT_TINT
 
 
 func set_active(value: bool) -> void:
@@ -293,15 +341,12 @@ func set_revealed(value: bool) -> void:
 	_revealed = value
 	for i in mini(_cards.size(), player.cards.size()):
 		_cards[i].set_card(player.cards[i] if value else &"", value, true)
-	_eye.queue_redraw()
 
 
 ## Lets a click on the box reach the table when nobody is being targeted.
 func set_peekable(value: bool) -> void:
 	_peekable = value and not _gone
 	_set_cursor()
-	_eye.visible = _peekable and _hovered
-	_eye.queue_redraw()
 
 
 func anchor() -> Vector2:
@@ -329,6 +374,29 @@ func doll_hangs() -> bool:
 
 func doll_landed() -> void:
 	_status_fx.doll_landed()
+
+
+## Whether status `id` came from a borrowed action (see StatusFx.set_borrowed).
+func status_borrowed(id: StringName, on: bool) -> void:
+	_status_fx.set_borrowed(id, on)
+
+
+func status_is_borrowed(id: StringName) -> bool:
+	return _status_fx.borrowed(id)
+
+
+## Where the seal of an oath is set on this box, on screen.
+func seal_spot() -> Vector2:
+	return _status_fx.seal_spot()
+
+
+## The gavel has just pressed the seal (see StatusFx.press_seal).
+func seal_pressed() -> void:
+	_status_fx.press_seal()
+
+
+func seal_jolt() -> void:
+	_status_fx.jolt_seal()
 
 
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).
@@ -444,20 +512,6 @@ func _draw_case() -> void:
 				_bg.draw_rect(Rect2(cell, Vector2(PX, PX)), ink)
 
 
-## An eye for a hand that may be looked at, struck through once it is.
-func _draw_eye() -> void:
-	var inks := {"#": UI.CREAM, "o": UI.GOLD, "P": UI.INK}
-	_eye.draw_rect(Rect2(-PX * 2.0, -PX * 2.0, _eye.size.x + PX * 4.0, _eye.size.y + PX * 4.0), Color(UI.INK, 0.85))
-	for y: int in EYE.size():
-		var row: String = EYE[y]
-		for x: int in row.length():
-			if inks.has(row[x]):
-				_eye.draw_rect(Rect2(Vector2(x, y) * PX, Vector2(PX, PX)), inks[row[x]])
-	if _revealed:
-		for i in EYE.size():
-			_eye.draw_rect(Rect2(Vector2(2 + i, EYE.size() - 1 - i) * PX, Vector2(PX, PX)), UI.RED)
-
-
 func _tip() -> String:
 	if not _peekable:
 		return ""
@@ -465,8 +519,6 @@ func _tip() -> String:
 
 
 func _hover(inside: bool) -> void:
-	_hovered = inside
-	_eye.visible = _peekable and inside
 	if _targetable:
 		create_tween().tween_property(self, "scale", Vector2.ONE * (1.07 if inside else 1.0), 0.08)
 

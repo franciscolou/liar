@@ -87,6 +87,8 @@ func _ready() -> void:
 	deed.clip_at = 36.0
 	deed.margin = 20.0
 	deed.stain = Vector3(292, 60, 26)
+	# What the pen left on it: all of it out by the edges, clear of the writing.
+	deed.inked = [Vector3(330, 164, 3), Vector3(22, 258, 4), Vector3(334, 232, 2), Vector3(96, 302, -84), Vector3(170, 14, -46)]
 	var hosting := _write_on(deed, "CREATE A ROOM")
 	hosting.add_child(_text("The match runs on this computer. Your friends join by your address: the same network, or a VPN such as Radmin VPN.\n\nEmpty seats can be filled with bots."))
 	_create = UI.button("CREATE ROOM", UI.BORDER, 22)
@@ -102,6 +104,7 @@ func _ready() -> void:
 	wire.tone = Desk.OLD_TELEGRAM
 	wire.aged = true
 	wire.bordered = true
+	wire.inked = [Vector3(328, 44, 4), Vector3(24, 284, 3), Vector3(22, 120, 2), Vector3(188, 296, -96), Vector3(240, 18, -52)]
 	var joining := _write_on(wire, "JOIN A ROOM")
 	joining.add_child(_text("Ask whoever created the room for the address shown in their lobby and type it here."))
 	_address = _field(Settings.last_address, "26.0.0.0", 64)

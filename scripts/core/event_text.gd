@@ -74,6 +74,8 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s and %s trade a card.") % [d.a.name, d.b.name]
 		&"card_peeked":
 			return Loc.t("%s peeks at one of %s's cards.") % [d.viewer.name, d.owner.name]
+		&"hand_missed":
+			return Loc.t("%s's cards are nowhere to be found.") % d.owner.name
 		&"status_added":
 			return Loc.t("%s: %s.") % [d.player.name, _status(d.status)]
 		&"status_removed":

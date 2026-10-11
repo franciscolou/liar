@@ -211,6 +211,10 @@ var stain := Vector3.ZERO
 var bordered := false
 ## SHEET: it comes off the desk a little under the mouse.
 var lifts := false
+## SHEET: ink that got on the paper, a Vector3 for each mark: where (x, y)
+## and how big the drop is. A negative size is a smear instead, wiped while
+## it was wet: faint, and that many pixels long.
+var inked: Array[Vector3] = []
 ## CASE: the foam ridges that part its compartments: how far down each is.
 var ridges: Array[float] = []:
 	set(value):
@@ -481,7 +485,9 @@ func _sheet(rect: Rect2) -> void:
 			_b(o.x, o.y + h - deep, w - ear, deep, brown)
 			_b(o.x, o.y + deep, deep, h - deep * 2.0, brown)
 			_b(o.x + w - deep, o.y + deep, deep, h - deep * 2.0 - ear, brown)
-	var seed_of := int(w * 7.0 + h * 13.0)
+	# From the size in whole pixels: moving a sheet by a fraction of one (see
+	# `lifts`) can leave its size a hair short, and every speck would move.
+	var seed_of := int(roundf(w) * 7.0 + roundf(h) * 13.0)
 	var away := WORN + 2.0 if aged else 4.0
 	for speck in int(w * h / (350.0 if aged else 900.0)):
 		var speck_x := o.x + away + floorf(_roll(seed_of + speck * 3) * (w - away * 2.0 - 2.0) / PX) * PX
@@ -491,6 +497,8 @@ func _sheet(rect: Rect2) -> void:
 		_b(speck_x, speck_y, PX * (2.0 if kind_of > 0.8 else 1.0), PX, dark if kind_of > 0.35 else Color(PAPER_LIGHT, 0.5 if aged else 0.9))
 	if stain.z > 0.0:
 		_ring(o + Vector2(stain.x, stain.y), stain.z, stain.z - 4.0, Color(0.42, 0.24, 0.1, 0.2), seed_of)
+	for mark in inked.size():
+		_ink_mark(o + Vector2(inked[mark].x, inked[mark].y), inked[mark].z, seed_of + mark * 53)
 	if ruled > 0.0:
 		var rule := o.y + ruled_from
 		while rule < o.y + h - 8.0:
@@ -524,6 +532,34 @@ func _sheet(rect: Rect2) -> void:
 				_b(cell.x, cell.y, PX, PX, STEEL_LIGHT if column == 1 or row == 0 else STEEL)
 
 
+## Ink left on a sheet (see `inked`): a drop that fell from the pen, with
+## what it threw round itself, or the dry streaks of one that was wiped.
+## Mixed into the paper, not laid over it: where two shapes meet there is
+## no darker patch.
+func _ink_mark(at: Vector2, size: float, salt: int) -> void:
+	if size < 0.0:
+		var faint := tone.lerp(INK, 0.3)
+		for streak in 3:
+			var reach := -size * (1.0 - streak * 0.28)
+			var x := streak * PX * 2.0
+			while x < reach:
+				var run := PX * (1.0 + floorf(_roll(salt + streak * 31 + int(x)) * 4.0))
+				# It gives out towards the end.
+				if _roll(salt + streak * 17 + int(x) + 5) > x / reach * 0.85:
+					_b(at.x + x, at.y + streak * PX * 2.0, run, PX, faint)
+				x += run + PX
+		return
+	var wet := tone.lerp(INK, 0.78)
+	_disc(at, size, wet)
+	for lobe in 2:
+		var way := Vector2.from_angle(_roll(salt + lobe * 3) * TAU)
+		_disc(((at + way * size * 0.7) / PX).floor() * PX, size * (0.45 + _roll(salt + lobe * 3 + 1) * 0.3), wet)
+	for drop in int(3.0 + size):
+		var way := Vector2.from_angle(_roll(salt + drop * 5 + 40) * TAU)
+		var spot := ((at + way * size * (1.6 + _roll(salt + drop * 5 + 41) * 1.6)) / PX).floor() * PX
+		_b(spot.x, spot.y, PX * (2.0 if drop % 3 == 0 else 1.0), PX, wet if drop % 2 == 0 else tone.lerp(INK, 0.45))
+
+
 ## Value noise along a line: the same for the same `at` and `salt`.
 func _soft(at: float, salt: int) -> float:
 	var low := floori(at)
@@ -544,7 +580,7 @@ func _old_sheet(rect: Rect2) -> void:
 	var o := rect.position
 	var w := rect.size.x
 	var h := rect.size.y
-	var salt := int(w * 7.0 + h * 13.0)
+	var salt := int(roundf(w) * 7.0 + roundf(h) * 13.0)
 	var rip := 30.0 if torn else 0.0
 	var edge := tone.darkened(0.28)
 	_shadow(rect.grow(-PX * 2.0), Vector2(3, 4) + Vector2(_lift, _lift) * 1.5)

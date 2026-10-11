@@ -114,6 +114,8 @@ func _init() -> void:
 	_status_fx.doll_drain = Vector2(116, 50)
 	_status_fx.bomb_foot = Vector2(209, 40)
 	_status_fx.chain_box = Rect2(8, 12, 216, 154)
+	# The seal of an oath is set on the end of the name plate, over its top edge.
+	_status_fx.seal_at = Vector2(Desk.PLATE.end.x - 20, Desk.PLATE.position.y + 9)
 	add_child(_status_fx)
 	_restyle()
 
@@ -267,6 +269,29 @@ func doll_hangs() -> bool:
 
 func doll_landed() -> void:
 	_status_fx.doll_landed()
+
+
+## Whether status `id` came from a borrowed action (see StatusFx.set_borrowed).
+func status_borrowed(id: StringName, on: bool) -> void:
+	_status_fx.set_borrowed(id, on)
+
+
+func status_is_borrowed(id: StringName) -> bool:
+	return _status_fx.borrowed(id)
+
+
+## Where the seal of an oath is set on this box, on screen.
+func seal_spot() -> Vector2:
+	return _status_fx.seal_spot()
+
+
+## The gavel has just pressed the seal (see StatusFx.press_seal).
+func seal_pressed() -> void:
+	_status_fx.press_seal()
+
+
+func seal_jolt() -> void:
+	_status_fx.jolt_seal()
 
 
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).

@@ -46,6 +46,10 @@ extends RefCounted
 ##     the deck for a new one, starting with the one `player` showed (at `index`
 ##     of their hand); hands: [{player, index}], public
 ##   card_peeked {viewer, owner, index, card}   private to the viewer
+##   before_hand_reach {owner, by, how}         cancellable: `by` is about to see,
+##     take or replace cards of `owner` (how: &"peek", &"swap", &"recall";
+##     see GameEngine.reach_hand)
+##   hand_missed {owner, by, how}               it was cancelled: the hand stays as it is
 ##   card_lost {player, index, card}            the hand follows Morale; public
 ##   card_drawn {player, index}
 ##   hand_redrawn {player, count}               the whole hand went back for new cards

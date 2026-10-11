@@ -31,6 +31,7 @@ const HEART_ART := "res://assets/ui/heart.png"
 ## The potion going down: how many steps, over how long, and what is left
 ## where the liquid was.
 const GAVEL_RAISED := 0.95  # radians the gavel is lifted before a knock
+const SEAL_WAX := Color("8e1c2b")  # the wax of the seal an oath leaves (StatusFx)
 const SCALES_Y := 266.0  # where the pivot of the scales of the court stands
 ## A firework rocket: how long it climbs, and how long what it leaves behind
 ## takes to go out.
@@ -138,6 +139,11 @@ const LURK_LIFT := 0.2
 const LURK_GLANCE := 0.55
 const LURK_RETURN := 0.18
 const LURK_HOME := 0.4
+## A shadow that found no card there: how far to each side it feels for one,
+## how many question marks it is left with and how fast it is gone.
+const LURK_GROPE := 26.0
+const LURK_PUZZLED := 3
+const LURK_FLEE := 0.16
 ## How big the card is while it is looked at, by the viewer and by others,
 ## and how far it is lifted then: clear of the hat's side for the viewer,
 ## off its place for the others.
@@ -208,6 +214,8 @@ var _made_at := Vector2.INF
 ## The shadow of a Sneak Peek, out and waiting for card_peeked.
 var _lurk: LurkFx
 var _lurk_owner: PlayerState
+## The hands an Untraceable took off the table: player id -> their card views.
+var _vanished: Dictionary = {}
 ## The side bets lying on the table: player id -> BillsFx.
 var _bets: Dictionary = {}
 var _glitch: GlitchFx
@@ -587,7 +595,7 @@ func _fireworks(who: PlayerState, shells: int) -> void:
 ## Two knocks of the gavel on the witness, and the oath closes around them.
 func _fx_judge_under_oath(play: Play) -> void:
 	var there := _at(play.target)
-	await _gavel(play.target, UI.GOLD)
+	await _gavel(play.target, UI.GOLD, true)
 	ring(there, UI.GOLD, 120.0, 40.0, 0.35, 6.0)
 	ring(there, Color.WHITE, 40.0, 52.0, 0.45, 3.0)
 	await _wait(0.4)
@@ -662,7 +670,9 @@ func _fx_judge_contempt(play: Play) -> void:
 
 
 ## The gavel comes down twice on the box of `who`, unhurried.
-func _gavel(who: PlayerState, color: Color) -> void:
+## Two knocks of the gavel on the box of `who`. With `seals`, the second one
+## leaves the seal of the court on it (StatusFx.press_seal).
+func _gavel(who: PlayerState, color: Color, seals := false) -> void:
 	var there := _at(who)
 	var box: Control = table._node_of(who)
 	var speed: float = table._speed
@@ -685,6 +695,12 @@ func _gavel(who: PlayerState, color: Color) -> void:
 		if box != null:
 			UI.shake(box, 9.0, 0.2)
 		table._shake_screen(6.0)
+		if seals and knock == 1 and box != null:
+			box.seal_pressed()
+			var spot: Vector2 = box.seal_spot()
+			_snd("fx_seal")
+			ring(spot, SEAL_WAX.lightened(0.25), 6.0, 34.0, 0.3, 3.0)
+			burst(spot, SEAL_WAX.lightened(0.3), 6, 90.0, 0.4, 320.0, 4.0)
 		await _wait(0.16)
 		if not is_instance_valid(gavel):
 			return
@@ -694,6 +710,42 @@ func _gavel(who: PlayerState, color: Color) -> void:
 					.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 			await _wait(0.42)
 	await _wait(0.2)
+	if not is_instance_valid(gavel):
+		return
+	var leave := gavel.create_tween()
+	leave.tween_property(gavel, "modulate:a", 0.0, 0.2 / speed)
+	leave.tween_callback(gavel.queue_free)
+
+
+## Perjury: the gavel is held up over the coins of `who`, at `at`, and comes
+## down on them once, hard, with the word. The coins leave for the bank after it.
+func perjury(who: PlayerState, at: Vector2) -> void:
+	var box: Control = table._node_of(who)
+	var speed: float = table._speed
+	var gavel := GavelFx.new()
+	gavel.position = GavelFx.origin_for(at)
+	gavel.rotation = GAVEL_RAISED * 1.25
+	gavel.modulate.a = 0.0
+	add_child(gavel)
+	gavel.create_tween().tween_property(gavel, "modulate:a", 1.0, 0.12 / speed)
+	dim(0.35, 0.9)
+	await _wait(0.45)
+	if not is_instance_valid(gavel):
+		return
+	gavel.create_tween().tween_property(gavel, "rotation", 0.0, 0.06 / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await _wait(0.06)
+	_snd("fx_gavel")
+	# The word comes down with it (not awaited: the coins do not wait for it).
+	table._stamp("PERJURY", UI.GOLD)
+	burst(at, UI.GOLD, 16, 260.0, 0.5, 620.0, 6.0)
+	burst(at, Color("c9a26a"), 8, 200.0, 0.3, 500.0, 6.0)
+	ring(at, UI.GOLD, 12.0, 120.0, 0.32, 6.0)
+	if box != null:
+		UI.shake(box, 12.0, 0.25)
+		box.seal_jolt()
+	table._shake_screen(8.0)
+	await _wait(0.22)
 	if not is_instance_valid(gavel):
 		return
 	var leave := gavel.create_tween()
@@ -1283,12 +1335,169 @@ func _slink(lurk: LurkFx) -> void:
 	leave.tween_callback(lurk.queue_free)
 
 
-func _fx_spy_low_profile(play: Play) -> void:
-	var here := _at(play.actor)
+## An Untraceable: the hand of the Spy goes up in smoke, and stays gone
+## until whatever came for it has missed (hand_missed: hand_found).
+func _fx_spy_untraceable(play: Play) -> void:
+	await vanish(play.actor)
+
+
+func vanished(who: PlayerState) -> bool:
+	return who != null and _vanished.has(who.id)
+
+
+## The cards `who` holds disappear from the table in a puff of smoke.
+func vanish(who: PlayerState) -> void:
+	if who == null or vanished(who) or who.cards.is_empty():
+		return
+	var views: Array = []
+	for i: int in who.cards.size():
+		views.append(table._card_view(who, i))
+	_vanished[who.id] = views
 	_snd("fx_hush")
-	burst(here, SMOKE, 16, 80.0, 0.6, -30.0, 12.0)
-	ring(here, SMOKE.lightened(0.2), 60.0, 10.0, 0.35, 3.0)
+	_puff(who, views)
+	await _wait(0.1)
+	table._set_cards_shown(views, false)
 	await _wait(0.4)
+
+
+## The cards of `who` are back where they were, out of another puff.
+func hand_found(who: PlayerState) -> void:
+	if not vanished(who):
+		return
+	var views: Array = _vanished[who.id]
+	_vanished.erase(who.id)
+	_snd("fx_hush")
+	_puff(who, views)
+	await _wait(0.1)
+	table._set_cards_shown(views, true)
+	for view: Variant in views:
+		if view != null and is_instance_valid(view):
+			UI.pop(view, 1.12, 0.2)
+	await _wait(0.3)
+
+
+## Every hand that is still gone comes back out of its puff of smoke, all
+## at once and without holding anything up.
+func bring_back() -> void:
+	for id: int in _vanished.keys():
+		for p: PlayerState in table.engine.players:
+			if p.id == id:
+				hand_found(p)
+
+
+## Puts back every hand that is still gone, at once and with no show.
+func drop_vanished() -> void:
+	for views: Array in _vanished.values():
+		table._set_cards_shown(views, true)
+	_vanished.clear()
+
+
+## Smoke over each of the cards of `who`: a thick cloud that hangs and
+## thins out upwards.
+func _puff(who: PlayerState, views: Array) -> void:
+	for i: int in views.size():
+		var view: Variant = views[i]
+		if view == null or not is_instance_valid(view):
+			continue
+		var at: Vector2 = table._card_center(who, i)
+		var reach: float = view.size.y * 0.5
+		for n: int in 22:
+			var off := Vector2(randf_range(-0.5, 0.5) * reach * 0.7, randf_range(-1.0, 1.0) * reach * 0.8)
+			_bits.append({
+				"p": at + off, "v": off * 1.6 + Vector2(randf_range(-20, 20), -randf_range(15, 55)),
+				"g": -50.0, "c": SMOKE.lightened(randf_range(0.3, 0.75)),
+				"s": randf_range(0.28, 0.5) * reach, "t": -randf_range(0.0, 0.1), "life": randf_range(0.45, 0.85),
+			})
+	_wake()
+
+
+## A Sneak Peek at a hand that is not there (`d` is the data of
+## hand_missed): the shadow reaches for a card, closes its hand on nothing,
+## feels around, looks about with question marks over its hat and is gone
+## in a hurry.
+func lurk_fooled(d: Dictionary) -> void:
+	var peeker: PlayerState = d.by
+	var owner: PlayerState = d.owner
+	var speed: float = table._speed
+	var at := _hand_middle(owner)
+	# A hand that came back in the meantime (its card proven to a doubter)
+	# is gone again before the shadow gets to it.
+	await vanish(owner)
+	var lurk := _lurk
+	if lurk == null or not is_instance_valid(lurk) or _lurk_owner != peeker:
+		drop_lurk()
+		lurk = _lurk_out(peeker, at)
+		lurk.create_tween().tween_property(lurk, "length", lurk.span, 0.35 / speed) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		await _wait(0.4)
+		if not is_instance_valid(lurk):
+			return
+	_lurk = null
+	_lurk_owner = null
+	var way := (at - lurk.head()).normalized()
+	var side := way.orthogonal()
+	# The grab, on the place where a card ought to be.
+	lurk.reach_for(at)
+	_snd("fx_snatch")
+	lurk.create_tween().tween_property(lurk, "arm", 1.0, LURK_REACH / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await _wait(LURK_REACH + 0.22)
+	# Nothing in the hand: it feels around, to one side and to the other.
+	for step: float in [-1.0, 1.0]:
+		if not is_instance_valid(lurk):
+			return
+		var grope := lurk.create_tween()
+		grope.tween_property(lurk, "arm", 0.55, 0.09 / speed)
+		grope.tween_callback(lurk.reach_for.bind(at + side * step * LURK_GROPE))
+		grope.tween_property(lurk, "arm", 1.0, 0.11 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		await _wait(0.2)
+		_snd("card_draw")
+		await _wait(0.14)
+	if not is_instance_valid(lurk):
+		return
+	# And looks about, at a loss.
+	lurk.create_tween().tween_property(lurk, "arm", 0.0, 0.14 / speed)
+	var look := lurk.create_tween()
+	look.tween_property(lurk, "peer", -1.0, 0.1 / speed)
+	look.tween_interval(0.2 / speed)
+	look.tween_property(lurk, "peer", 1.0, 0.14 / speed)
+	look.tween_interval(0.2 / speed)
+	look.tween_property(lurk, "peer", 0.0, 0.1 / speed)
+	_snd("fx_puzzled")
+	var over_hat := lurk.head() - way * 26.0
+	for i: int in LURK_PUZZLED:
+		_puzzle(over_hat + side * (i - (LURK_PUZZLED - 1) / 2.0) * 22.0 - way * (10.0 if i == 1 else 0.0),
+				i * 0.13, 0.95 - i * 0.13)
+	await _wait(0.95)
+	if not is_instance_valid(lurk):
+		return
+	# Home, and fast.
+	var leave := lurk.create_tween()
+	leave.tween_property(lurk, "length", 0.0, LURK_FLEE / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	leave.tween_callback(lurk.queue_free)
+	await _wait(LURK_FLEE + 0.05)
+
+
+## A question mark that pops up at `at` after `delay`, wobbles for `life`
+## seconds and is gone.
+func _puzzle(at: Vector2, delay: float, life: float) -> void:
+	var speed: float = table._speed
+	var mark := UI.label("?", 30, PORCELAIN, true)
+	mark.add_theme_constant_override("outline_size", 6)
+	mark.add_theme_color_override("font_outline_color", UI.INK)
+	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(mark)
+	mark.reset_size()
+	mark.pivot_offset = mark.size / 2.0
+	mark.position = (at - mark.size / 2.0).clamp(Vector2(6, 6), size - mark.size - Vector2(6, 6))
+	mark.scale = Vector2.ZERO
+	mark.rotation = randf_range(-0.3, 0.3)
+	var show := mark.create_tween()
+	show.tween_interval(delay / speed)
+	show.tween_property(mark, "scale", Vector2.ONE, 0.14 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	show.tween_property(mark, "rotation", -mark.rotation, maxf(life - 0.3, 0.1) / speed).set_trans(Tween.TRANS_SINE)
+	show.parallel().tween_property(mark, "position:y", mark.position.y - 8.0, maxf(life - 0.3, 0.1) / speed)
+	show.tween_property(mark, "modulate:a", 0.0, 0.14 / speed)
+	show.tween_callback(mark.queue_free)
 
 
 ## Whatever was in the tin cup, instead of his pride.
@@ -1435,7 +1644,9 @@ func _fx_impostor_perfect_disguise(play: Play) -> void:
 
 ## From here on every effect is seen and heard wrong, until cleanse(): what
 ## the Impostor does behind the mask is somebody else's action, badly copied.
-func corrupt(disguise: Play) -> void:
+## Without a disguise it is what a borrowed action left behind coming due
+## (the chains of a copied Entropy breaking), until cleanse() just the same.
+func corrupt(disguise: Play = null) -> void:
 	cleanse()
 	_glitch = GlitchFx.new(self)
 	_glitch.disguise = disguise
@@ -1469,9 +1680,17 @@ func step_out(play: Play) -> void:
 		_glitch.resume()
 
 
+## Whether what happens on the table right now is the doing of a borrowed
+## action, and not of a play that stepped in on it.
+func borrowing() -> bool:
+	return _glitch != null and is_instance_valid(_glitch) and _guests.is_empty()
+
+
 # Whether `play` is the disguise that is on, or the action it carries out.
 func _borrowed(play: Play) -> bool:
-	return _glitch != null and (play == _glitch.disguise or play == _glitch.disguise.aimed())
+	if _glitch == null or _glitch.disguise == null:
+		return false
+	return play == _glitch.disguise or play == _glitch.disguise.aimed()
 
 
 ## Chips pushed forward; the coin itself is flown by coin_flip.
@@ -1756,6 +1975,9 @@ func cards_binned(d: Dictionary) -> void:
 	away.chain().tween_callback(tray.queue_free)
 	await _wait(0.5)
 	ring(deck, STEEL, 10.0, 46.0, 0.25, 3.0)
+	# The hands that kept out of it (an Untraceable) are back now that the
+	# tray is gone.
+	bring_back()
 
 	# And the deck deals, fast.
 	for i: int in views.size():
@@ -2684,10 +2906,14 @@ func _beside(who: PlayerState, reach: float) -> Vector2:
 ## of them was (StatusFx.pieces). They fly apart hard, and then time all but
 ## stops for them: the pieces hang over the table, turning, until they are
 ## drawn together into what they pay (release_morale, release_coins).
-func chains_break(who: PlayerState, links: Array[Vector2]) -> void:
+## `borrowed` chains (see StatusFx.set_borrowed) break as badly as they were
+## copied: all of it is seen and heard wrong until chains_paid().
+func chains_break(who: PlayerState, links: Array[Vector2], borrowed := false) -> void:
 	drop_debris()
 	if links.is_empty():
 		return
+	if borrowed:
+		corrupt()
 	var speed: float = table._speed
 	var centre := Vector2.ZERO
 	for link: Vector2 in links:
@@ -2809,6 +3035,14 @@ func _coin_home(bar: StatBar, share: int, at: Vector2, index: int) -> void:
 		bar.add_coins(share)
 	_snd("coin_%d" % (index % 3 + 1))
 	burst(at, UI.GOLD, 3, 90.0, 0.2, 300.0, 4.0)
+
+
+## The chains have paid all they were going to: what is left of them goes,
+## and so does the look of borrowed ones (see chains_break).
+func chains_paid() -> void:
+	drop_debris()
+	if _glitch != null and is_instance_valid(_glitch) and _glitch.disguise == null:
+		cleanse()
 
 
 ## Lets go of the pieces of the chains nothing was made of.

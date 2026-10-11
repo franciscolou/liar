@@ -555,8 +555,9 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
 	player.turn["busy"] = true
 	var instance := ItemInstance.new(def)
 	await fire(&"item_buying", {"player": player, "item": instance, "slot": slot})
-	# An item bought out of sight (the Spy's Low Profile) leaves the shelf as
-	# it was: a slot that changed would tell the table what was taken.
+	# An item bought out of sight (nothing does it today: it was the Spy's
+	# Low Profile) leaves the shelf as it was: a slot that changed would tell
+	# the table what was taken.
 	var unseen := instance.hidden and player.alive
 	if stocked and not unseen:
 		shop[slot] = null
@@ -1032,8 +1033,17 @@ func recall_cards(by: PlayerState, index: int) -> void:
 	if index < 0 or index >= by.cards.size():
 		return
 	var card: StringName = by.cards[index]
+	# Somebody else's hand: they may keep it out of this (see reach_hand).
+	var kept: Array = []
+	for p: PlayerState in seat_order(by):
+		if p != by and p.cards.has(card) and not await reach_hand(by, p, &"recall"):
+			kept.append(p)
+	if over or index >= by.cards.size() or by.cards[index] != card:
+		return
 	var hands: Array = []
 	for p: PlayerState in seat_order(by):
+		if kept.has(p):
+			continue
 		for i: int in p.cards.size():
 			if p.cards[i] == card:
 				hands.append({"player": p, "index": i})
@@ -1052,8 +1062,28 @@ func recall_cards(by: PlayerState, index: int) -> void:
 	await fire(&"cards_recalled", {"player": by, "index": index, "card": card, "hands": hands})
 
 
+## Before `by` sees, takes or replaces cards in the hand of `owner` (`how`:
+## &"peek", &"swap", &"recall"): false when the hand was kept out of reach
+## (before_hand_reach cancelled, see spy.gd), and then hand_missed says so.
+func reach_hand(by: PlayerState, owner: PlayerState, how: StringName) -> bool:
+	if by == owner or not owner.alive:
+		return true
+	var data := {"owner": owner, "by": by, "how": how}
+	var reach := await fire(&"before_hand_reach", data)
+	if not reach.cancelled:
+		return true
+	if not over:
+		await fire(&"hand_missed", data.duplicate())
+	return false
+
+
+## `a` is who trades: `b` may keep their hand out of it (see reach_hand).
 func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int) -> void:
 	if a_index < 0 or a_index >= a.cards.size() or b_index < 0 or b_index >= b.cards.size():
+		return
+	if not await reach_hand(a, b, &"swap") or over:
+		return
+	if a_index >= a.cards.size() or b_index >= b.cards.size():
 		return
 	var card: StringName = a.cards[a_index]
 	a.cards[a_index] = b.cards[b_index]
@@ -1063,6 +1093,8 @@ func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int) -> v
 
 func peek_card(viewer: PlayerState, owner: PlayerState) -> void:
 	if owner.cards.is_empty():
+		return
+	if not await reach_hand(viewer, owner, &"peek") or over or owner.cards.is_empty():
 		return
 	var index := rng.randi_range(0, owner.cards.size() - 1)
 	await fire(&"card_peeked", {

@@ -20,6 +20,7 @@ const Board := preload("res://scripts/ui/saloon_board.gd")
 const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
+const Emotes := preload("res://scripts/ui/emotes.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
@@ -38,6 +39,8 @@ const SOUND_DIR := "res://assets/sounds/"
 const COIN_SOUNDS := 3
 ## Most coins shown (and heard) flying for one change of coins.
 const MAX_COINS_SHOWN := 12
+## The highest the gavel of a perjury may strike: its head stands above that.
+const PERJURY_FLOOR := 78.0
 ## Seconds a swindled coin takes to dance over to the Bard, and between one
 ## coin and the next.
 const DANCE_TIME := 2.4
@@ -91,6 +94,14 @@ const LOG_SIZE := Vector2(232, 136)
 const LOG_HEADER := 18.0  # the strip with the fold button
 const LOG_FOLDED := Vector2(24, 24)  # just the button
 const LOG_FOLD_TIME := 0.16
+## Where the balloon of an emote goes: its centre, from the top right corner
+## of a seat, and on the table for the player at this screen (by the log).
+const EMOTE_AT_SEAT := Vector2(-14, 8)
+const EMOTE_AT_HERO := Vector2(270, 442)
+## How far from there a balloon may land while the player has others up, and
+## how many of the same emote can be heard at once.
+const EMOTE_SCATTER := Vector2(16, 12)
+const EMOTE_VOICES := 16
 
 var engine: GameEngine
 var viewer: PlayerState  # whose hand is on screen; null while spectating
@@ -137,6 +148,8 @@ var _log_folded := false
 var _log_fold := 0.0  # 0 = open, 1 = folded; tweened in between
 var _log_tween: Tween
 var _log_bottom := 470.0  # the log hangs from here, folded or not
+var _emotes: Control  # the emote button above the log (emotes.gd); null while spectating
+var _emote_bubbles: Dictionary = {}  # player id -> the last balloon they put up
 var _turn_label: Label
 var _sfx: Dictionary = {}
 var _slowed := false
@@ -276,6 +289,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	UI.handle_fullscreen_key(event, get_window())
 	if event.is_action_pressed("ui_cancel") and not _back_out():
 		_toggle_pause()
+	# 1 to 6: an emote, without opening the column.
+	if _emotes != null and event is InputEventKey and event.pressed and not event.echo:
+		var number: int = event.keycode - KEY_1 if event.keycode < KEY_KP_0 else event.keycode - KEY_KP_1
+		if number >= 0 and number < Emotes.KINDS.size():
+			_emotes.pick(number)
 
 
 func _input(event: InputEvent) -> void:
@@ -333,6 +351,7 @@ func _build() -> void:
 	_build_shop()
 	_build_stage()
 	_build_log()
+	_build_emotes()
 
 	_hero = HeroPanel.new()
 	_hero.position = Vector2(0, 478)
@@ -357,12 +376,17 @@ func _build() -> void:
 	menu.pressed.connect(_toggle_pause)
 	TipLayer.attach(menu, "Pause, settings and quit (Esc).")
 	add_child(menu)
-	_peek_all = UI.button("SHOW ALL HANDS", UI.BORDER, 13)
-	_peek_all.position = Vector2(864, 8)
-	_peek_all.size = Vector2(200, 28)
+	# A button like the menu's, with only an eye in it and what it does in
+	# its tooltip: with a full table, one with words on it lay over the
+	# boxes of the players up there.
+	_peek_all = UI.button("", UI.BORDER, 13)
+	_peek_all.position = Vector2(1040, 8)
+	_peek_all.size = Vector2(30, 28)
+	_peek_all.pivot_offset = _peek_all.size / 2.0
 	_peek_all.visible = false
+	_peek_all.draw.connect(_draw_peek_all)
 	_peek_all.pressed.connect(_on_peek_all_pressed)
-	TipLayer.attach(_peek_all, "You are out of the match: click a player to see their hand, or this to see them all.")
+	TipLayer.attach(_peek_all, _peek_all_tip)
 	add_child(_peek_all)
 
 	_prompt = PanelContainer.new()
@@ -638,6 +662,57 @@ func _place_log(fold: float) -> void:
 	_log_panel.size = box
 	_log_box.size = box
 	_log_toggle.position = Vector2(box.x - 22, 0)
+	if _emotes != null:
+		_emotes.position = _log_panel.position - Vector2(0, Emotes.BUTTON.y + 4.0)
+
+
+# === emotes ===================================================================
+
+## Emotes are talk between the people at the table: they go round the room on
+## their own, outside the match, and nothing in the engine knows about them.
+func _build_emotes() -> void:
+	if viewer == null:
+		return
+	_emotes = Emotes.new()
+	_emotes.picked.connect(_send_emote)
+	_table.add_child(_emotes)
+	_place_log(_log_fold)
+	if _room != null:
+		_room.emoted.connect(_show_emote)
+	for kind: Dictionary in Emotes.KINDS:
+		var voice := _load_sfx("emote_" + kind.id)
+		if voice != null:
+			voice.max_polyphony = EMOTE_VOICES
+
+
+func _send_emote(kind: int) -> void:
+	if _room != null:
+		_room.emote(kind)
+	else:
+		_show_emote(viewer.id, kind)
+
+
+## The balloon of `kind` over the player at `seat`, with its sound. Nothing
+## waits for the one before: balloons pile up, each a little off the last so
+## that all of them show, and their sounds ring over each other.
+func _show_emote(seat: int, kind: int) -> void:
+	if seat < 0 or seat >= engine.players.size() or kind < 0 or kind >= Emotes.KINDS.size():
+		return
+	var p: PlayerState = engine.players[seat]
+	var at := EMOTE_AT_HERO
+	if p != viewer:
+		var box: SeatView = _seats.get(p.id)
+		if box == null:
+			return
+		at = box.position + Vector2(SeatView.SIZE.x, 0) + EMOTE_AT_SEAT
+	if is_instance_valid(_emote_bubbles.get(seat)):
+		# Only drawing: the dice of the match are not for this.
+		at += Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * EMOTE_SCATTER
+	var bubble := Emotes.Bubble.new(kind)
+	bubble.position = (at - Emotes.Bubble.SIZE / 2.0).clamp(Vector2(4, 12), size - Emotes.Bubble.SIZE - Vector2(4, 4)).round()
+	_fx.add_child(bubble)
+	_emote_bubbles[seat] = bubble
+	_play_sfx("emote_" + Emotes.KINDS[kind].id)
 
 
 func _layout_seats() -> void:
@@ -924,21 +999,30 @@ func _clear_hud() -> void:
 	var step := 44.0
 	if cast.size() > 1:
 		step = minf(step, (ONLOOKER_WIDTH - card_size.x) / (cast.size() - 1))
-	var width := card_size.x + step * maxi(cast.size() - 1, 0) + 24.0
+	var row_width := card_size.x + step * maxi(cast.size() - 1, 0)
+	# Never narrower than what is written across the top of it.
+	var heading_text := Loc.t("CHARACTERS IN THIS MATCH (click for details)")
+	var heading_width := UI.bold().get_string_size(heading_text, HORIZONTAL_ALIGNMENT_LEFT, -1, roundi(11 * UI.FONT_SCALE)).x
+	var width := maxf(row_width, ceilf(heading_width)) + 24.0
 	var shelf := Panel.new()
 	shelf.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.88), UI.BORDER, 2, 6, 0))
 	shelf.size = Vector2(width, card_size.y + 38.0)
 	shelf.position = Vector2(roundf((1152 - width) / 2.0), 170 - shelf.size.y - 10.0)
 	_onlooker.add_child(shelf)
-	var heading := UI.label("CHARACTERS IN THIS MATCH (click for details)", 11, UI.GOLD, true)
-	heading.position = Vector2(12, 5)
-	heading.size = Vector2(width - 24.0, 14)
+	var heading := UI.label(heading_text, 11, UI.GOLD, true)
+	heading.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# Before the size, and the size only once it is in the tree: a label
+	# that does not clip is never narrower than its text, as measured with
+	# whatever font it has outside the tree.
 	heading.clip_text = true
 	shelf.add_child(heading)
+	heading.position = Vector2(12, 5)
+	heading.size = Vector2(width - 24.0, 14)
 	for i in cast.size():
 		var def: CharacterDef = cast[i]
 		var card := CardView.new(ONLOOKER_SCALE)
-		card.position = Vector2(12 + roundf(i * step), 24)
+		card.position = Vector2(roundf((width - row_width) / 2.0 + i * step), 24)
 		card.lift = 5.0
 		card.set_card(def.id, true)
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -965,11 +1049,40 @@ func _on_peek_all_pressed() -> void:
 	_sync_peek()
 
 
+## Whether every hand that may be looked at is face up on this screen.
+func _all_hands_shown() -> bool:
+	var seats := _peekable_seats()
+	return not seats.is_empty() and seats.all(func(seat: SeatView) -> bool: return seat.is_revealed())
+
+
+## An eye in blocks (SeatView.EYE), drawn in the button as the bars of
+## the menu are, and struck through while every hand is shown.
+func _draw_peek_all() -> void:
+	var px := SeatView.PX
+	var ink := UI.GOLD if _peek_all.is_hovered() else UI.CREAM
+	var rows: Array = SeatView.EYE
+	var at := ((_peek_all.size - Vector2(rows[0].length(), rows.size()) * px) / 2.0).floor()
+	for y: int in rows.size():
+		var row: String = rows[y]
+		for x: int in row.length():
+			if row[x] == "#" or row[x] == "o":
+				_peek_all.draw_rect(Rect2(at + Vector2(x, y) * px, Vector2(px, px)), ink)
+	if _all_hands_shown():
+		for i in rows.size():
+			_peek_all.draw_rect(Rect2(at + Vector2(2 + i, rows.size() - 1 - i) * px, Vector2(px, px)), UI.RED)
+
+
+func _peek_all_tip() -> String:
+	if _all_hands_shown():
+		return Loc.t("[b]Hide all hands[/b]\nTurns every hand face down again.")
+	return Loc.t("[b]Show all hands[/b]\nYou are out of the match: click a player to see their hand, or this eye to see them all.")
+
+
 func _sync_peek() -> void:
 	var on := _looking_on()
 	var seats := _peekable_seats()
 	_peek_all.visible = on and not seats.is_empty()
-	_peek_all.text = "HIDE ALL HANDS" if seats.all(func(seat: SeatView) -> bool: return seat.is_revealed()) else "SHOW ALL HANDS"
+	_peek_all.queue_redraw()
 	for seat: SeatView in _seats.values():
 		seat.set_peekable(on and seat.player.alive)
 
@@ -1630,13 +1743,13 @@ func _on_key(event: InputEvent) -> void:
 			# what it was opened from; up from the first one stays there.
 			if step.y > 0:
 				_close_popup()
-				_play_sfx("card_draw")
+				_play_sfx("ui_key")
 		elif step.y != 0:
 			_key_col = posmod(_key_col + step.y, rows[_key_row].size())
-			_play_sfx("card_draw")
+			_play_sfx("ui_key")
 	elif step.x != 0:
 		_key_col = posmod(_key_col + step.x, rows[_key_row].size())
-		_play_sfx("card_draw")
+		_play_sfx("ui_key")
 	elif rows.size() > 1:
 		var to := clampi(_key_row + step.y, 0, rows.size() - 1)
 		if to != _key_row:
@@ -1648,7 +1761,7 @@ func _on_key(event: InputEvent) -> void:
 					nearest = i
 			_key_row = to
 			_key_col = nearest
-			_play_sfx("card_draw")
+			_play_sfx("ui_key")
 	_track_keys()
 
 
@@ -1863,6 +1976,7 @@ func present(e: GameEvent) -> void:
 		&"turn_started":
 			_drop_transient_stage()
 			_play_fx.drop_bets()
+			_play_fx.drop_vanished()
 			for q: PlayerState in engine.players:
 				var bar := _stat_bar(q)
 				if bar != null:
@@ -1879,6 +1993,7 @@ func present(e: GameEvent) -> void:
 			# A claim made in the middle of a borrowed action is nobody's copy.
 			_claims_open += 1
 			_play_fx.step_in(d.play)
+			_test_oath(d.play.actor)
 			await _anim_claim(d.play)
 		&"doubt_declared":
 			await _anim_doubt(d.doubter)
@@ -1930,7 +2045,7 @@ func present(e: GameEvent) -> void:
 			await _anim_morale_spent(d)
 		&"income":
 			# Whatever is left of a broken Entropy has had its chance.
-			_play_fx.drop_debris()
+			_play_fx.chains_paid()
 		&"morale_gained":
 			var healed: Variant = _node_of(d.player)
 			if healed != null and _play_fx.releasing(d.player):
@@ -1942,17 +2057,25 @@ func present(e: GameEvent) -> void:
 		&"player_eliminated":
 			_float("ELIMINATED", _anchor(d.player), UI.RED, 28)
 			_shake_screen(10.0)
+			# What they held is shown to the table, card by card, and left
+			# where they sat. Not after the last blow of the match: that is
+			# the winner's moment.
+			var shown_first := not engine.over
+			# Their box is dragged off first and the cards stay behind: still
+			# face down if they are about to be shown, turning over if not.
+			var gone_seat: SeatView = _seats.get(d.player.id)
+			if gone_seat != null:
+				gone_seat.leave(not shown_first, _speed)
 			await _wait(0.9)
-			# What they held is shown to the table, card by card, before it is
-			# left where they sat. Not after the last blow of the match: that
-			# is the winner's moment.
-			if not engine.over:
+			if shown_first:
 				var hand: Array = []
 				for i in d.player.left.size():
 					hand.append(_card_view(d.player, i))
 				for i in d.player.left.size():
 					_set_cards_shown([hand[i]], false)
-					await _anim_card_lost({"player": d.player, "card": d.player.left[i]}, true)
+					await _anim_card_lost({"player": d.player, "card": d.player.left[i], "index": i}, true)
+					if gone_seat != null and is_instance_valid(gone_seat):
+						gone_seat.turn_up(i)
 			_sync()
 			if d.player == viewer:
 				_log_line(Loc.t("You are out. Click a player to see their hand."), &"coins")
@@ -1985,7 +2108,23 @@ func present(e: GameEvent) -> void:
 			if d.viewer == viewer:
 				# It was a quick look: what they saw stays written down.
 				_log_line(Loc.t("You saw %s's %s.") % [d.owner.name, Content.character(d.card).display_name], &"coins")
+		&"hand_missed":
+			# The hand an Untraceable took off the table: whatever came for
+			# it finds nothing, and only then are the cards back.
+			if d.how == &"peek":
+				await _play_fx.lurk_fooled(d)
+			else:
+				_float(Loc.t("NOTHING THERE"), _play_fx._hand_middle(d.owner), UI.MUTED, 16)
+				await _wait(0.45)
+			# Out of a Last Call they stay gone until the tray is taken
+			# away (PlayFx.cards_binned).
+			if d.how != &"recall":
+				await _play_fx.hand_found(d.owner)
 		&"status_added":
+			# A status the Impostor copied keeps the look of the copy.
+			var marked: Variant = _node_of(d.player)
+			if marked != null:
+				marked.status_borrowed(d.status, _play_fx.borrowing())
 			if d.status == &"hexed" and _play_fx.doll_thrown_at(d.player):
 				# The doll that was thrown becomes the one the player carries.
 				_sync()
@@ -2470,6 +2609,10 @@ func _anim_coins(d: Dictionary) -> void:
 	# coin at a time, as it leaves or lands.
 	if bar != null:
 		bar.hold_coins(p)
+	# Perjury: the gavel comes down on the purse first, and then it all goes.
+	if d.reason == &"oath" and delta < 0:
+		# Not so high that the gavel is off the screen, on the seats at the top.
+		await _play_fx.perjury(p, Vector2(here.x, maxf(here.y, PERJURY_FLOOR)))
 	var total := absi(delta)
 	var coins := clampi(total, 1, MAX_COINS_SHOWN)
 	# Coins the other pile is showing ahead of time (a thief yet to be paid).
@@ -2955,14 +3098,18 @@ func _anim_card_traded(d: Dictionary) -> void:
 ## A card leaves a hand for good and the whole table is shown which: it comes
 ## up to the middle, is turned over and named. `left` is for a card of
 ## somebody who was just eliminated: it does not go back to the deck, it is
-## put down where they sat (and the table is not brought up to date first:
-## their box is still there to take it from).
+## put down where they sat (and the table is not brought up to date first).
+## With `index`, it comes from the place of that card of theirs and goes
+## back to lie exactly there, as that card lies.
 func _anim_card_lost(d: Dictionary, left := false) -> void:
 	if not left:
 		_sync()
 	var def := Content.character(d.card)
 	var loser: PlayerState = d.player
 	var centre := Vector2(576, 236)
+	# The card of an opponent who is out, lying where their box was.
+	var lies: CardView = _card_view(loser, d.index) if left and loser != viewer and d.has("index") else null
+	var home := lies.center() if lies != null else _anchor(loser)
 	var scene := Control.new()
 	scene.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scene.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -3007,8 +3154,13 @@ func _anim_card_lost(d: Dictionary, left := false) -> void:
 		await _wait(0.2)
 	else:
 		# Face down, out of the loser's hand and up to the centre.
-		card.position = _anchor(loser) - card.size / 2.0
+		card.position = home - card.size / 2.0
 		card.scale = Vector2.ONE * 0.25
+		if lies != null:
+			card.scale = lies.size / card.size
+			card.rotation = lies.rotation
+			enter.tween_property(card, "rotation", 0.0, 0.45 / _speed) \
+					.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		enter.tween_property(dim, "modulate:a", 1.0, 0.25 / _speed)
 		enter.tween_property(card, "position", centre - card.size / 2.0, 0.45 / _speed) \
 				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
@@ -3034,7 +3186,7 @@ func _anim_card_lost(d: Dictionary, left := false) -> void:
 	await _wait(1.9)
 
 	# Back to the deck, or down where its owner sat.
-	var goes := _anchor(loser) if left else _bank()
+	var goes := home if left else _bank()
 	pulse.kill()
 	var leave := scene.create_tween().set_parallel()
 	for node: Control in [glow, heading, name_label, caption]:
@@ -3044,6 +3196,11 @@ func _anim_card_lost(d: Dictionary, left := false) -> void:
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	leave.tween_property(card, "scale", Vector2.ONE * (0.28 if left else 0.14), 0.4 / _speed) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	if lies != null:
+		# Down as the card it stands for lies: tilted and gone dull.
+		leave.tween_property(card, "rotation", lies.rotation, 0.4 / _speed) \
+				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		leave.tween_property(card, "modulate", SeatView.LEFT_TINT, 0.4 / _speed)
 	await _wait(0.45)
 	if is_instance_valid(scene):
 		scene.queue_free()
@@ -3288,13 +3445,29 @@ func _anim_status_broken(d: Dictionary) -> void:
 		# The chains do not crumble: they go all at once, and what is left
 		# of them hangs in the air to be made into what they pay.
 		var links: Array[Vector2] = box.status_pieces(d.status)
+		var borrowed: bool = box.status_is_borrowed(d.status)
 		box.sync()
-		await _play_fx.chains_break(d.player, links)
+		await _play_fx.chains_break(d.player, links, borrowed)
 		return
 	for piece: Vector2 in box.status_pieces(d.status):
+		if d.status == &"truth_bound":
+			# The seal, in bits of wax and nothing else.
+			_play_fx.burst(piece, PlayFx.SEAL_WAX, 10, 170.0, 0.5, 520.0, 4.0)
+			_play_fx.burst(piece, PlayFx.SEAL_WAX.lightened(0.3), 5, 120.0, 0.4, 520.0, 4.0)
+			continue
 		_play_fx.burst(piece, color.lightened(0.35), 7, 150.0, 0.45, 360.0, 6.0)
 		_play_fx.ring(piece, color.lightened(0.5), 6.0, 26.0, 0.25, 3.0)
 	await _wait(0.25)
+
+
+## Somebody under oath claims something: the seal on their box jumps. The
+## same for a truth as for a lie; it only reminds the table of what is at stake.
+func _test_oath(p: PlayerState) -> void:
+	var box: Variant = _node_of(p)
+	if box == null or not p.has_status(&"truth_bound"):
+		return
+	box.seal_jolt()
+	_play_fx.ring(box.seal_spot(), PlayFx.SEAL_WAX.lightened(0.45), 8.0, 38.0, 0.35, 3.0)
 
 
 ## A big word slammed over the stage.

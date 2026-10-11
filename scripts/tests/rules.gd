@@ -47,6 +47,10 @@ static func run() -> int:
 		"a Morale becomes an item, and the change": _materialize.bind(&"shield", 1),
 		"a dearer item is paid for on top of the Morale": _materialize.bind(&"potion", -4),
 		"the last Morale is not for sale": _materialize_last,
+		"an untraceable hand can't be peeked at": _untraceable.bind(&"peek"),
+		"an untraceable hand can't be swapped": _untraceable.bind(&"swap"),
+		"an untraceable hand keeps its copy through a last call": _untraceable.bind(&"recall"),
+		"nobody is untraceable from themselves": _untraceable_own,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -491,6 +495,60 @@ static func _first_to_fall() -> String:
 static func _swindles(d: Decision) -> Variant:
 	for option: Dictionary in d.options:
 		if option.kind == &"ability" and option.ability.id == SWINDLE:
+			return option
+	return null
+
+
+## Player 1 answers whatever comes for their hand with an Untraceable: the
+## peek, the swap or the recall misses them, and only them.
+static func _untraceable(how: StringName) -> String:
+	var table := Table.new(true, [&"spy"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var spy: PlayerState = engine.players[1]
+	spy.cards = [&"spy", &"judge"]
+	table.puppets[1].answers[Decision.Kind.REACT] = _vanishes
+	match how:
+		&"peek":
+			table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return spy
+			await engine.claim(engine.players[0], table.ability(&"spy.sneak_peek"))
+			if not seen.of(&"card_peeked").is_empty():
+				return "the card was seen"
+		&"swap":
+			await engine.swap_cards(engine.players[0], 0, spy, 0)
+			if not seen.of(&"cards_swapped").is_empty() or engine.players[0].cards[0] != &"bartender":
+				return "the cards changed hands"
+		&"recall":
+			table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+			await engine.claim(engine.players[0], table.ability(LAST_CALL))
+			var recalled: Array = seen.of(&"cards_recalled")
+			if recalled.size() != 1 or recalled[0].data.hands.size() != 3:
+				return "the wrong hands were recalled"
+	if spy.cards != [&"spy", &"judge"]:
+		return "the hand became %s" % [spy.cards]
+	var missed: Array = seen.of(&"hand_missed")
+	if missed.size() != 1 or missed[0].data.owner != spy or missed[0].data.how != how:
+		return "missed %d times" % missed.size()
+	return ""
+
+
+## Their own Soul Swap and their own Last Call still go through their hand.
+static func _untraceable_own() -> String:
+	var table := Table.new(true, [&"spy"])
+	var engine := table.engine
+	var spy: PlayerState = engine.players[1]
+	spy.cards = [&"spy", &"judge"]
+	table.puppets[1].answers[Decision.Kind.REACT] = _vanishes
+	await engine.swap_cards(spy, 0, engine.players[0], 0)
+	if spy.cards[0] != &"bartender":
+		return "their own swap missed"
+	return "" if table.asked(1, Decision.Kind.REACT).is_empty() else "asked about their own swap"
+
+
+static func _vanishes(d: Decision) -> Variant:
+	for option: Dictionary in d.options:
+		if option.kind == &"ability" and option.ability.id == &"spy.untraceable":
 			return option
 	return null
 

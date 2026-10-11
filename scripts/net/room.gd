@@ -25,6 +25,8 @@ signal changed
 signal seat_left(seat: int)
 ## The machines stopped agreeing about the match they are playing.
 signal out_of_step(turn: int)
+## The player at `seat` of the match sent an emote (see emotes.gd).
+signal emoted(seat: int, kind: int)
 
 const Transition := preload("res://scripts/ui/transition.gd")
 const PATH := "res://scripts/net/room.gd"
@@ -37,7 +39,7 @@ const NODE_NAME := "NetRoom"
 const MAX_SEATS := 8
 const NAME_LENGTH := 12
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 12
+const PROTOCOL := 14
 const JOIN_TIMEOUT := 8.0
 const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent", "Dolores", "Ezekiel"]
 
@@ -500,6 +502,40 @@ func _deliver() -> void:
 		var answer: Array = _inbox.pop_front()
 		if ticket.decision.player.id == answer[1]:
 			_settle(ticket, answer[2])
+
+
+# --- emotes ------------------------------------------------------------------------
+
+## Shows everyone at the table an emote of the player at this machine. It is
+## no part of the match: it goes round at once, whatever is being decided.
+func emote(kind: int) -> void:
+	var seat := my_match_seat()
+	if seat < 0:
+		return
+	if hosting:
+		_emote_relay(seat, kind)
+	else:
+		_emote_up.rpc_id(1, _match_id, kind)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _emote_up(id: int, kind: int) -> void:
+	if not hosting or id != _match_id or not in_match:
+		return
+	var seat := match_peers.find(multiplayer.get_remote_sender_id())
+	if seat >= 0:
+		_emote_relay(seat, kind)
+
+
+func _emote_relay(seat: int, kind: int) -> void:
+	_send(_emote_down, [_match_id, seat, kind])
+	_emote_down(_match_id, seat, kind)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _emote_down(id: int, seat: int, kind: int) -> void:
+	if id == _match_id and in_match:
+		emoted.emit(seat, kind)
 
 
 # --- keeping in step ---------------------------------------------------------------

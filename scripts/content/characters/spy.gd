@@ -9,7 +9,7 @@ func _init() -> void:
 	texture_path = "res://assets/cards/Spy.png"
 	order = 10
 	_add(SneakPeek.new())
-	_add(LowProfile.new())
+	_add(Untraceable.new())
 
 
 class SneakPeek extends Ability:
@@ -24,18 +24,18 @@ class SneakPeek extends Ability:
 		await play.engine.peek_card(play.actor, play.target)
 
 
-class LowProfile extends Ability:
+class Untraceable extends Ability:
 	func _init() -> void:
-		id = &"spy.low_profile"
-		display_name = "Low Profile"
-		description = "Hide the item you just bought from the other players. The shop keeps it on sale, so nobody can tell what you took."
-		trigger_text = "When you buy an item"
+		id = &"spy.untraceable"
+		display_name = "Untraceable"
+		description = "Your cards vanish until it is over: they can't be seen, taken or replaced."
+		trigger_text = "When another player is about to see, take or replace one of your cards"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		return event.type == &"item_buying" and event.data.player == player
+		return event.type == &"before_hand_reach" and event.data.owner == player
 
 	func resolve(play: Play) -> void:
-		play.event.data.item.hidden = true
+		play.event.cancelled = true
 
 	func ai_react_weight(_event: GameEvent, _player: PlayerState, _engine: GameEngine) -> float:
-		return 0.6
+		return 0.85

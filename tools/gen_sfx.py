@@ -878,6 +878,18 @@ def fx_gavel():
     return drive(out, 1.6)
 
 
+def fx_seal():
+    """A seal pressed into hot wax: a soft, close thud, the wax squeezed out
+    round the die, and the small ring of the brass as it is lifted off."""
+    out = silence(0.5)
+    mix(out, tone(150, 0.2, 0.002, 0.06, glide=0.6), 0.0, 0.9)
+    mix(out, lowpass(noise(0.09, 0.004, 0.035, 931), 1400), 0.0, 0.5)
+    mix(out, bandpass(noise(0.16, 0.03, 0.06, 932), 700, 2600), 0.03, 0.22)
+    for freq, gain, decay in ((2140, 0.16, 0.07), (3210, 0.09, 0.05)):
+        mix(out, tone(freq, 0.25, 0.0005, decay), 0.2, gain)
+    return out
+
+
 def chain_rattle(seconds, links, seed):
     """A small chain shaken: `links` little knocks of metal on metal, thick at
     the start and thinning out."""
@@ -1482,6 +1494,16 @@ def fx_snatch():
     return out
 
 
+def fx_puzzled():
+    """A shadow that found no card where one ought to be: three small
+    questions, each ending upwards, one for each mark over its hat."""
+    out = silence(0.75)
+    for i, at in enumerate((0.0, 0.13, 0.26)):
+        mix(out, tone(520 + 90 * i, 0.16, 0.006, 0.07, glide=1.45), at, 0.55)
+        mix(out, tone(1040 + 180 * i, 0.1, 0.004, 0.035, glide=1.45), at, 0.15)
+    return out
+
+
 def fx_bills():
     """Banknotes counted down onto the table, and a coin set on them."""
     out = silence(0.95)
@@ -1545,6 +1567,74 @@ def ui_flip():
     return out
 
 
+def ui_key():
+    """The keyboard going from one thing to the next: a fingertip on the
+    wood of the counter. Meant to be felt more than heard."""
+    out = silence(0.07)
+    mix(out, lowpass(noise(0.014, 0.001, 0.005, 611), 1500), 0.0, 0.45)
+    mix(out, tone(430, 0.05, 0.002, 0.016, glide=0.8), 0.0, 0.6)
+    return out
+
+
+def emote_laugh():
+    """A cartoon laugh: six short "ha"s that climb one step and tumble down."""
+    out = silence(0.05)
+    for i, freq in enumerate((560, 620, 560, 500, 450, 400)):
+        at = 0.02 + i * 0.115
+        ha = tone(freq, 0.1, attack=0.012, decay=0.09, shape="tri", glide=0.82)
+        mix(out, bandpass(ha, 300, 2600), at, 0.9)
+        # The breath in front of each one.
+        mix(out, bandpass(noise(0.03, decay=0.02, seed=310 + i), 1500, 5000), at, 0.12)
+    return out
+
+
+def emote_sad():
+    """The sad trombone: one note that sags and a longer one that gives up."""
+    out = silence(0.05)
+    for at, freq, seconds, glide in ((0.0, 311.1, 0.32, 0.95), (0.34, 261.6, 0.75, 0.74)):
+        note = tone(freq, seconds, attack=0.03, decay=seconds * 1.1, shape="saw", glide=glide, vibrato=0.012)
+        mix(out, lowpass(note, lambda t: 500 + 900 * math.exp(-t * 4.0)), at, 0.8)
+    return out
+
+
+def emote_angry():
+    """A growl through clenched teeth, a stomp under it and steam let out."""
+    growl = tone(lambda t: 105 + 25 * math.sin(TAU * 31 * t) - 30 * t, 0.6, attack=0.02, decay=0.5, shape="saw")
+    growl = [s * (0.6 + 0.4 * math.sin(TAU * 27 * i / RATE)) for i, s in enumerate(growl)]
+    out = drive(lowpass(growl, 1400), 4.0)
+    mix(out, bandpass(noise(0.4, attack=0.03, decay=0.3, seed=331), 2500, 8000), 0.12, 0.35)
+    mix(out, lowpass(noise(0.08, decay=0.06, seed=333), 300), 0.0, 1.2)
+    return out
+
+
+def emote_mystery():
+    """A theremin that wanders up and back over a low bell."""
+    lead = tone(lambda t: 392.0 + 160.0 * math.sin(TAU * t / 1.1) * math.exp(-t * 0.6), 1.1, attack=0.12, decay=1.0, vibrato=0.018)
+    out = [s * 0.7 for s in lead]
+    mix(out, bell(98.0, 1.1, 1.0), 0.0, 0.5)
+    mix(out, bell(1108.7, 0.6, 0.5), 0.55, 0.18)
+    return out
+
+
+def emote_handshake():
+    """Three pats of one palm on another, then two friendly piano notes."""
+    out = silence(0.05)
+    for i, at in enumerate((0.0, 0.14, 0.28)):
+        mix(out, bandpass(noise(0.06, decay=0.04, seed=341 + i), 500, 2600), at, 0.8 - 0.15 * i)
+        mix(out, tone(150, 0.06, decay=0.05), at, 0.4)
+    mix(out, piano(523.3, 0.5, 0.4), 0.36, 0.5)
+    mix(out, piano(659.3, 0.6, 0.5), 0.46, 0.5)
+    return out
+
+
+def emote_flex():
+    """Showing off: coins dropped on the table and a run of little bells."""
+    out = coin(((0.0, 1.0), (0.05, 0.7), (0.11, 0.8)), 1.1, 351)
+    for i, freq in enumerate((1568.0, 1975.5, 2349.3, 3136.0)):
+        mix(out, bell(freq, 0.5, 0.4), 0.16 + i * 0.055, 0.3)
+    return out
+
+
 def ui_gather():
     """The cards swept together across the cloth, squared with two taps on
     the table and taken away."""
@@ -1560,6 +1650,7 @@ def ui_gather():
 SOUNDS = {
     "fx_creep": fx_creep,
     "fx_snatch": fx_snatch,
+    "fx_puzzled": fx_puzzled,
     "fx_bills": fx_bills,
     "fx_syringe": fx_syringe,
     "ui_lock": ui_lock,
@@ -1567,6 +1658,13 @@ SOUNDS = {
     "ui_deal": ui_deal,
     "ui_flip": ui_flip,
     "ui_gather": ui_gather,
+    "ui_key": ui_key,
+    "emote_laugh": emote_laugh,
+    "emote_sad": emote_sad,
+    "emote_angry": emote_angry,
+    "emote_mystery": emote_mystery,
+    "emote_handshake": emote_handshake,
+    "emote_flex": emote_flex,
     "card_draw": card_draw,
     "truth": truth,
     "lie": lie,
@@ -1585,6 +1683,7 @@ SOUNDS = {
     "fx_spur": fx_spur,
     "fx_boot_stomp": fx_boot_stomp,
     "fx_gavel": fx_gavel,
+    "fx_seal": fx_seal,
     "fx_scales_chain": fx_scales_chain,
     "fx_scales": fx_scales,
     "fx_firework_launch": fx_firework_launch,
@@ -1658,8 +1757,9 @@ PEAKS = {
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
     "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
-    "ui_gather": 0.5,
-    "fx_creep": 0.22, "fx_snatch": 0.5, "fx_bills": 0.5, "fx_syringe": 0.6,
+    "ui_gather": 0.5, "ui_key": 0.09,
+    "emote_laugh": 0.5, "emote_sad": 0.5, "emote_angry": 0.5, "emote_mystery": 0.5, "emote_handshake": 0.5, "emote_flex": 0.45,
+    "fx_creep": 0.22, "fx_snatch": 0.5, "fx_puzzled": 0.4, "fx_bills": 0.5, "fx_syringe": 0.6,
     "fx_entropy": 0.6, "fx_chains": 0.7, "fx_supernova": 0.97, "fx_stardust": 0.45, "fx_singularity": 0.65,
     "fx_spaghettify": 0.8, "fx_materialize": 0.85,
 }

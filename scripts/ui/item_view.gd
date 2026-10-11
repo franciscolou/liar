@@ -56,7 +56,7 @@ func center() -> Vector2:
 
 func _tip() -> String:
 	if concealed:
-		return Loc.t("[b]Hidden item[/b]\nBought under a Low Profile.")
+		return Loc.t("[b]Hidden item[/b]\nOnly its owner knows what it is.")
 	return UI.item_tip(def, note) if def != null else ""
 
 

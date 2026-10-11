@@ -209,6 +209,8 @@ func leave(face_up := true, pace := 1.0) -> void:
 	_revealed = false
 	_active = false
 	scale = Vector2.ONE
+	# Nothing stays floating over a box that is no longer there.
+	_status_fx.die()
 	_set_cursor()
 	_restyle()
 	var parts: Array[Control] = [_bg, _stats, _items, _marks, _chips]
@@ -403,6 +405,12 @@ func seal_jolt() -> void:
 ## stops showing it (see StatusFx.threaten).
 func status_threatened(id: StringName, on: bool) -> void:
 	_status_fx.threaten(id, on)
+
+
+## The player is out: whatever their statuses looked like comes apart (see
+## StatusFx.die). Returns the looks that were showing.
+func statuses_lost() -> Array[StringName]:
+	return _status_fx.die()
 
 
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).

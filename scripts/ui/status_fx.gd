@@ -44,6 +44,11 @@ const THREAT := 0.1
 const SEAL_SET := 0.45
 const SEAL_HOLD := 3.0
 const SEAL_JOLT := 0.4
+## Seconds each look takes to come apart once the player is out (see die).
+## The chains keep their own time (ChainsFx.snap).
+const DEATH := {GROGGY: 0.75, HEXED: 0.75, TICKING: 0.95, SWORN: 0.65}
+const FALL := 520.0
+const SMOKE := Color("b9b2a6")
 const OUTLINE := Color("1a100c")
 const GOLD := Color("f2c84b")
 const GLINT := Color("fff3c4")
@@ -187,6 +192,11 @@ var _urgent := false
 var _time := 0.0
 var _borrowed := {}  # status id -> bool, see set_borrowed
 var _threat := {}  # status id -> bool, see threaten
+## The player is out (see die): the seconds each look has been coming apart
+## for, and the stars as they were let go, each {shape, at, speed, cell, dim}.
+var _dead := false
+var _dying := {}  # status id -> seconds
+var _loose: Array = []
 ## What a borrowed status is drawn with: the material of PlayFx.GlitchFx,
 ## kept going here.
 var _spoiled: ShaderMaterial
@@ -220,6 +230,10 @@ func _ready() -> void:
 
 ## Shows the looks of the statuses `player` has right now (none for null).
 func sync(player: PlayerState, engine: GameEngine) -> void:
+	if player != null and not player.alive:
+		die()
+	if _dead:
+		return
 	_urgent = false
 	for id: StringName in LOOKS:
 		_wanted[id] = player != null and player.alive and player.has_status(id)
@@ -237,6 +251,45 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 	_wanted[SWORN] = _sworn or _seal_hold > 0.0
 	if _wanted.values().has(true):
 		set_process(true)
+
+
+## The player is out, and their box is about to be dragged off the table:
+## nothing is left floating where it stood. Every look showing comes apart
+## where it is, as the thing it is and nothing more: the stars are let go of
+## and drop, the bubbles burst, the doll topples off what it sat on, the fuse
+## goes out and the dynamite falls over, the seal cracks, and the chains go
+## dead and fall in pieces (ChainsFx.snap). Returns the looks that were
+## showing, for the table to give them a sound.
+func die() -> Array[StringName]:
+	var lost: Array[StringName] = []
+	if _dead:
+		return lost
+	_dead = true
+	for id: StringName in LOOKS:
+		if _level.get(id, 0.0) > 0.0:
+			lost.append(id)
+			if DEATH.has(id):
+				_dying[id] = 0.0
+		_wanted[id] = false
+		_level[id] = 0.0
+	_seal_hold = 0.0
+	_sworn = false
+	_threat.clear()
+	if lost.has(GROGGY):
+		_let_go()
+	if lost.has(HEXED):
+		# Nobody left to feed on.
+		_doll.drain = Vector2.INF
+	else:
+		_doll.level = 0.0
+	if lost.has(ENTROPY):
+		# Whatever they were made of, they are iron now.
+		_chains.material = null
+		_chains.snap()
+	_chains.bound = 0.0
+	_chains.doomed = 0.0
+	set_process(true)
+	return lost
 
 
 ## Whether status `id` was put on the player by a borrowed action: its look
@@ -364,7 +417,15 @@ func _process(delta: float) -> void:
 		var target := 1.0 if _wanted.get(id, false) else 0.0
 		_level[id] = move_toward(_level.get(id, 0.0), target, delta / FADE)
 		busy = busy or _level[id] > 0.0
-	_doll.level = _level.get(HEXED, 0.0)
+	for id: StringName in _dying.keys():
+		_dying[id] += delta
+		if _dying[id] >= DEATH[id]:
+			_dying.erase(id)
+	busy = busy or not _dying.is_empty()
+	if _dead:
+		_topple()
+	else:
+		_doll.level = _level.get(HEXED, 0.0)
 	# The chains are thrown on link by link, and are gone at once: they do
 	# not fade, they break (see PlayFx.chains_break).
 	_chains.bound = move_toward(_chains.bound, 1.0, delta / BIND) if _wanted.get(ENTROPY, false) else 0.0
@@ -425,8 +486,68 @@ func _draw_far_side() -> void:
 
 
 func _draw_near_side() -> void:
-	if _level.get(GROGGY, 0.0) > 0.0:
+	if _dying.has(GROGGY):
+		_draw_let_go(_dying[GROGGY])
+	elif _level.get(GROGGY, 0.0) > 0.0:
 		_draw_stars(_near, _level[GROGGY], true)
+
+
+## Nothing holds the ring up any more: everything on it leaves from where
+## it is, the way it was going.
+func _let_go() -> void:
+	_loose.clear()
+	for i: int in ORBIT.size():
+		var drift := (0.2 * sin(_time * 0.83 + i * 2.3) + 0.09 * sin(_time * 1.9 + i * 5.1)) * TURBULENCE
+		var angle := _time * RING_SPEED + TAU * i / ORBIT.size() + drift
+		var swing := 1.0 + 0.09 * sin(_time * 1.27 + i * 1.9) * TURBULENCE
+		var bob := Vector2(0, (sin(_time * 2.3 + i * 1.7) * 3.0 + sin(_time * 3.7 + i * 4.1) * 1.5) * TURBULENCE)
+		var depth := (sin(angle) + 1.0) / 2.0
+		var way := (_on_ring(angle + 0.05, swing) - _on_ring(angle, swing)) / 0.05
+		_loose.append({
+			"shape": ORBIT[i],
+			"at": _on_ring(angle, swing) + bob,
+			# Flung off the turn, with a small hop.
+			"speed": way * RING_SPEED * 2.4 + Vector2(randf_range(-20.0, 20.0), randf_range(-110.0, -50.0)),
+			"cell": CELL * lerpf(0.6, 1.25, depth),
+			"dim": 0.4 * (1.0 - depth),
+			"alpha": lerpf(0.45, 1.0, depth),
+		})
+
+
+## The stars `out` seconds after they were let go: they drop and go dark on
+## the way, the sparkles go out where they were and the bubbles burst.
+func _draw_let_go(out: float) -> void:
+	for star: Dictionary in _loose:
+		var at: Vector2 = star.at
+		var cell: float = star.cell
+		if star.shape == STAR:
+			at += star.speed * out + Vector2(0, FALL * out * out / 2.0)
+			var alpha: float = star.alpha * (1.0 - smoothstep(0.4, DEATH[GROGGY], out))
+			# Gold while it flew; plain tin once it falls.
+			_pixels(_near, STAR, STAR_INK, at, alpha, cell, star.dim + 0.5 * smoothstep(0.0, 0.35, out))
+		elif star.shape == TWINKLE:
+			if out < 0.14:
+				_pixels(_near, TWINKLE, TWINKLE_INK, at, star.alpha * (1.0 - out / 0.14), cell, star.dim)
+		elif out < 0.22:
+			# Four drops, flying apart.
+			var far := 3.0 + out * 60.0
+			for arm: Vector2 in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+				_near.draw_rect(Rect2((at + arm * far).round(), Vector2(cell, cell)), Color(BUBBLE, star.alpha * (1.0 - out / 0.22)))
+
+
+## The doll with nothing under it or behind it: over it goes, backwards.
+func _topple() -> void:
+	if not _dying.has(HEXED):
+		if _doll.level > 0.0:
+			_doll.level = 0.0
+			_doll.rotation = 0.0
+			_place_doll()
+		return
+	var out: float = _dying[HEXED]
+	var gone := out / float(DEATH[HEXED])
+	_doll.position = doll_foot + Vector2(-doll_facing * 26.0 * out, FALL * out * out / 2.0)
+	_doll.rotation = -doll_facing * 2.6 * gone * gone
+	_doll.level = 1.0 - smoothstep(0.55, 1.0, gone)
 
 
 ## Where the ring is at `angle`: 0 at its right end, a quarter turn later
@@ -445,12 +566,23 @@ func _on_ring(angle: float, swing := 1.0) -> Vector2:
 ## whole bundle shakes.
 func _draw_bomb() -> void:
 	var level: float = _level.get(TICKING, 0.0)
+	# Its carrier is out: the fuse goes out, and the bundle, with nothing to
+	# lean on, falls over and is gone.
+	var out: float = _dying.get(TICKING, -1.0)
+	var dud := out >= 0.0
+	var turn := 0.0
+	if dud:
+		level = 1.0 - smoothstep(0.7, DEATH[TICKING], out)
+		var over := clampf((out - 0.25) / 0.3, 0.0, 1.0)
+		# Down on its side, and one small bounce.
+		turn = -PI / 2.0 * (over * over - 0.12 * sin(clampf((out - 0.55) / 0.2, 0.0, 1.0) * PI))
 	if level <= 0.0:
 		return
-	var shake := Vector2(roundf(sin(_time * 38.0)), 0) if _urgent else Vector2.ZERO
-	if _urgent:
+	var urgent := _urgent and not dud
+	var shake := Vector2(roundf(sin(_time * 38.0)), 0) if urgent else Vector2.ZERO
+	if urgent:
 		_bomb.draw_circle(bomb_foot + Vector2(0, -14), 23.0 + 4.0 * sin(_time * 10.0), Color(RED, level * 0.22))
-	_bomb.draw_set_transform(bomb_foot + shake, 0.0, Vector2.ONE * lerpf(0.5, 1.0, ease(level, 0.4)))
+	_bomb.draw_set_transform(bomb_foot + shake, turn, Vector2.ONE * lerpf(0.5, 1.0, ease(level, 0.4)))
 	for i: int in 3:
 		var x := -10.0 + i * 7.0
 		var height := 26.0 if i == 1 else 24.0
@@ -472,6 +604,19 @@ func _draw_bomb() -> void:
 	for i: int in left:
 		_bomb.draw_rect(Rect2(path[i], Vector2(2, 2)), Color(FUSE, level))
 	var tip := path[left - 1] + Vector2(1, -1)
+	if dud:
+		if out < 0.1:
+			_bomb.draw_rect(Rect2(tip + Vector2(-1, -1), Vector2(2, 2)), Color(EMBER, level))
+		# What is left of the spark: smoke, straight up whichever way it lies.
+		_bomb.draw_set_transform(Vector2.ZERO)
+		var from := bomb_foot + tip.rotated(turn)
+		for i: int in 4:
+			var life := (out - 0.05 - i * 0.07) / 0.55
+			if life > 0.0 and life < 1.0:
+				var puff := from + Vector2(sin(life * 5.0 + i * 2.1) * 4.0, -6.0 - life * 22.0)
+				var wide := 2.0 + 2.0 * floorf(life * 2.0)
+				_bomb.draw_rect(Rect2((puff - Vector2(wide, wide) / 2.0).round(), Vector2(wide, wide)), Color(SMOKE, 0.7 * (1.0 - life)))
+		return
 	_bomb.draw_circle(tip, 7.0 + 2.0 * sin(_time * 9.0), Color(EMBER, level * 0.24))
 	for i: int in 4:
 		var life := fposmod(_time * 1.8 + i * 0.25, 1.0)
@@ -502,11 +647,14 @@ func _draw_bomb() -> void:
 ## and then and a jump when the oath is tested.
 func _draw_seal() -> void:
 	var level: float = _level.get(SWORN, 0.0)
-	if level <= 0.0:
+	if level <= 0.0 and not _dying.has(SWORN):
 		return
 	if _seal_pressed == null:
 		_seal_pressed = _seal_picture(true)
 		_seal_molten = _seal_picture(false)
+	if _dying.has(SWORN):
+		_draw_seal_cracked(_dying[SWORN])
+		return
 	var cooled := ease(_seal_set, 0.35)
 	var jump := sin(_seal_jolt * PI)
 	var grown := 1.0 + 0.5 * (1.0 - cooled) + 0.3 * jump
@@ -522,6 +670,30 @@ func _draw_seal() -> void:
 		_seal.draw_rect(Rect2(spot + Vector2(-1, -3), Vector2(2, 6)), Color(SPARK, level))
 		_seal.draw_rect(Rect2(spot + Vector2(-3, -1), Vector2(6, 2)), Color(SPARK, level))
 	_seal.draw_set_transform(Vector2.ZERO)
+
+
+## The oath died with whoever swore it: the wax cracks in four, a little off
+## the middle, and the pieces drop.
+func _draw_seal_cracked(out: float) -> void:
+	var half := SEAL_SIZE / 2.0
+	var crack := Vector2(half + 2.0, half - 3.0)
+	var alpha := 1.0 - smoothstep(0.35, DEATH[SWORN], out)
+	var flown := maxf(out - 0.07, 0.0)
+	for piece: int in 4:
+		var side := Vector2(-1.0 if piece % 2 == 0 else 1.0, -1.0 if piece < 2 else 1.0)
+		var corner := Vector2(0.0 if side.x < 0.0 else crack.x, 0.0 if side.y < 0.0 else crack.y)
+		var cut := Rect2(corner, Vector2(crack.x if side.x < 0.0 else SEAL_SIZE - crack.x, crack.y if side.y < 0.0 else SEAL_SIZE - crack.y))
+		var middle := cut.get_center() - Vector2(half, half)
+		var speed := Vector2(side.x * (46.0 + 14.0 * piece), side.y * 30.0 - 60.0)
+		var at := seal_at + middle + speed * flown + Vector2(0, FALL * flown * flown / 2.0)
+		_seal.draw_set_transform(at.round(), side.x * (2.0 + piece) * flown, Vector2.ONE)
+		_seal.draw_texture_rect_region(_seal_pressed, Rect2(-cut.size / 2.0, cut.size), cut, Color(1, 1, 1, alpha))
+	_seal.draw_set_transform(Vector2.ZERO)
+	if out < 0.07:
+		# The crack, before anything moves.
+		var middle := seal_at + crack - Vector2(half, half)
+		_seal.draw_rect(Rect2(middle.x - 1, seal_at.y - half, 2, SEAL_SIZE), Color(SPARK, 0.9))
+		_seal.draw_rect(Rect2(seal_at.x - half, middle.y - 1, SEAL_SIZE, 2), Color(SPARK, 0.9))
 
 
 ## The seal painted pixel by pixel, lit from the top left: `pressed` with the

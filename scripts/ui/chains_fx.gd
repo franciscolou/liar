@@ -40,6 +40,14 @@ const STAR := [
 ]
 ## Lights drifting between the chains.
 const MOTES := 14
+## Chains with nothing left in them (see snap): plain iron, the seconds the
+## light takes to leave them before they give, how long the pieces are
+## there for, and what they fall under.
+const IRON := Color("9a9fa8")
+const IRON_DARK := Color("4a4e57")
+const DRAIN := 0.14
+const WRECK := 1.15
+const WEIGHT := 760.0
 
 ## What the chains are wound about, in the coordinates of this node.
 var box := Rect2():
@@ -50,7 +58,7 @@ var box := Rect2():
 var bound := 0.0:
 	set(value):
 		bound = value
-		visible = bound > 0.0
+		visible = bound > 0.0 or not _wreck.is_empty()
 		set_process(visible)
 
 ## How close they are to being thrown away, 0 to 1: the player in them has
@@ -61,6 +69,10 @@ var doomed := 0.0
 ## One entry per chain: the middle of every link, first to last.
 var _chains: Array = []
 var _time := 0.0
+## The links (and the star, `link` -1) of chains that snapped, each {at,
+## speed, turn, spin, floor, link}, and the seconds since.
+var _wreck: Array = []
+var _snapped := 0.0
 
 
 func _init() -> void:
@@ -76,7 +88,83 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_time += delta
+	if not _wreck.is_empty():
+		_fall(delta)
 	queue_redraw()
+
+
+## Whoever was in them is out, and whatever ran through them went too: the
+## colours go out of them, they are ordinary iron for a moment, and then
+## they break all at once and fall where they hung. Nothing of the sky in
+## it, and nothing is paid (compare PlayFx.chains_break).
+func snap() -> void:
+	_wreck.clear()
+	_snapped = 0.0
+	var centre := box.get_center()
+	for chain: Array in _chains:
+		for i: int in _shown(chain):
+			var at: Vector2 = chain[i]
+			var way: Vector2 = chain[mini(i + 1, chain.size() - 1)] - chain[maxi(i - 1, 0)]
+			var out := (at - centre).normalized() if at.distance_to(centre) > 1.0 else Vector2.UP
+			_wreck.append({
+				"at": at, "turn": way.angle(), "link": i,
+				"speed": out * randf_range(30.0, 190.0) + Vector2(randf_range(-70.0, 70.0), randf_range(-230.0, -40.0)),
+				"spin": randf_range(-14.0, 14.0),
+				"floor": at.y + randf_range(26.0, 64.0),
+			})
+	if bound >= 1.0:
+		_wreck.append({"at": centre, "turn": 0.0, "link": -1, "speed": Vector2(randf_range(-30.0, 30.0), -150.0),
+				"spin": randf_range(-9.0, 9.0), "floor": centre.y + 50.0})
+	visible = not _wreck.is_empty()
+	set_process(visible)
+	queue_redraw()
+
+
+func _fall(delta: float) -> void:
+	_snapped += delta
+	if _snapped >= WRECK:
+		_wreck.clear()
+		visible = bound > 0.0
+		set_process(visible)
+		return
+	if _snapped < DRAIN:
+		return
+	for piece: Dictionary in _wreck:
+		var speed: Vector2 = piece.speed + Vector2(0, WEIGHT * delta)
+		var at: Vector2 = piece.at + speed * delta
+		piece.turn += piece.spin * delta
+		if at.y > piece.floor and speed.y > 0.0:
+			# It lands, hops once and lies there.
+			at.y = piece.floor
+			var hops := speed.y > 120.0
+			speed = Vector2(speed.x * 0.45, -speed.y * 0.28) if hops else Vector2.ZERO
+			piece.spin *= 0.3 if hops else 0.0
+		piece.speed = speed
+		piece.at = at
+
+
+func _draw_wreck() -> void:
+	var dead := clampf(_snapped / DRAIN, 0.0, 1.0)
+	var alpha := 1.0 - smoothstep(WRECK - 0.35, WRECK, _snapped)
+	var split := SPLIT * (1.0 - dead)
+	for image: int in 3:
+		if image < 2 and dead >= 1.0:
+			continue
+		var ink: Color = [RED, CYAN, STEEL][image]
+		for piece: Dictionary in _wreck:
+			var at: Vector2 = piece.at + Vector2([-split, split, 0.0][image], 0)
+			if piece.link < 0:
+				draw_set_transform(Vector2.ZERO)
+				if image == 2:
+					draw_set_transform(at.round(), piece.turn)
+					_star(Vector2.ZERO, Color(VIOLET.lerp(IRON_DARK, dead), alpha), Color(Color.WHITE.lerp(IRON, dead), alpha))
+				continue
+			draw_set_transform(at.round(), piece.turn)
+			if image < 2:
+				_link(piece.link, Color(ink, 0.6 * (1.0 - dead)), Color(ink, 0.6 * (1.0 - dead)))
+			else:
+				_link(piece.link, Color(STEEL.lerp(IRON, dead), alpha), Color(STEEL_DARK.lerp(IRON_DARK, dead), alpha))
+	draw_set_transform(Vector2.ZERO)
 
 
 ## Where every link that is on is right now, on screen: what the chains fly
@@ -122,6 +210,9 @@ func _shown(chain: Array) -> int:
 
 
 func _draw() -> void:
+	if not _wreck.is_empty():
+		_draw_wreck()
+		return
 	if _chains.is_empty():
 		return
 	var split := lerpf(SPLIT_BINDING, SPLIT, bound * bound)

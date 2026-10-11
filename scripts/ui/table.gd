@@ -2177,6 +2177,15 @@ func present(e: GameEvent) -> void:
 			var shown_first := not engine.over
 			# Their box is dragged off first and the cards stay behind: still
 			# face down if they are about to be shown, turning over if not.
+			# Whatever was on them goes first, as plain things with nobody
+			# to be on: the chains just break, with none of the sky in it.
+			var gone_box: Variant = _node_of(d.player)
+			if gone_box != null:
+				var lost: Array[StringName] = gone_box.statuses_lost()
+				if lost.has(&"entropy"):
+					_play_sfx("fx_chains_break")
+				if lost.size() > (1 if lost.has(&"entropy") else 0):
+					_play_sfx("status_break")
 			var gone_seat: SeatView = _seats.get(d.player.id)
 			if gone_seat != null:
 				gone_seat.leave(not shown_first, _speed)

@@ -300,6 +300,15 @@ func status_threatened(id: StringName, on: bool) -> void:
 	_status_fx.threaten(id, on)
 
 
+## The player is out: whatever their statuses looked like comes apart (see
+## StatusFx.die), and the chips go with them. Returns the looks that were
+## showing.
+func statuses_lost() -> Array[StringName]:
+	if player != null and engine != null:
+		_chips.sync(player, engine)
+	return _status_fx.die()
+
+
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).
 func status_pieces(id: StringName) -> Array[Vector2]:
 	return _status_fx.pieces(id)

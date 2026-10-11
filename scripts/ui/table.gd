@@ -1107,6 +1107,12 @@ func _prompt_doubt(d: Decision) -> void:
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), engine.blocked_reason(d.player, [&"doubt"])]
 	elif not d.options.has(GameEngine.STAKE_COINS):
 		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You don't have the %d coins a wrong call costs: pick what you put on the line.") % engine.config.doubt_cost]
+	if not d.options.is_empty():
+		# What the call itself would cost, whoever turns out to be lying.
+		for status_id: StringName in d.player.statuses:
+			var warning: String = Content.statuses.get(status_id, {}).get("doubt_warning", "")
+			if warning != "":
+				text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), Loc.t(warning)]
 	var buttons := _doubt_buttons(d)
 	for option: Dictionary in d.context.get("reactions", []):
 		buttons.append(_reaction_button(option))
@@ -3447,7 +3453,11 @@ func _anim_status_broken(d: Dictionary) -> void:
 		var links: Array[Vector2] = box.status_pieces(d.status)
 		var borrowed: bool = box.status_is_borrowed(d.status)
 		box.sync()
-		await _play_fx.chains_break(d.player, links, borrowed)
+		if d.get("reason", &"") == &"wasted":
+			# Thrown away: nothing is left of them to be paid in.
+			await _play_fx.chains_swallowed(links, borrowed)
+		else:
+			await _play_fx.chains_break(d.player, links, borrowed)
 		return
 	for piece: Vector2 in box.status_pieces(d.status):
 		if d.status == &"truth_bound":

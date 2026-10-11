@@ -70,6 +70,11 @@ const LUTE_REACH := 84.0
 const LUTE_LIFT := 0.95
 ## How many times it comes down on the hand.
 const LUTE_BLOWS := 3
+## How far back the lute is wound for a blow at the glove, how far it goes on
+## through it, and how far from the edge of the screen its belly has to stay.
+const LUTE_WIND := 1.3
+const LUTE_SWEEP := 0.5
+const LUTE_ROOM := 24.0
 ## A Shakedown: the px one hop of the boot covers and the seconds it takes,
 ## how high over the coins the heel is drawn back, how far back the boot is
 ## tipped to pour (toe down: see BootFx.pose), the most coins shown, the
@@ -102,6 +107,8 @@ const DEBRIS_PACE := 0.05
 const CONDENSE := 0.9
 const CONDENSE_STAGGER := 0.08
 const DEBRIS_COINS := 6
+## How long the chains of an Entropy thrown away take to go into the hole.
+const SWALLOW := 0.8
 ## The singularity of a Materialize: how far from the box it opens, how wide
 ## the circle round it is before and at the end of the spin, how fast things
 ## go round it (radians a second) at both ends, how long the spin takes to
@@ -381,9 +388,9 @@ func _note(at: Vector2, index: int) -> void:
 ## A hand in a white glove slips out of the thief's box and goes for the
 ## Bard's coins, in no straight line: it looks round, has second thoughts,
 ## and does the last stretch with its fingers itching. The lute comes down
-## on it, and again: every blow sends it jumping further back, fingers wide
-## and shaking, with the lute coming after it, until it bolts back the way
-## it came.
+## on it, and again, swung from the Bard's side towards where the hand came
+## from: every blow sweeps it further back along its own path, fingers wide
+## and shaking, with the lute coming after it, until it bolts home.
 func _fx_bard_silver_tongue(play: Play) -> void:
 	var speed: float = table._speed
 	var purse: Vector2 = table._coin_anchor(play.actor)
@@ -431,31 +438,39 @@ func _fx_bard_silver_tongue(play: Play) -> void:
 	move.tween_property(glove, "position", reach, 0.34 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	move.parallel().tween_property(glove, "fidget", 1.0, 0.1 / speed)
 	move.parallel().tween_property(glove, "spread", 0.0, 0.2 / speed)
-	# The lute is held by the neck, past the hand and over it (under it, for
-	# a Bard sitting at the top of the screen). The grip moves with every
-	# blow: it is swung with the whole arm, not turned on a pin.
-	var side := 1.0 if way.x >= 0.0 else -1.0
-	var over := -1.0 if reach.y > 170.0 else 1.0
-	# Which way round it comes down.
-	var turn := side * over
-	var grip := reach + Vector2(side * 0.8, over * 0.6) * LUTE_REACH
+	# The lute is held by the neck and swung like a bat, from beside the
+	# hand's path: its belly comes round from the Bard's side and sweeps the
+	# hand back the way it came. The grip is on whichever side of the path is
+	# nearer the middle of the screen, and moves with every blow: it is swung
+	# with the whole arm, not turned on a pin.
+	var room := get_viewport_rect().grow(-LUTE_ROOM)
+	var side := 1.0
+	if (reach - across * LUTE_REACH).distance_squared_to(room.get_center()) \
+			< (reach + across * LUTE_REACH).distance_squared_to(room.get_center()):
+		side = -1.0
+	var held := across * side * LUTE_REACH
+	var grip := reach + held
+	# Turning this way round takes the belly back along the hand's path.
+	var turn := side
+	var struck := held.angle()
+	# How far it is wound back: less, where the belly would leave the screen.
+	var lift := LUTE_WIND
+	while lift > 0.5 and not room.has_point(grip - Vector2.from_angle(struck - turn * lift) * LUTE_REACH):
+		lift -= 0.1
+	var raised := struck - turn * lift * 0.7
 	var club := Control.new()
 	club.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	club.position = grip
-	var struck := (reach - grip).angle() - PI
-	var raised := struck - LUTE_LIFT * turn
 	club.rotation = raised
 	club.modulate.a = 0.0
 	var lute := LuteFx.new()
 	lute.position = Vector2(LuteFx.BELLY - LUTE_REACH, 0.0)
 	club.add_child(lute)
 	add_child(club)
-	# Which way a blow sends the hand: the way the belly of the lute is going.
-	var blow := (reach - (grip - Vector2.from_angle(raised) * LUTE_REACH)).normalized()
-	# Every blow drives the hand further back, and the lute goes after it.
-	var held := grip - reach
+	# Every blow drives the hand further back along its own path, a little
+	# more each time, and the lute goes after it.
 	var spot := reach
-	var step := clampf(from.distance_to(reach) / (LUTE_BLOWS + 1.0), 14.0, 46.0)
+	var step := clampf(from.distance_to(reach) / (LUTE_BLOWS + 0.5), 14.0, 60.0)
 	await _wait(0.85)
 	club.create_tween().tween_property(club, "modulate:a", 1.0, 0.12 / speed)
 	await _wait(0.3)
@@ -468,24 +483,26 @@ func _fx_bard_silver_tongue(play: Play) -> void:
 		var fall := 0.22 if last else 0.07
 		var hard := 1.0 + 0.25 * knock
 		grip = spot + held
-		# Where the hand jumps back to, and so where the next one lands.
-		var back := spot - way * step + across * (10.0 if knock % 2 == 0 else -10.0)
+		# Where the hand is sent, and so where the next one lands.
+		var sent := step * (0.7 + 0.3 * knock)
+		var back := spot - way * sent
 		var swing := club.create_tween()
-		swing.tween_property(club, "position", grip - blow * (34.0 if last else 22.0), wind / speed) \
+		swing.tween_property(club, "position", grip + way * (20.0 if last else 12.0), wind / speed) \
 				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		swing.parallel().tween_property(club, "rotation", raised - turn * (0.5 if last else 0.35), wind / speed) \
+		swing.parallel().tween_property(club, "rotation", struck - turn * lift, wind / speed) \
 				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 		if last:
 			struck += turn * TAU
 			raised += turn * TAU
-		swing.tween_property(club, "position", grip + blow * 10.0, fall / speed) \
+		swing.tween_property(club, "position", grip - way * 6.0, fall / speed) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		swing.parallel().tween_property(club, "rotation", struck + turn * 0.1, fall / speed) \
+		swing.parallel().tween_property(club, "rotation", struck, fall / speed) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		# It bounces off, and is lifted again over where the hand went.
-		swing.tween_property(club, "position", grip - blow * 10.0, 0.1 / speed) \
+		# It goes on through, pushing the hand ahead of it, and is then drawn
+		# back beside where the hand went.
+		swing.tween_property(club, "position", grip - way * 14.0, 0.1 / speed) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		swing.parallel().tween_property(club, "rotation", struck - turn * 0.3, 0.1 / speed) \
+		swing.parallel().tween_property(club, "rotation", struck + turn * LUTE_SWEEP, 0.1 / speed) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		swing.parallel().tween_property(lute, "scale", Vector2(0.86, 1.18), 0.04 / speed)
 		swing.parallel().tween_property(lute, "scale", Vector2.ONE, 0.12 / speed).set_delay(0.04 / speed)
@@ -495,13 +512,17 @@ func _fx_bard_silver_tongue(play: Play) -> void:
 		await _wait(wind + fall)
 		if not is_instance_valid(glove):
 			return
-		_snd("fx_lute_bonk")
+		# A different wreck of a sound for every blow.
+		table._play_sfx("fx_lute_bonk_%d" % (knock + 1), "fx_lute_bonk")
 		lute.pluck(0.5)
 		burst(spot, Color.WHITE, 8 + 4 * knock, 200.0 * hard, 0.3, 400.0, 6.0)
 		ring(spot, UI.GOLD, 10.0, 70.0 * hard, 0.25, 5.0)
+		# The way it is sent.
+		for off: float in [-14.0, 14.0]:
+			line(spot + across * off, spot + across * off - way * sent, Color.WHITE, 3.0, 0.22)
 		table._shake_screen(5.0 * hard)
-		# Knocked flat, then back out of the way, stiff, fingers wide and
-		# shaking all over.
+		# Squashed against the belly, then back the way it came, stiff,
+		# fingers wide and shaking all over.
 		move.kill()
 		glove.sting = 1.0
 		glove.spread = 1.0
@@ -509,9 +530,9 @@ func _fx_bard_silver_tongue(play: Play) -> void:
 		glove.rotation = aim
 		glove.position = spot
 		move = glove.create_tween()
-		move.tween_property(glove, "position", spot + blow * 18.0 * hard, 0.05 / speed)
-		move.parallel().tween_property(glove, "scale", Vector2(1.3, 0.65), 0.05 / speed)
-		move.tween_property(glove, "position", back, 0.14 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		move.tween_property(glove, "position", spot - way * sent * 0.55, 0.05 / speed)
+		move.parallel().tween_property(glove, "scale", Vector2(0.65, 1.3), 0.05 / speed)
+		move.tween_property(glove, "position", back, 0.14 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		move.parallel().tween_property(glove, "scale", Vector2.ONE, 0.14 / speed)
 		move.parallel().tween_property(glove, "sting", 0.0, 0.5 / speed)
 		move.tween_callback(_alarm.bind(back))
@@ -2937,6 +2958,58 @@ func chains_break(who: PlayerState, links: Array[Vector2], borrowed := false) ->
 	slow.tween_interval(DEBRIS_BLAST / speed)
 	slow.tween_property(debris, "pace", DEBRIS_PACE, 0.22 / speed).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 	await _wait(0.85)
+
+
+## The chains of an Entropy thrown away (their owner called LIAR!): a
+## singularity opens where they cross and takes them, `links`, straight in,
+## link after link and whole. Nothing comes out of it. `borrowed` chains go
+## as badly as they were copied.
+func chains_swallowed(links: Array[Vector2], borrowed := false) -> void:
+	if links.is_empty():
+		return
+	# Not over a disguise that is on: that look is somebody else's to end.
+	var spoiled := borrowed and (_glitch == null or not is_instance_valid(_glitch))
+	if spoiled:
+		corrupt()
+	var speed: float = table._speed
+	var centre := Vector2.ZERO
+	for link: Vector2 in links:
+		centre += link / links.size()
+	var chains := SwallowFx.new()
+	add_child(chains)
+	chains.lay(links, centre)
+	var hole := SingularityFx.new()
+	hole.speed = speed
+	hole.position = centre
+	add_child(hole)
+	dim(0.5, SWALLOW + 1.0)
+	_snd("fx_singularity")
+	_prism_rings(centre, 90.0, 14.0, 0.4, 3.0)
+	hole.create_tween().tween_property(hole, "open", 1.0, 0.35 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.4)
+	if not is_instance_valid(hole) or not is_instance_valid(chains):
+		return
+	_snd("fx_chains")
+	var feed := hole.create_tween().set_parallel()
+	feed.tween_property(chains, "drawn", 1.0, SWALLOW / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	feed.tween_property(hole, "spin", 12.0, SWALLOW / speed)
+	feed.tween_property(hole, "pull", 1.0, SWALLOW / speed)
+	for beat: float in [0.0, 0.45, 0.8]:
+		get_tree().create_timer(maxf(beat * SWALLOW, 0.01) / speed).timeout.connect(_drawn_in.bind(hole))
+	await _wait(SWALLOW)
+	if is_instance_valid(chains):
+		chains.queue_free()
+	if not is_instance_valid(hole):
+		return
+	# It shuts on what it took.
+	table._shake_screen(4.0)
+	table._float(Loc.t("WASTED"), centre + Vector2(0, -34), UI.MUTED, 18)
+	var close := hole.create_tween()
+	close.tween_property(hole, "open", 0.0, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	close.tween_callback(hole.queue_free)
+	await _wait(0.4)
+	if spoiled:
+		cleanse()
 
 
 ## True while the broken chains of `who` hang in the air.
@@ -5803,6 +5876,72 @@ class DebrisFx extends Control:
 				else:
 					draw_rect(Rect2(-4, -1, 8, 2), ink)
 		draw_set_transform(Vector2.ZERO)
+
+
+## The chains of an Entropy going into a singularity at `hub`: every link
+## is drawn straight to it along its own line, all of them by the same
+## length, the way a chain is hauled in, and is gone at the rim of the hole.
+## They keep their shape to the end. `drawn` is how far the haul has got.
+class SwallowFx extends Control:
+	const STEEL_DARK := Color("8f96c4")
+	## Where a link is gone: under the disc of the hole.
+	const RIM := 9.0
+	const SPLIT := 2.0
+
+	var hub := Vector2.ZERO
+	var drawn := 0.0
+
+	var _links: Array = []  # {way, far, index}
+	var _reach := 0.0
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func lay(links: Array[Vector2], centre: Vector2) -> void:
+		hub = centre
+		for i: int in links.size():
+			var out := links[i] - centre
+			var far := out.length()
+			_links.append({"way": out / far if far > 0.5 else Vector2.RIGHT, "far": far, "index": i})
+			_reach = maxf(_reach, far)
+
+	func _process(delta: float) -> void:
+		_time += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		var hauled := drawn * (_reach + 4.0)
+		# Wider apart the harder they are pulled.
+		var split := SPLIT + 4.0 * drawn
+		for image: int in 3:
+			var apart := Vector2([-split, split, 0.0][image], 0)
+			for link: Dictionary in _links:
+				var left: float = link.far - hauled
+				if left <= RIM:
+					continue
+				var way: Vector2 = link.way
+				# Taut, and shivering with it.
+				var shiver := way.orthogonal() * sin(_time * 34.0 + link.index * 1.7) * 1.5 * minf(drawn * 4.0, 1.0)
+				draw_set_transform((hub + way * left + shiver + apart).round(), way.angle())
+				if image < 2:
+					var ghost := Color(PrismFx.RED if image == 0 else PrismFx.CYAN, 0.6)
+					_link(link.index, ghost, ghost)
+				else:
+					var lit := Color.from_hsv(fposmod(link.index * 0.035 + _time * 0.6, 1.0), 0.55, 1.0)
+					var near := clampf(1.0 - (left - RIM) / 40.0, 0.0, 1.0)
+					_link(link.index, DebrisFx.STEEL.lerp(lit, near), STEEL_DARK.lerp(lit, near))
+		draw_set_transform(Vector2.ZERO)
+
+	# The links of ChainsFx: a ring face on, then a bar edge on.
+	func _link(index: int, light: Color, dark: Color) -> void:
+		if index % 2 == 1:
+			draw_rect(Rect2(-5, -1, 10, 2), light)
+			return
+		draw_rect(Rect2(-6, -4, 12, 2), light)
+		draw_rect(Rect2(-6, 2, 12, 2), dark)
+		draw_rect(Rect2(-6, -2, 2, 4), light)
+		draw_rect(Rect2(4, -2, 2, 4), dark)
 
 
 ## The singularity of a Materialize: a black disc with a bright rim, dust of

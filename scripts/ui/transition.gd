@@ -237,6 +237,8 @@ func _slide(amount: float) -> void:
 
 func _play(sound: String) -> void:
 	if not is_inside_tree():
+		# The first transition of all: this node is still on its way into the tree.
+		tree_entered.connect(_play.bind(sound), CONNECT_ONE_SHOT)
 		return
 	if not _sfx.has(sound):
 		var stream: AudioStream = null

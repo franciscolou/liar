@@ -1135,9 +1135,11 @@ func add_status(player: PlayerState, status_id: StringName, options: Dictionary 
 	await fire(&"status_added", {"player": player, "status": status_id})
 
 
-func remove_status(player: PlayerState, status_id: StringName) -> void:
+## `reason` says why, when it is not just over: &"wasted" for one that was
+## thrown away with nothing for it (see entity.gd).
+func remove_status(player: PlayerState, status_id: StringName, reason := &"") -> void:
 	if player.statuses.erase(status_id):
-		await fire(&"status_removed", {"player": player, "status": status_id})
+		await fire(&"status_removed", {"player": player, "status": status_id, "reason": reason})
 
 
 ## "" if nothing stops `player` from using something with these tags.

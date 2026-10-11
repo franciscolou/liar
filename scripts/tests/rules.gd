@@ -44,6 +44,8 @@ static func run() -> int:
 		"entropy breaks into 1 Morale and 3 coins": _entropy.bind(2, 1, 3),
 		"entropy at full Morale breaks into 5 coins": _entropy.bind(3, 0, 5),
 		"entropy takes the whole turn": _entropy_whole_turn,
+		"entropy is thrown away by a LIAR! call": _entropy_wasted.bind(true),
+		"entropy survives a claim let pass": _entropy_wasted.bind(false),
 		"a Morale becomes an item, and the change": _materialize.bind(&"shield", 1),
 		"a dearer item is paid for on top of the Morale": _materialize.bind(&"potion", -4),
 		"the last Morale is not for sale": _materialize_last,
@@ -167,6 +169,30 @@ static func _entropy_whole_turn() -> String:
 		return "not offered on a fresh turn"
 	engine.players[0].turn["busy"] = true
 	return "" if engine.claim_block_reason(engine.players[0], entropy) != "" else "offered after something else"
+
+
+## Player 0 is in chains when player 1 bluffs a Mickey Finn. If they `call`
+## it, the chains go at once and the next turn pays nothing, right as the
+## call was; if they let it pass, the chains pay as ever.
+static func _entropy_wasted(call: bool) -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	p.morale = 2
+	await engine.add_status(p, &"entropy", {"by": p.id})
+	if call:
+		table.puppets[0].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+			return d.options[0] if not d.options.is_empty() else false
+	await table.spike(1, 2)
+	if table.asked(0, Decision.Kind.DOUBT).is_empty():
+		return "never offered the call"
+	if p.has_status(&"entropy") == call:
+		return "the chains are gone" if not call else "still in chains"
+	if call and engine.players[1].morale != engine.config.start_morale - 1:
+		return "the liar was not caught"
+	await engine.fire(&"turn_started", {"player": p})
+	var paid := "%d Morale, %d coins" % [p.morale - 2, p.coins - 20]
+	return "" if paid == ("0 Morale, 0 coins" if call else "1 Morale, 3 coins") else "paid " + paid
 
 
 ## Player 0 turns a Morale into `item`: `coins` is what that does to their

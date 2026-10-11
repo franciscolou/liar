@@ -57,7 +57,8 @@ extends RefCounted
 ##     won: it fell on the side the player was hoping for
 ##   note {player, text, good, tag}             news from content that no other event
 ##     carries: `text` is an English key with one %s for the player's name
-##   status_added / status_removed {player, status}
+##   status_added {player, status} / status_removed {player, status, reason}
+##     (reason: &"" when it just ended, &"wasted" when it was thrown away)
 ##   counter_changed {player, counter, value, delta}  a private counter is its owner's secret
 
 var type: StringName

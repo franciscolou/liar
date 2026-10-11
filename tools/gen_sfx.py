@@ -764,11 +764,14 @@ def fx_lute_flourish():
     return let_ring(out)
 
 
-def slack_string(freq, seconds, decay, drop, wobble, seed):
+def slack_string(freq, seconds, decay, drop, wobble, seed, stiff=0.0):
     """A string knocked out of tune: it starts on its note and sags `drop`
-    of the way down from it, warbling as it goes."""
+    of the way down from it (or creeps up, if negative), warbling as it goes.
+    `stiff` pulls its overtones sharp of the harmonics, like a wire rather
+    than a string."""
     def bent(n):
-        return lambda t: (freq * n * (1.0 - drop * (1.0 - math.exp(-t * 7.0)))
+        ratio = n * (1.0 + stiff * (n * n - 1.0))
+        return lambda t: (freq * ratio * (1.0 - drop * (1.0 - math.exp(-t * 7.0)))
                           * (1.0 + wobble * math.exp(-t * 4.0) * math.sin(TAU * 11.0 * t + seed)))
     out = silence(seconds)
     for n in range(1, 7):
@@ -777,23 +780,49 @@ def slack_string(freq, seconds, decay, drop, wobble, seed):
     return out
 
 
-def fx_lute_bonk():
+def lute_bonk(seed, strings, heft=1.0):
     """The belly of a lute brought down on knuckles: a hollow knock, and
-    every string on it jangling and going flat, each by its own amount.
-    Nobody would take it for a chord."""
-    out = silence(1.1)
-    mix(out, wood_knock(67), 0.0, 1.0)
+    every string on it jangling and going out of tune, each by its own
+    amount and not all at once. `strings` are (Hz, sag, warble): notes that
+    belong to no chord, some a quarter tone from their neighbour. Each is a
+    course of two wires that no longer agree, so they beat against each
+    other. Nobody would take it for a chord."""
+    rng = random.Random(seed)
+    out = silence(1.2)
+    mix(out, wood_knock(seed), 0.0, 1.0)
     mix(out, tone(150, 0.25, 0.001, 0.1, glide=0.6), 0.0, 0.7)
     # The weight of it: the whole body of the lute landing, low and heavy.
-    mix(out, tone(78, 0.5, 0.002, 0.24, glide=0.5), 0.0, 1.5)
-    mix(out, tone(46, 0.45, 0.004, 0.2, glide=0.8), 0.0, 0.8)
-    mix(out, lowpass(noise(0.3, 0.003, 0.13, 313), 240), 0.0, 1.3)
-    strings = ((196.0, 0.10, 0.030), (277.2, 0.16, 0.045), (370.0, 0.07, 0.025), (466.2, 0.20, 0.050), (622.3, 0.13, 0.035))
+    mix(out, tone(78, 0.5, 0.002, 0.24, glide=0.5), 0.0, 1.5 * heft)
+    mix(out, tone(46, 0.45, 0.004, 0.2, glide=0.8), 0.0, 0.8 * heft)
+    mix(out, lowpass(noise(0.3, 0.003, 0.13, seed + 2), 240), 0.0, 1.3 * heft)
     for i, (freq, drop, wobble) in enumerate(strings):
-        mix(out, slack_string(freq, 1.0, 0.55, drop, wobble, 300 + i), 0.006 * i, 0.3)
+        at = rng.uniform(0.0, 0.045)
+        ring = rng.uniform(0.45, 0.8)
+        stiff = rng.uniform(0.002, 0.007)
+        mix(out, slack_string(freq, 1.05, ring, drop, wobble, seed + 10 * i, stiff), at, 0.36)
+        # The other wire of the course: off by a good part of a semitone,
+        # sagging by another amount, a moment later.
+        mix(out, slack_string(freq * rng.uniform(1.018, 1.045), 1.05, ring * 0.8, drop * rng.uniform(0.3, 1.7),
+                              wobble * 1.4, seed + 10 * i + 5, stiff), at + rng.uniform(0.004, 0.02), 0.24)
     # The wires rattling on the frets right after the blow.
-    mix(out, bandpass(noise(0.2, 0.004, 0.12, 311), 2200, 6500), 0.01, 0.12)
+    mix(out, bandpass(noise(0.2, 0.004, 0.12, seed + 1), 2200, 6500), 0.01, 0.12)
     return drive(out, 1.3)
+
+
+# Three blows, three wrecks: none repeats the notes of another, and each is
+# further gone than the one before.
+BONKS = (
+    (67, ((185.0, 0.12, 0.04), (207.7, -0.05, 0.05), (311.1, 0.20, 0.06), (339.3, 0.09, 0.04),
+          (554.4, 0.25, 0.07), (740.0, 0.15, 0.05)), 1.0),
+    (167, ((174.6, 0.22, 0.05), (254.2, 0.10, 0.06), (277.2, -0.08, 0.07), (415.3, 0.30, 0.08),
+           (452.9, 0.16, 0.05), (830.6, 0.22, 0.09)), 1.1),
+    (267, ((155.6, 0.30, 0.07), (164.8, 0.18, 0.08), (233.1, -0.11, 0.09), (359.5, 0.35, 0.10),
+           (493.9, 0.26, 0.08), (523.3, 0.40, 0.11), (932.3, 0.30, 0.12)), 1.25),
+)
+
+
+def fx_lute_bonk(blow=0):
+    return lute_bonk(*BONKS[blow])
 
 
 def spur(seconds, turns, seed, pitch=1.0):
@@ -1678,6 +1707,9 @@ SOUNDS = {
     "fx_lute": fx_lute,
     "fx_lute_flourish": fx_lute_flourish,
     "fx_lute_bonk": fx_lute_bonk,
+    "fx_lute_bonk_1": fx_lute_bonk,
+    "fx_lute_bonk_2": lambda: fx_lute_bonk(1),
+    "fx_lute_bonk_3": lambda: fx_lute_bonk(2),
     "fx_cash": fx_cash,
     "fx_boot_step": fx_boot_step,
     "fx_spur": fx_spur,

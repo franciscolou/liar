@@ -134,6 +134,7 @@ func _doubt(play: Play, stakes: Array) -> Variant:
 		chance += 0.15
 	# Few people bluff Under Oath, with their whole purse on the line.
 	chance /= oath_caution(play.actor, engine)
+	chance *= doubt_restraint(player)
 	if stake == GameEngine.STAKE_MORALE:
 		chance *= 0.4
 	elif player.coins - engine.config.doubt_cost < 2:
@@ -145,6 +146,15 @@ func _doubt(play: Play, stakes: Array) -> Variant:
 ## caught Under Oath would cost: 1 with nothing extra at stake.
 static func oath_caution(who: PlayerState, game: GameEngine) -> float:
 	return 1.0 + game.oath_stake(who) / 6.0
+
+
+## How much of its wish to call LIAR! is left to `who` under the statuses
+## they carry (`ai_doubt` of a status: the call costs them something).
+static func doubt_restraint(who: PlayerState) -> float:
+	var left := 1.0
+	for status_id: StringName in who.statuses:
+		left *= float(Content.statuses.get(status_id, {}).get("ai_doubt", 1.0))
+	return left
 
 
 ## What a bot that isn't sure would put up, or &"" if nothing is worth it.

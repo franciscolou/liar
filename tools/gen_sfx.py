@@ -1200,6 +1200,179 @@ def fx_boom():
     return drive(out[:int(1.5 * RATE)], 3.5)
 
 
+def swell(samples, seconds):
+    """Fades `samples` in over their first `seconds`, the way a sound played
+    backwards arrives."""
+    n = int(seconds * RATE)
+    return [x * min(1.0, i / n) ** 2 for i, x in enumerate(samples)]
+
+
+def choir(freqs, seconds, attack, decay, spread=0.004, vibrato=0.003):
+    """Voices holding a chord somewhere far off: every note sung three times a
+    hair apart, so that it shimmers."""
+    out = silence(seconds)
+    for k, freq in enumerate(freqs):
+        for detune in (1.0 - spread, 1.0, 1.0 + spread):
+            mix(out, tone(freq * detune, seconds, attack, decay, vibrato=vibrato), 0.0, 1.0 / (1.0 + 0.35 * k))
+    return out
+
+
+def heavy_chain(seconds, links, seed):
+    """A chain as thick as a wrist run out over something: `links` knocks of
+    iron on iron, close together and none at the same pitch."""
+    rng = random.Random(seed)
+    out = silence(seconds + 0.2)
+    for i in range(links):
+        at = seconds * (i + rng.uniform(-0.3, 0.3)) / links
+        freq = rng.uniform(700, 1900)
+        strength = rng.uniform(0.5, 1.0)
+        for ratio, gain, decay in ((1.0, 1.0, 0.07), (2.41, 0.6, 0.05), (3.9, 0.35, 0.03), (6.3, 0.2, 0.02)):
+            mix(out, tone(freq * ratio, 0.14, 0.0005, decay), max(at, 0.0), 0.35 * gain * strength)
+        mix(out, bandpass(noise(0.012, 0.0003, 0.005, rng.randrange(1 << 30)), 1500, 8000), max(at, 0.0), 0.5 * strength)
+    return out
+
+
+def fx_entropy():
+    """The light of the table drawn in on one place: a chord that arrives
+    backwards, three hairs out of tune with itself, and the air going with it."""
+    out = silence(0.95)
+    mix(out, swell(choir((146.8, 220.0, 293.7, 440.0, 659.3), 0.8, 0.6, 0.5, 0.012), 0.7), 0.0, 0.5)
+    mix(out, swell(bandpass(noise(0.75, 0.6, 0.3, 301), 400, lambda t: 800 + 9000 * t), 0.7), 0.0, 0.5)
+    # It closes.
+    mix(out, tone(64, 0.3, 0.002, 0.14, glide=0.6), 0.72, 1.4)
+    mix(out, lowpass(noise(0.1, 0.001, 0.04, 303), 600), 0.72, 0.6)
+    return out
+
+
+def fx_chains():
+    """Chains thrown round something and pulled tight: iron running out, the
+    clunk as they lock, and a ring that is not quite of this world."""
+    out = silence(1.5)
+    mix(out, heavy_chain(0.5, 22, 305), 0.0, 0.9)
+    # Pulled tight.
+    mix(out, tone(84, 0.35, 0.001, 0.16, glide=0.6), 0.52, 1.6)
+    mix(out, bandpass(noise(0.04, 0.0004, 0.015, 307), 500, 5000), 0.52, 1.0)
+    for freq, gain in ((392.0, 0.5), (1046.5, 0.3), (1661.2, 0.2)):
+        for detune in (0.985, 1.0, 1.015):
+            mix(out, tone(freq * detune, 0.9, 0.002, 0.6), 0.53, gain * 0.4)
+    mix(out, choir((587.3, 880.0, 1318.5), 0.9, 0.3, 0.6, 0.01), 0.55, 0.12)
+    return out[:int(1.5 * RATE)]
+
+
+def fx_supernova():
+    """What goes on under chains breaking (the iron itself is a recording,
+    fx_chains_break: see cut_sfx.py), like a star going out: a blow from far
+    below, time winding down, and then nothing but voices and falling glass,
+    slow."""
+    out = silence(3.2)
+    # From far below.
+    mix(out, tone(58, 1.8, 0.002, 0.9, glide=0.42), 0.0, 2.6)
+    mix(out, tone(87, 1.2, 0.002, 0.5, glide=0.5), 0.0, 1.0)
+    mix(out, lowpass(noise(1.8, 0.004, 0.8, 315), lambda t: 160 + 4200 * math.exp(-t * 7.0)), 0.0, 1.5)
+    # Time winding down: everything that was ringing sinks and stops.
+    mix(out, tone(lambda t: 1400 * math.exp(-t * 5.5) + 60, 0.6, 0.002, 0.45, shape="tri"), 0.06, 0.5)
+    mix(out, tone(lambda t: 2100 * math.exp(-t * 5.0) + 90, 0.6, 0.002, 0.4), 0.06, 0.3)
+    # What is left hangs there: voices a long way off...
+    mix(out, choir((110.0, 164.8, 220.0, 329.6, 493.9, 659.3), 2.9, 0.5, 1.9, 0.006, 0.004), 0.25, 0.22)
+    # ...and glass coming down in no hurry.
+    rng = random.Random(317)
+    for i in range(26):
+        at = 0.2 + 2.3 * rng.random() ** 1.4
+        freq = rng.choice((1318.5, 1568.0, 1975.5, 2637.0, 3136.0, 3951.1)) * rng.uniform(0.99, 1.01)
+        mix(out, tone(freq, 0.5, 0.002, rng.uniform(0.15, 0.4), glide=0.985), at, 0.12 * (1.0 - 0.3 * at / 2.5))
+    return drive(out[:int(3.2 * RATE)], 2.2)
+
+
+def fx_stardust():
+    """Splinters winding in on one another until they are something: glass
+    notes climbing closer and closer together, and the click of it being whole."""
+    out = silence(1.25)
+    scale = (659.3, 784.0, 880.0, 987.8, 1174.7, 1318.5, 1568.0, 1760.0, 1975.5, 2349.3, 2637.0)
+    at = 0.0
+    for i, freq in enumerate(scale):
+        mix(out, bell(freq, 0.4, 0.22), at, 0.3 + 0.03 * i)
+        at += 0.13 * 0.86 ** i
+    mix(out, swell(tone(lambda t: 300 + 900 * t * t, 0.9, 0.5, 0.4), 0.8), 0.0, 0.18)
+    mix(out, bell(2637.0, 0.5, 0.4), 0.9, 0.6)
+    mix(out, bell(3951.1, 0.4, 0.3), 0.9, 0.3)
+    return out
+
+
+def fx_singularity():
+    """A hole opening in the air: the room is pulled a little flat and
+    something very low starts to turn."""
+    out = silence(0.9)
+    mix(out, tone(lambda t: 420 * math.exp(-t * 6.0) + 48, 0.8, 0.01, 0.6), 0.0, 1.2)
+    mix(out, swell(bandpass(noise(0.4, 0.3, 0.2, 321), 300, lambda t: 5000 - 9000 * t), 0.3), 0.0, 0.5)
+    hum = tone(52, 0.8, 0.2, 0.7)
+    mix(out, [x * (0.6 + 0.4 * math.sin(TAU * 7.0 * i / RATE)) for i, x in enumerate(hum)], 0.1, 0.8)
+    mix(out, choir((880.0, 1318.5), 0.7, 0.25, 0.5, 0.012), 0.15, 0.1)
+    return out
+
+
+def fx_spaghettify():
+    """Something going round a hole, faster every turn and pulled thinner: a
+    whoosh for each time it comes past, the turns closing up until they are
+    one note, and that note climbing out of hearing. It stops dead: what
+    comes next is fx_materialize."""
+    lead, spin = 0.4, 2.1
+    seconds = lead + spin
+    n = int(seconds * RATE)
+    rng = random.Random(323)
+    out = []
+    turns = 0.0
+    low = 0.0
+    air = 0.0
+    phase = [0.0, 0.0, 0.0]
+    for i in range(n):
+        t = i / RATE
+        k = max(t - lead, 0.0) / spin
+        # Radians a second, as the table spins it (WHIRL_SLOW to WHIRL_FAST).
+        speed = 2.6 + (30.0 - 2.6) * k * k
+        turns += speed / TAU / RATE
+        # It comes past once a turn.
+        past = 0.5 + 0.5 * math.cos(TAU * turns)
+        past = past ** (3.0 - 2.0 * k)
+        white = rng.uniform(-1, 1)
+        cutoff = 500 + 5200 * k * k
+        a = 1.0 - math.exp(-TAU * cutoff / RATE)
+        low += a * (white - low)
+        air += (1.0 - math.exp(-TAU * 180 / RATE)) * (low - air)
+        whoosh = (low - air) * (0.25 + 0.75 * past) * (0.5 + 0.9 * k)
+        # The note the turns close up into, and two more a hair off it.
+        s = 0.0
+        freq = 82.4 * 2.0 ** (3.4 * k * k)
+        for v, detune in enumerate((0.988, 1.0, 1.012)):
+            phase[v] += freq * detune / RATE
+            s += math.sin(TAU * phase[v]) + 0.3 * math.sin(TAU * 2.0 * phase[v])
+        s *= 0.16 * (0.3 + 0.7 * k) * (0.6 + 0.4 * past)
+        rumble = 0.5 * math.sin(TAU * 46.0 * t) * (0.4 + 0.6 * past) * min(1.0, t / 0.3)
+        out.append((whoosh * 2.2 + s + rumble) * min(1.0, t / 0.15))
+    # Starlight going in with it, thicker towards the end.
+    for i in range(34):
+        at = lead + spin * rng.random() ** 0.55
+        freq = rng.choice((1568.0, 1975.5, 2349.3, 2637.0, 3136.0, 3951.1))
+        mix(out, tone(freq, 0.12, 0.002, 0.07, glide=1.06), min(at, seconds - 0.13), 0.1)
+    return out[:n]
+
+
+def fx_materialize():
+    """It is a thing now: a blow with no weight to it, a chord of glass that
+    opens out, and the dust of it settling."""
+    out = silence(1.6)
+    mix(out, noise(0.03, 0.0003, 0.012, 327), 0.0, 0.9)
+    mix(out, tone(66, 0.5, 0.001, 0.22, glide=0.5), 0.0, 1.8)
+    for k, freq in enumerate((523.3, 784.0, 1046.5, 1318.5, 1568.0, 2093.0)):
+        for detune in (0.992, 1.0, 1.008):
+            mix(out, bell(freq * detune, 1.4, 1.0), 0.012 * k, 0.22 / (1.0 + 0.2 * k))
+    mix(out, tone(lambda t: 3000 * math.exp(-t * 4.0) + 200, 0.5, 0.002, 0.3), 0.0, 0.15)
+    rng = random.Random(329)
+    for i in range(14):
+        at = 0.1 + 1.0 * rng.random()
+        mix(out, tone(rng.choice((2637.0, 3136.0, 3951.1, 4186.0)), 0.25, 0.002, 0.14), at, 0.07)
+    return out[:int(1.6 * RATE)]
+
+
 # The doors themselves (ui_doors_shut, ui_doors_open) are recordings: see cut_sfx.py.
 
 
@@ -1330,6 +1503,13 @@ SOUNDS = {
     "fx_wave": fx_wave,
     "fx_fuse": fx_fuse,
     "fx_boom": fx_boom,
+    "fx_entropy": fx_entropy,
+    "fx_chains": fx_chains,
+    "fx_supernova": fx_supernova,
+    "fx_stardust": fx_stardust,
+    "fx_singularity": fx_singularity,
+    "fx_spaghettify": fx_spaghettify,
+    "fx_materialize": fx_materialize,
     "item_get": item_get,
     "item_use": item_use,
     "item_silencer": item_silencer,
@@ -1358,6 +1538,8 @@ PEAKS = {
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
     "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
     "ui_gather": 0.5,
+    "fx_entropy": 0.6, "fx_chains": 0.7, "fx_supernova": 0.97, "fx_stardust": 0.45, "fx_singularity": 0.65,
+    "fx_spaghettify": 0.8, "fx_materialize": 0.85,
 }
 
 

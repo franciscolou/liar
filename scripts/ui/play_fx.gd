@@ -27,6 +27,7 @@ const CHIP_GREEN := Color("3f8a5a")
 const POT := Vector2(576, 322)
 const VoodooDoll := preload("res://scripts/ui/voodoo_doll.gd")
 const COIN_ART := "res://assets/ui/coin.png"
+const HEART_ART := "res://assets/ui/heart.png"
 ## The potion going down: how many steps, over how long, and what is left
 ## where the liquid was.
 const GAVEL_RAISED := 0.95  # radians the gavel is lifted before a knock
@@ -87,6 +88,33 @@ const DRAIN_TIME := 0.6
 const EMPTY_GLASS := Color(0.78, 0.9, 0.96, 0.16)
 ## How long an item takes to be printed out of the hat.
 const PRINT_TIME := 0.85
+## The Entity: the violet of its light, and how far apart the three images
+## of its things are drawn.
+const COSMOS := Color("9b6bff")
+const PRISM_SPLIT := 6.0
+## The chains of an Entropy, broken: how long they fly at full speed, how slow
+## time goes for the pieces after that, how long they take to wind in on
+## what they become (and from one of those to the next), and how many coins
+## at most are shown.
+const DEBRIS_BLAST := 0.1
+const DEBRIS_PACE := 0.05
+const CONDENSE := 0.9
+const CONDENSE_STAGGER := 0.08
+const DEBRIS_COINS := 6
+## The singularity of a Materialize: how far from the box it opens, how wide
+## the circle round it is before and at the end of the spin, how fast things
+## go round it (radians a second) at both ends, how long the spin takes to
+## build up and to die down, how far things are pulled out of shape, and the
+## size of what is made.
+const HOLE_REACH := 78.0
+const ORBIT := 46.0
+const ORBIT_TIGHT := 30.0
+const WHIRL_SLOW := 2.6
+const WHIRL_FAST := 30.0
+const SPIN_UP := 2.1
+const UNWIND := 0.7
+const NOODLE := 1.5
+const MADE := Vector2(61, 64)
 ## A card thrown on the tray of a Last Call, and where one is held up to be
 ## seen before it goes in (from the middle of the tray).
 const TOSSED := Vector2(44, 80)
@@ -131,6 +159,16 @@ var _doll: VoodooDoll
 var _doll_target: PlayerState
 ## The bomb of a Demolition, lit and waiting to be told which item it is for.
 var _bomb: BombFx
+## The chains of an Entropy in pieces, hanging in the air until they are
+## made into what they pay.
+var _debris: DebrisFx
+var _debris_owner: PlayerState
+## The singularity of a Materialize, open until the item is made; then the
+## item itself, standing where it was until it is gained.
+var _hole: SingularityFx
+var _hole_owner: PlayerState
+var _made: PrismFx
+var _made_at := Vector2.INF
 ## What makes a borrowed action look and sound wrong (see corrupt).
 var _glitch: GlitchFx
 ## The plays that stepped in while it was on (see step_in): they are nobody's
@@ -724,6 +762,7 @@ func put_away() -> void:
 	drop_vault()
 	drop_doll()
 	drop_bomb()
+	drop_hole()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -2264,6 +2303,360 @@ func drop_bomb() -> void:
 		leave.tween_property(_bomb, "modulate:a", 0.0, 0.15 / table._speed)
 		leave.tween_callback(_bomb.queue_free)
 	_bomb = null
+
+
+# --- the Entity ---------------------------------------------------------------
+
+## The light of the table is drawn in on the Entity from all round, in three
+## images that never quite meet. The chains themselves are thrown on by the
+## status as it lands (chains_fx.gd, kept by StatusFx).
+func _fx_entity_entropy(play: Play) -> void:
+	var here := _at(play.actor)
+	dim(0.5, 1.6)
+	_snd("fx_entropy")
+	_prism_rings(here, 190.0, 40.0, 0.5, 4.0)
+	await _wait(0.28)
+	_prism_rings(here, 130.0, 24.0, 0.4, 3.0)
+	await _wait(0.3)
+	flash(Color(COSMOS, 0.14), 0.18)
+	table._shake_screen(4.0)
+	await _wait(0.1)
+
+
+## A ring seen the way the Entity's things are: in red, in cyan and in white,
+## a little apart.
+func _prism_rings(at: Vector2, from_radius: float, to_radius: float, life: float, width: float) -> void:
+	ring(at + Vector2(-PRISM_SPLIT, 0), Color(PrismFx.RED, 0.75), from_radius, to_radius, life, width)
+	ring(at + Vector2(PRISM_SPLIT, 0), Color(PrismFx.CYAN, 0.75), from_radius, to_radius, life, width)
+	ring(at, Color.WHITE, from_radius, to_radius, life, width)
+
+
+## A point beside the box of `who`, `reach` out of it towards the middle of
+## the table and clear of the edges of the screen.
+func _beside(who: PlayerState, reach: float) -> Vector2:
+	var here := _at(who)
+	var edge: Vector2 = table._clear_of(table._node_of(who), here, POT, 0.0)
+	var at := edge + (POT - edge).limit_length(reach)
+	return Vector2(clampf(at.x, 80.0, size.x - 80.0), clampf(at.y, 80.0, size.y - 80.0))
+
+
+## The chains of an Entropy break, all at once: `links` is where every link
+## of them was (StatusFx.pieces). They fly apart hard, and then time all but
+## stops for them: the pieces hang over the table, turning, until they are
+## drawn together into what they pay (release_morale, release_coins).
+func chains_break(who: PlayerState, links: Array[Vector2]) -> void:
+	drop_debris()
+	if links.is_empty():
+		return
+	var speed: float = table._speed
+	var centre := Vector2.ZERO
+	for link: Vector2 in links:
+		centre += link / links.size()
+	var debris := DebrisFx.new()
+	debris.speed = speed
+	debris.room = Rect2(Vector2.ZERO, size).grow(-14.0)
+	add_child(debris)
+	debris.scatter(links, centre)
+	_debris = debris
+	_debris_owner = who
+	# The iron is a recording; the deep of it and what hangs after are not.
+	_snd("fx_chains_break")
+	_snd("fx_supernova")
+	flash(Color(1.0, 1.0, 1.0, 0.45), 0.22)
+	_prism_rings(centre, 24.0, 260.0, 0.45, 6.0)
+	ring(centre, COSMOS.lightened(0.3), 10.0, 150.0, 0.7, 3.0)
+	burst(centre, Color.WHITE, 16, 460.0, 0.28, 0.0, 6.0)
+	table._shake_screen(12.0)
+	var slow := debris.create_tween()
+	slow.tween_interval(DEBRIS_BLAST / speed)
+	slow.tween_property(debris, "pace", DEBRIS_PACE, 0.22 / speed).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+	await _wait(0.85)
+
+
+## True while the broken chains of `who` hang in the air.
+func releasing(who: PlayerState) -> bool:
+	return _debris != null and is_instance_valid(_debris) and _debris_owner == who
+
+
+## The Morale the chains pay: some of the pieces wind in on one point, are a
+## heart there and go to `to`, its place in the Morale of `who`.
+func release_morale(who: PlayerState, to: Vector2) -> void:
+	if not releasing(who):
+		return
+	var hearts := await _condense(0.4, UI.tex(HEART_ART), 1, Vector2(34, 34))
+	for heart: PrismFx in hearts:
+		_send(heart, to, 0.5, 0.0)
+	await _wait(0.34)
+	ring(to, Color("ff7a8c"), 4.0, 26.0, 0.3, 3.0)
+
+
+## The coins the chains pay (`d` is their "coins" event): every piece left
+## winds in on a row of points, they are coins there and go to the purse one
+## after the other, counted in as they land.
+func release_coins(d: Dictionary) -> void:
+	var who: PlayerState = d.player
+	var total: int = d.delta
+	var purse: Vector2 = table._coin_anchor(who)
+	var bar: StatBar = table._stat_bar(who)
+	var count := clampi(total, 1, DEBRIS_COINS)
+	var coins := await _condense(1.0, UI.tex(COIN_ART), count, Vector2(24, 24))
+	drop_debris()
+	if coins.size() != count:
+		for coin: PrismFx in coins:
+			coin.queue_free()
+		return
+	if bar != null:
+		bar.hold_coins(who)
+	for i in count:
+		var share := total * (i + 1) / count - total * i / count
+		_send(coins[i], purse, 0.8, i * 0.09)
+		get_tree().create_timer((0.3 + i * 0.09) / table._speed).timeout.connect(_coin_home.bind(bar, share, purse, i))
+	await _wait(0.34 + count * 0.09)
+
+
+## `share` of the pieces still loose wind in on `count` points beside whoever
+## was in chains and are `texture` there, `extent` across: its three images
+## come together as it forms. Returns those pictures (PrismFx), whole; none
+## if the pieces are gone.
+func _condense(share: float, texture: Texture2D, count: int, extent: Vector2) -> Array:
+	var debris := _debris
+	var made: Array = []
+	if debris == null or not is_instance_valid(debris):
+		return made
+	var speed: float = table._speed
+	var around := _beside(_debris_owner, 64.0)
+	var each := maxi(int(debris.loose() * share / count), 1)
+	_snd("fx_stardust")
+	for i in count:
+		var spot := around + Vector2((i - (count - 1) / 2.0) * (extent.x + 4.0), 0.0 if i % 2 == 0 else -8.0)
+		var wait := i * CONDENSE_STAGGER
+		var batch := debris.gather(each, spot)
+		var wind := debris.create_tween()
+		if wait > 0.0:
+			wind.tween_interval(wait / speed)
+		wind.tween_method(debris.pull.bind(batch), 0.0, 1.0, CONDENSE / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		wind.tween_callback(debris.absorb.bind(batch))
+		var prism := PrismFx.new(texture, extent)
+		prism.position = spot
+		prism.split = 12.0
+		prism.scale = Vector2.ONE * 0.3
+		prism.modulate.a = 0.0
+		add_child(prism)
+		var born := (wait + CONDENSE * 0.6) / speed
+		var show := prism.create_tween().set_parallel()
+		show.tween_property(prism, "modulate:a", 1.0, 0.25 / speed).set_delay(born)
+		show.tween_property(prism, "scale", Vector2.ONE, 0.36 / speed).set_delay(born).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		show.tween_property(prism, "split", 0.0, 0.4 / speed).set_delay(born)
+		made.append(prism)
+	await _wait(CONDENSE + (count - 1) * CONDENSE_STAGGER + 0.12)
+	return made.filter(func(prism: Variant) -> bool: return is_instance_valid(prism))
+
+
+## Sends `thing` to `to`, shrinking to `shrink` of its size, and is done with it.
+func _send(thing: Control, to: Vector2, shrink: float, delay: float) -> void:
+	var speed: float = table._speed
+	var go := thing.create_tween()
+	if delay > 0.0:
+		go.tween_interval(delay / speed)
+	go.tween_property(thing, "position", to, 0.3 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	go.parallel().tween_property(thing, "scale", Vector2.ONE * shrink, 0.3 / speed)
+	go.tween_callback(thing.queue_free)
+
+
+## A coin of the chains lands in the pile at `at` and is counted in.
+func _coin_home(bar: StatBar, share: int, at: Vector2, index: int) -> void:
+	if bar != null:
+		bar.add_coins(share)
+	_snd("coin_%d" % (index % 3 + 1))
+	burst(at, UI.GOLD, 3, 90.0, 0.2, 300.0, 4.0)
+
+
+## Lets go of the pieces of the chains nothing was made of.
+func drop_debris() -> void:
+	if _debris != null and is_instance_valid(_debris):
+		var leave := _debris.create_tween()
+		leave.tween_property(_debris, "modulate:a", 0.0, 0.5 / table._speed)
+		leave.tween_callback(_debris.queue_free)
+	_debris = null
+	_debris_owner = null
+
+
+## A hole the size of a coin opens beside the Entity: black, with every
+## colour going round it. What is fed to it comes later: the coins as they
+## are paid (hoard_cost, which may have opened it already), the Morale as it
+## is given up (spaghettify).
+func _fx_entity_materialize(play: Play) -> void:
+	var fresh := not materializing(play.actor)
+	_open_hole(play.actor)
+	await _wait(0.45 if fresh else 0.15)
+
+
+func _open_hole(who: PlayerState) -> SingularityFx:
+	if materializing(who):
+		return _hole
+	drop_hole()
+	var speed: float = table._speed
+	var hole := SingularityFx.new()
+	hole.speed = speed
+	hole.whirl_speed = WHIRL_SLOW
+	hole.reach = ORBIT
+	hole.position = _beside(who, HOLE_REACH)
+	add_child(hole)
+	_hole = hole
+	_hole_owner = who
+	_snd("fx_singularity")
+	_prism_rings(hole.position, 90.0, 14.0, 0.4, 3.0)
+	hole.create_tween().tween_property(hole, "open", 1.0, 0.4 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	return hole
+
+
+## True while the singularity of `who` is open with nothing made yet.
+func materializing(who: PlayerState) -> bool:
+	return _hole != null and is_instance_valid(_hole) and _hole_owner == who
+
+
+## The coins a Materialize costs on top of the Morale (`d` is their "coins"
+## event): they leave the purse for the singularity, which opens now if it
+## was not open yet, and go round it, waiting for the Morale.
+func hoard_cost(d: Dictionary) -> void:
+	var who: PlayerState = d.player
+	var total: int = -d.delta
+	var hole := _open_hole(who)
+	var purse: Vector2 = table._coin_anchor(who)
+	var bar: StatBar = table._stat_bar(who)
+	if bar != null:
+		bar.hold_coins(who)
+	var count := clampi(total, 1, DEBRIS_COINS)
+	_snd("spend")
+	for i in count:
+		var share := total * (i + 1) / count - total * i / count
+		hole.take(UI.tex(COIN_ART), Vector2(20, 20), purse, TAU * i / count, i * 0.1, 0.4)
+		table._count_coins(bar, -share, i * 0.1)
+	await _wait(0.45 + count * 0.1)
+
+
+## The Morale `who` gave up for a Materialize. The heart leaves its place at
+## `from` for the singularity and goes round it with whatever coins are
+## there already, faster and faster, drawn out longer and thinner, until on
+## one of the turns what comes round is `item`. That slows down, is itself
+## again and is left where the singularity was, for item_materialized.
+## `label` is what the table calls it.
+func spaghettify(who: PlayerState, from: Vector2, item: Texture2D, label: String) -> void:
+	if not materializing(who) or item == null:
+		return
+	var hole := _hole
+	var speed: float = table._speed
+	var at := hole.position
+	dim(0.55, SPIN_UP + UNWIND + 0.9)
+	hole.take(UI.tex(HEART_ART), Vector2(26, 26), from, PI, 0.0, 0.4)
+	_snd("fx_spaghettify")
+	await _wait(0.4)
+	if not is_instance_valid(hole):
+		return
+	var wind := hole.create_tween().set_parallel()
+	wind.tween_property(hole, "whirl_speed", WHIRL_FAST, SPIN_UP / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	wind.tween_property(hole, "stretch", NOODLE, SPIN_UP / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	wind.tween_property(hole, "reach", ORBIT_TIGHT, SPIN_UP / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	wind.tween_property(hole, "spin", 16.0, SPIN_UP / speed)
+	wind.tween_property(hole, "pull", 1.0, SPIN_UP / speed)
+	# The table is drawn in with it, at a quickening beat.
+	for beat: float in [0.0, 0.55, 1.0, 1.35, 1.62, 1.82, 1.96]:
+		get_tree().create_timer(maxf(beat * SPIN_UP / 2.1, 0.01) / speed).timeout.connect(_drawn_in.bind(hole))
+	await _wait(SPIN_UP)
+	if not is_instance_valid(hole):
+		return
+
+	# One more turn, and it is something else that comes round.
+	hole.become(item, MADE)
+	_snd("fx_materialize")
+	flash(Color(0.85, 0.75, 1.0, 0.4), 0.2)
+	_prism_rings(at, 16.0, 150.0, 0.4, 5.0)
+	burst(at, Color.WHITE, 14, 300.0, 0.4, 0.0, 6.0)
+	burst(at, COSMOS.lightened(0.3), 12, 200.0, 0.5, -30.0)
+	table._shake_screen(8.0)
+	var settle := hole.create_tween().set_parallel()
+	settle.tween_property(hole, "whirl_speed", 3.0, UNWIND / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	settle.tween_property(hole, "stretch", 0.0, UNWIND / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	settle.tween_property(hole, "reach", ORBIT, UNWIND / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	settle.tween_property(hole, "spin", 2.0, UNWIND / speed)
+	settle.tween_property(hole, "pull", 0.0, UNWIND / speed)
+	await _wait(UNWIND)
+	if not is_instance_valid(hole):
+		return
+
+	# It is a thing now: it comes off the turn and stands where the hole was.
+	var pose := hole.pose()
+	hole.clear()
+	var made := PrismFx.new(item, MADE)
+	made.position = pose[0]
+	made.rotation = pose[1]
+	made.split = 8.0
+	add_child(made)
+	_hole = null
+	_made = made
+	_made_at = at
+	var land := made.create_tween().set_parallel()
+	land.tween_property(made, "position", at, 0.26 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	land.tween_property(made, "rotation", snappedf(pose[1], TAU), 0.26 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	land.tween_property(made, "split", 0.0, 0.3 / speed)
+	var close := hole.create_tween()
+	close.tween_property(hole, "open", 0.0, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	close.tween_callback(hole.queue_free)
+	await _wait(0.28)
+	ring(at, Color.WHITE, 10.0, 60.0, 0.3, 3.0)
+	table._float(label, at + Vector2(0, -MADE.y / 2.0 - 10.0), UI.BLUE)
+	await _wait(0.3)
+
+
+## A closing ring about the singularity: everything near it leans in.
+func _drawn_in(hole: SingularityFx) -> void:
+	if is_instance_valid(hole):
+		_prism_rings(hole.position, 84.0, 16.0, 0.3, 2.0)
+
+
+## True while what `who` made out of Morale stands on the table, not yet theirs.
+func made_for(who: PlayerState) -> bool:
+	return _made != null and is_instance_valid(_made) and _hole_owner == who
+
+
+## Where the singularity of `who` was: the change of a Materialize comes out
+## of there. Vector2.INF if there was none.
+func made_at(who: PlayerState) -> Vector2:
+	return _made_at if _hole_owner == who else Vector2.INF
+
+
+## What was made goes to `home`, its place in the inventory, shrinking to
+## `shrink` of its size on the way.
+func item_materialized(home: Vector2, shrink: float) -> void:
+	var item := _made
+	_made = null
+	if item == null or not is_instance_valid(item):
+		return
+	var speed: float = table._speed
+	var pocket := item.create_tween().set_parallel()
+	pocket.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	pocket.tween_property(item, "position", home, 0.3 / speed)
+	pocket.tween_property(item, "scale", Vector2.ONE * shrink, 0.3 / speed)
+	await _wait(0.3)
+	_snd("item_get")
+	rise(home, COSMOS.lightened(0.4), 6, 16.0)
+	if is_instance_valid(item):
+		item.queue_free()
+
+
+## Closes a singularity nothing came out of, with whatever was going round it.
+func drop_hole() -> void:
+	if _hole != null and is_instance_valid(_hole):
+		var close := _hole.create_tween()
+		close.tween_property(_hole, "open", 0.0, 0.2 / table._speed)
+		close.parallel().tween_property(_hole, "modulate:a", 0.0, 0.2 / table._speed)
+		close.tween_callback(_hole.queue_free)
+	if _made != null and is_instance_valid(_made):
+		_made.queue_free()
+	_hole = null
+	_hole_owner = null
+	_made = null
+	_made_at = Vector2.INF
 
 
 ## A coin thumbed into the air in front of `who`; it lands on its answer.
@@ -4644,3 +5037,329 @@ class BootFx extends Control:
 	func _dot(on: Control, cell: Vector2i, ink: Color) -> void:
 		var x := cell.x if facing > 0.0 else -cell.x - 1
 		on.draw_rect(Rect2(Vector2(x, cell.y) * PIXEL, Vector2(PIXEL, PIXEL)), ink)
+
+
+## A picture seen the way the Entity's things are: three images of it, a red
+## one, a cyan one and the true one, `split` pixels apart. Its origin is its
+## middle.
+class PrismFx extends Control:
+	const RED := Color(1.0, 0.16, 0.36)
+	const CYAN := Color(0.1, 0.95, 1.0)
+
+	## texture -> its shape filled in white, for the two coloured images.
+	static var _shapes := {}
+
+	var texture: Texture2D
+	var extent := Vector2.ZERO
+	var split := 0.0:
+		set(value):
+			split = value
+			queue_redraw()
+
+	func _init(picture: Texture2D, picture_size: Vector2) -> void:
+		texture = picture
+		extent = picture_size
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
+	func _draw() -> void:
+		if texture == null:
+			return
+		var corner := -extent / 2.0
+		if split >= 1.0:
+			var shape := PrismFx.silhouette(texture)
+			draw_texture_rect(shape, Rect2(corner + Vector2(-split, 0), extent), false, Color(RED, 0.6))
+			draw_texture_rect(shape, Rect2(corner + Vector2(split, 0), extent), false, Color(CYAN, 0.6))
+		draw_texture_rect(texture, Rect2(corner, extent), false)
+
+	## The shape of `picture` with nothing in it but white.
+	static func silhouette(picture: Texture2D) -> Texture2D:
+		if _shapes.has(picture):
+			return _shapes[picture]
+		var shape: Texture2D = picture
+		var image := picture.get_image()
+		if image != null:
+			if image.is_compressed():
+				image.decompress()
+			image.convert(Image.FORMAT_RGBA8)
+			var blank := Image.create_empty(image.get_width(), image.get_height(), false, Image.FORMAT_RGBA8)
+			blank.fill(Color(1, 1, 1, 0))
+			var white := blank.duplicate() as Image
+			white.fill(Color.WHITE)
+			blank.blit_rect_mask(white, image, Rect2i(Vector2i.ZERO, image.get_size()), Vector2i.ZERO)
+			shape = ImageTexture.create_from_image(blank)
+		_shapes[picture] = shape
+		return shape
+
+
+## The chains of an Entropy in pieces: every link of them and the splinters
+## between, thrown out from where they broke. `pace` is how fast time goes
+## for them: 1 as they break, next to nothing a moment later, when they hang
+## in the air and turn. Then they are called in, a batch at a time (gather,
+## pull), winding in on a point until there is nothing left of them (absorb).
+class DebrisFx extends Control:
+	const STEEL := Color("e9ecff")
+
+	var pace := 1.0
+	## The speed of the table.
+	var speed := 1.0
+	## What they stay inside: a piece that reaches an edge of it turns back.
+	var room := Rect2()
+
+	var _shards: Array = []
+	var _batches := {}  # batch -> {to, t}
+	var _next := 0
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Breaks up from `links`, away from `centre`.
+	func scatter(links: Array[Vector2], centre: Vector2) -> void:
+		for i: int in links.size():
+			_throw(links[i], centre, i % 2 == 0, 1.0, randf_range(200.0, 560.0))
+			if i % 3 == 0:
+				_throw(links[i], centre, false, 0.5, randf_range(320.0, 720.0))
+
+	func _throw(from: Vector2, centre: Vector2, ring: bool, shard_size: float, force: float) -> void:
+		var out := from - centre
+		var way := out.normalized() if out.length() > 1.0 else Vector2.from_angle(randf() * TAU)
+		_shards.append({
+			"p": from, "v": way.rotated(randf_range(-0.6, 0.6)) * force, "turn": randf() * TAU,
+			"spin": randf_range(-16.0, 16.0), "ring": ring, "size": shard_size, "hue": randf(),
+			"batch": -1, "from": from,
+		})
+
+	func _process(delta: float) -> void:
+		_time += delta
+		var dt := delta * speed * pace
+		for shard: Dictionary in _shards:
+			if shard.batch == -1:
+				shard.p += shard.v * dt
+				shard.turn += shard.spin * dt
+				if room.size.x > 0.0:
+					if (shard.p.x < room.position.x and shard.v.x < 0.0) or (shard.p.x > room.end.x and shard.v.x > 0.0):
+						shard.v.x = -shard.v.x
+					if (shard.p.y < room.position.y and shard.v.y < 0.0) or (shard.p.y > room.end.y and shard.v.y > 0.0):
+						shard.v.y = -shard.v.y
+		queue_redraw()
+
+	## How many pieces have not been called in yet.
+	func loose() -> int:
+		var count := 0
+		for shard: Dictionary in _shards:
+			if shard.batch == -1:
+				count += 1
+		return count
+
+	## Calls in `count` of the loose pieces, from wherever they are, to wind
+	## in on `to`. Returns their batch.
+	func gather(count: int, to: Vector2) -> int:
+		var batch := _next
+		_next += 1
+		_batches[batch] = {"to": to, "t": 0.0}
+		var free := _shards.filter(func(shard: Dictionary) -> bool: return shard.batch == -1)
+		free.shuffle()
+		for shard: Dictionary in free.slice(0, count):
+			shard.batch = batch
+			shard.from = shard.p
+		return batch
+
+	## How far the pieces of `batch` have wound in, 0 to 1.
+	func pull(t: float, batch: int) -> void:
+		if _batches.has(batch):
+			_batches[batch].t = t
+
+	## The pieces of `batch` are what they were called in to be.
+	func absorb(batch: int) -> void:
+		_shards = _shards.filter(func(shard: Dictionary) -> bool: return shard.batch != batch)
+		_batches.erase(batch)
+
+	func _draw() -> void:
+		for image: int in 3:
+			for shard: Dictionary in _shards:
+				var at: Vector2 = shard.p
+				var turn: float = shard.turn
+				var shard_size: float = shard.size
+				if shard.batch != -1:
+					var called: Dictionary = _batches.get(shard.batch, {})
+					if called.is_empty():
+						continue
+					var k: float = called.t
+					at = called.to + (shard.from - called.to).rotated(k * 4.0) * (1.0 - k)
+					turn += k * 9.0
+					shard_size *= 1.0 - 0.6 * k
+				var split := 2.0 + 3.0 * (0.5 + 0.5 * sin(_time * 3.0 + shard.hue * TAU))
+				var ink := STEEL.lerp(Color.from_hsv(fposmod(shard.hue + _time * 0.15, 1.0), 0.6, 1.0),
+						0.5 + 0.5 * sin(_time * 5.0 + shard.hue * 40.0))
+				if image < 2:
+					ink = Color(PrismFx.RED if image == 0 else PrismFx.CYAN, 0.6)
+				draw_set_transform((at + Vector2([-split, split, 0.0][image], 0)).round(), turn, Vector2.ONE * shard_size)
+				if shard.ring:
+					draw_rect(Rect2(-4, -3, 8, 2), ink)
+					draw_rect(Rect2(-4, 1, 8, 2), ink)
+					draw_rect(Rect2(-4, -1, 2, 2), ink)
+					draw_rect(Rect2(2, -1, 2, 2), ink)
+				else:
+					draw_rect(Rect2(-4, -1, 8, 2), ink)
+		draw_set_transform(Vector2.ZERO)
+
+
+## The singularity of a Materialize: a black disc with a bright rim, dust of
+## every colour turning round it on a ring seen from a little above, and
+## whatever was fed to it going round on a circle of its own (take). Those
+## are pulled out of shape as `stretch` grows: longer along their way and
+## thinner across it, bent round the circle, each in its three images.
+## `reach` is how wide the circle is, `whirl_speed` how fast they go round
+## (radians a second), `open` how big the hole is (0 to 1), `spin` how fast
+## its dust turns and `pull` how much starlight is falling into it.
+class SingularityFx extends Control:
+	const PIXEL := 2.0
+	const RADIUS := 13.0
+	const INK := Color("05030a")
+	const RIM := Color("f4eaff")
+	const HALO := Color("9b6bff")
+	const DUST := 26
+	const STREAKS := 12
+	## How much further out the tail of something pulled long is than its
+	## head, for every pixel of its length, and how much thinner (1: to nothing).
+	const TRAIL_OUT := 0.09
+	const TAPER := 0.75
+
+	var open := 0.0
+	var spin := 2.5
+	var whirl_speed := 2.6
+	var stretch := 0.0
+	var reach := 46.0
+	var pull := 0.0
+	## The speed of the table.
+	var speed := 1.0
+
+	var _orbiters: Array = []  # {tex, extent, from, phase, join}
+	var _whirl := 0.0
+	var _turn := 0.0
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
+	func _process(delta: float) -> void:
+		var dt := delta * speed
+		_time += dt
+		_turn += spin * dt
+		_whirl += whirl_speed * dt
+		queue_redraw()
+
+	## Something `extent` across comes from `from` (on screen) and joins the
+	## circle, `phase` round it from the first, in `time` seconds.
+	func take(texture: Texture2D, extent: Vector2, from: Vector2, phase: float, delay: float, time: float) -> void:
+		var orbiter := {"tex": texture, "extent": extent, "from": from - global_position, "phase": phase, "join": 0.0}
+		_orbiters.append(orbiter)
+		var come := create_tween()
+		if delay > 0.0:
+			come.tween_interval(delay / speed)
+		come.tween_method(_join.bind(orbiter), 0.0, 1.0, time / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+
+	func _join(t: float, orbiter: Dictionary) -> void:
+		orbiter.join = t
+
+	## All that was going round is one thing now: `texture`, `extent` across.
+	func become(texture: Texture2D, extent: Vector2) -> void:
+		var phase: float = _orbiters[0].phase if not _orbiters.is_empty() else 0.0
+		_orbiters = [{"tex": texture, "extent": extent, "from": Vector2.ZERO, "phase": phase, "join": 1.0}]
+
+	func clear() -> void:
+		_orbiters.clear()
+
+	## Where the first thing going round is on screen, and how it is turned.
+	func pose() -> Array:
+		var head: float = _whirl + (_orbiters[0].phase if not _orbiters.is_empty() else 0.0)
+		return [global_position + Vector2.from_angle(head) * reach, head + PI / 2.0]
+
+	func _draw() -> void:
+		var radius := RADIUS * open
+		if open > 0.0:
+			draw_circle(Vector2.ZERO, radius * 2.6, Color(HALO, 0.12 * open))
+			_dust(radius, false)
+			var cells := ceili(radius / PIXEL) + 2
+			for y: int in range(-cells, cells + 1):
+				for x: int in range(-cells, cells + 1):
+					var out := Vector2(x + 0.5, y + 0.5) * PIXEL
+					var far := out.length()
+					if far <= radius:
+						draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(PIXEL, PIXEL)), INK)
+					elif far <= radius + PIXEL * 1.5:
+						# The rim: light of every colour, going round.
+						var tint := Color.from_hsv(fposmod(out.angle() / TAU + _turn * 0.12, 1.0), 0.45, 1.0)
+						draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(PIXEL, PIXEL)), RIM.lerp(tint, 0.6))
+			_dust(radius, true)
+			_infall(radius)
+		for orbiter: Dictionary in _orbiters:
+			_noodle(orbiter)
+		draw_set_transform(Vector2.ZERO)
+
+	## Half of the ring of dust: the far half, drawn before the hole, or the
+	## `near` one, drawn after.
+	func _dust(radius: float, near: bool) -> void:
+		for i: int in DUST:
+			var angle := TAU * i / DUST + _turn * (1.0 + 0.25 * (i % 3))
+			if (sin(angle) >= 0.0) != near:
+				continue
+			var wide := radius + 6.0 + 5.0 * (i % 4)
+			var at := Vector2(cos(angle) * wide, sin(angle) * wide * 0.36 + cos(angle) * wide * 0.12)
+			var ink := Color.from_hsv(fposmod(float(i) / DUST + _time * 0.1, 1.0), 0.6, 1.0)
+			var dot := PIXEL * (2.0 if i % 5 == 0 else 1.0)
+			draw_rect(Rect2((at / PIXEL).floor() * PIXEL, Vector2(dot, dot)), Color(ink, open * (0.95 if near else 0.4)))
+
+	## Starlight from all round, falling in on a turn.
+	func _infall(radius: float) -> void:
+		if pull <= 0.0:
+			return
+		for i: int in STREAKS:
+			var seed_ := i * 0.618
+			var life := fposmod(_time * (0.9 + 0.7 * fposmod(seed_ * 3.7, 1.0)) * (1.0 + pull) + seed_, 1.0)
+			var ink := Color.from_hsv(fposmod(seed_, 1.0), 0.4, 1.0)
+			for tail: int in 3:
+				var then := maxf(life - 0.04 * tail, 0.0)
+				var at := Vector2.from_angle(seed_ * TAU + then * 2.6) * lerpf(96.0, radius, then * then)
+				draw_rect(Rect2((at / PIXEL).floor() * PIXEL, Vector2(PIXEL, PIXEL)), Color(ink, pull * life * (1.0 - 0.3 * tail)))
+
+	## One of the things going round: its picture cut in slices across, each
+	## put where its place along the circle is.
+	func _noodle(orbiter: Dictionary) -> void:
+		var texture: Texture2D = orbiter.tex
+		var extent: Vector2 = orbiter.extent
+		var join: float = orbiter.join
+		var head: float = _whirl + orbiter.phase
+		var wide := maxf(reach, 1.0)
+		var length := extent.x * (1.0 + stretch * 4.0)
+		var thick := extent.y / (1.0 + stretch * 1.4)
+		# Straight while it is whole, round the circle once it gives.
+		var bend := clampf(stretch * 3.0, 0.0, 1.0) if join >= 1.0 else 0.0
+		var middle: Vector2 = orbiter.from.lerp(Vector2.from_angle(head) * wide, join)
+		var facing := lerp_angle(0.0, head + PI / 2.0, join)
+		var slices := clampi(int(length / 4.0), 4, 56)
+		var piece := length / slices
+		var source := texture.get_size()
+		var split := 1.0 + stretch * 3.0
+		var shape: Texture2D = PrismFx.silhouette(texture) if stretch > 0.05 else null
+		for image: int in 3:
+			if image < 2 and shape == null:
+				continue
+			var tint: Color = [Color(PrismFx.RED, 0.4), Color(PrismFx.CYAN, 0.4), Color.WHITE][image]
+			var shift: float = [-split, split, 0.0][image]
+			for s: int in slices:
+				# How far behind the middle of the picture this slice is.
+				var back := (s + 0.5) * piece - length / 2.0
+				var flat := middle - Vector2.from_angle(facing) * back + Vector2.from_angle(facing - PI / 2.0) * shift
+				# What trails is further out, and thinner: it is falling in.
+				var trail := float(s) / slices * bend
+				var angle := head - back / wide
+				var round_ := Vector2.from_angle(angle) * (wide + shift + (back + length / 2.0) * TRAIL_OUT * bend)
+				var across := thick * (1.0 - TAPER * trail)
+				draw_set_transform(flat.lerp(round_, bend), lerp_angle(facing, angle + PI / 2.0, bend))
+				draw_texture_rect_region(texture if image == 2 else shape,
+						Rect2(-piece / 2.0 - 0.5, -across / 2.0, piece + 1.0, across),
+						Rect2(source.x * (1.0 - float(s + 1) / slices), 0, source.x / slices, source.y),
+						Color(tint, tint.a * (1.0 - 0.5 * trail)))

@@ -239,7 +239,7 @@ func reaction_options(player: PlayerState, event: GameEvent) -> Array:
 	for instance: ItemInstance in player.items:
 		var def := instance.def
 		if def.kind == ItemDef.Kind.REACTION and def.reacts_to(event, player, self):
-			if blocked_reason(player, def.tags) == "" and def.can_use(player, self) == "":
+			if item_lock_reason(instance) == "" and blocked_reason(player, def.tags) == "" and def.can_use(player, self) == "":
 				out.append({"kind": &"item", "item": instance, "enabled": true, "reason": ""})
 	return out
 
@@ -299,7 +299,9 @@ func turn_options(player: PlayerState) -> Dictionary:
 		if def.kind != ItemDef.Kind.ACTIVE:
 			reason = def.kind_label()
 		else:
-			reason = blocked_reason(player, def.tags)
+			reason = item_lock_reason(instance)
+			if reason == "":
+				reason = blocked_reason(player, def.tags)
 			if reason == "":
 				reason = def.can_use(player, self)
 			if reason == "" and def.targeting != Playable.Targeting.NONE and _candidates_for(player, def).is_empty():
@@ -576,14 +578,24 @@ func reroll_shop(player: PlayerState) -> void:
 	await fire(&"shop_rerolled", {"player": player})
 
 
-func give_item(player: PlayerState, def: ItemDef, hidden := false) -> ItemInstance:
+## `sealed`: it can't be put to use for as long as the turn being played
+## lasts (see item_lock_reason).
+func give_item(player: PlayerState, def: ItemDef, hidden := false, sealed := false) -> ItemInstance:
 	if def == null or player.items.size() >= config.inventory_limit:
 		return null
 	var instance := ItemInstance.new(def)
 	instance.hidden = hidden
+	if sealed:
+		instance.sealed_turn = turn_count
 	player.items.append(instance)
 	await fire(&"item_gained", {"player": player, "item": instance})
 	return instance
+
+
+## "" unless `instance` is too new to be used: it came sealed (give_item) in
+## the turn being played. What it does by itself, held, it does from the start.
+func item_lock_reason(instance: ItemInstance) -> String:
+	return Loc.t("Can't be used in the turn it was made") if instance.sealed_turn == turn_count else ""
 
 
 ## Removes a held item without using it (shields and mirrors breaking, the
@@ -901,6 +913,18 @@ func lose_morale(target: PlayerState, amount: int, source: PlayerState, cause: S
 		await _eliminate(target, source, play)
 	else:
 		await _fit_hand(target)
+	return true
+
+
+## Morale given up by choice, as the price of something (entity.gd). It is no
+## blow: nothing gets to stop it or answer it and nobody takes credit for it.
+## Never the last point. The hand follows, as with any other loss.
+func spend_morale(player: PlayerState, amount: int, play: Play = null) -> bool:
+	if over or not player.alive or amount <= 0 or player.morale <= amount:
+		return false
+	player.morale -= amount
+	await fire(&"morale_spent", {"player": player, "amount": amount, "play": play})
+	await _fit_hand(player)
 	return true
 
 

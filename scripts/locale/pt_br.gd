@@ -29,6 +29,8 @@ const MESSAGES := {
 	"Sheriff Amos Harlan": "Xerife Amos Harlan",
 	"Doctor": "Doutor",
 	"Bomber": "Bombardeiro",
+	"Entity": "Entidade",
+	"The Entity": "A Entidade",
 
 	"Pay 4 coins to deal 1 damage to a player.": "Pague 4 moedas para causar 1 de dano a um jogador.",
 	"Pay 4 coins to deal 1 damage to another player.": "Pague 4 moedas para causar 1 de dano a outro jogador.",
@@ -109,6 +111,11 @@ const MESSAGES := {
 	"Pay 3 coins to plant a bomb on a player. It goes off at the end of their next turn: they lose 1 Morale, unless they pay 4 coins to defuse it first. Shields and Mirrors work against the blast. A player can only carry one bomb.": "Pague 3 moedas para plantar uma bomba em um jogador. Ela explode no fim do próximo turno dele: ele perde 1 de Moral, a não ser que pague 4 moedas para desarmá-la antes. Escudos e Espelhos funcionam contra a explosão. Um jogador só pode carregar uma bomba.",
 	"Blow up an item a player holds. You choose which; a hidden item is picked blind. Shields and Mirrors don't stop it.": "Exploda um item de um jogador. Você escolhe qual; um item escondido é escolhido às cegas. Escudos e Espelhos não impedem.",
 	"Which of %s's items do you blow up?": "Qual dos itens de %s você explode?",
+	"In chains until this player's next turn starts. Then they break into 1 Morale and 3 coins; Morale that can't be recovered becomes 2 more coins.": "Acorrentado até o próximo turno deste jogador começar. Aí as correntes se quebram em 1 de Moral e 3 moedas; a Moral que não puder ser recuperada vira mais 2 moedas.",
+	"Spend your whole turn. When your next one starts, recover 1 Morale and gain 3 coins; Morale you can't recover becomes 2 more coins.": "Gaste o turno inteiro. Quando o seu próximo turno começar, recupere 1 de Moral e ganhe 3 moedas; a Moral que você não puder recuperar vira mais 2 moedas.",
+	"Turn 1 Morale into an item worth up to 6 coins: pay the difference for a dearer one, keep the change from a cheaper one. It doesn't end your turn, but the item can't be used during it. Never your last Morale.": "Transforme 1 de Moral em um item de até 6 moedas: pague a diferença por um mais caro, fique com o troco de um mais barato. Não encerra o seu turno, mas o item não pode ser usado nele. Nunca a sua última Moral.",
+	"What does your Morale become?": "No que a sua Moral se transforma?",
+	"Not with your last Morale": "Não com a sua última Moral",
 
 	# --- abilities ------------------------------------------------------------
 	"Blood Count": "Contagem de Sangue",
@@ -146,6 +153,8 @@ const MESSAGES := {
 	"Demolition": "Demolição",
 	"Time Bomb": "Bomba-Relógio",
 	"Blast": "Explosão",
+	"Entropy": "Entropia",
+	"Materialize": "Materializar",
 
 	# --- items ----------------------------------------------------------------
 	"Death": "Morte",
@@ -177,6 +186,7 @@ const MESSAGES := {
 	"Inventory full": "Inventário cheio",
 	"Always active": "Sempre ativa",
 	"Takes the whole turn": "Ocupa o turno inteiro",
+	"Can't be used in the turn it was made": "Não pode ser usado no turno em que foi criado",
 	"Choose a target for %s": "Escolha um alvo para %s",
 	"%s, you don't hold the %s: choose the card to swap": "%s, você não tem a carta %s: escolha a carta que vai trocar",
 	"%s, you lost Morale: give up a card": "%s, você perdeu Moral: entregue uma carta",
@@ -208,6 +218,7 @@ const MESSAGES := {
 	"%s reflects it!": "%s reflete!",
 	"%s loses %d Morale.": "%s perde %d de Moral.",
 	"%s recovers %d Morale.": "%s recupera %d de Moral.",
+	"%s gives up %d Morale.": "%s abre mão de %d de Moral.",
 	"%s is eliminated.": "%s foi eliminado.",
 	"%s draws a new card.": "%s compra uma carta nova.",
 	"%s gives up the %s.": "%s entrega a carta %s.",

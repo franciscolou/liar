@@ -74,15 +74,23 @@ def fx_vault():
     return clip("safe-opening", 0.05, 1.08, 0.005, 0.1)
 
 
+def fx_chains_break():
+    """Chains snapping and falling apart: the first of the two takes in the
+    recording (the second starts at 1.5 s)."""
+    return clip("chains-breaking", 0.0, 1.18, 0.0, 0.1)
+
+
 SOUNDS = {
     "ui_doors_shut": ui_doors_shut,
     "ui_doors_open": ui_doors_open,
     "fx_mickey_pour": fx_mickey_pour,
     "fx_gulp": fx_gulp,
     "fx_vault": fx_vault,
+    "fx_chains_break": fx_chains_break,
 }
 # How loud each one ends up (its loudest sample).
-PEAK = {"ui_doors_shut": 0.8, "ui_doors_open": 0.5, "fx_mickey_pour": 0.6, "fx_gulp": 0.75, "fx_vault": 0.8}
+PEAK = {"ui_doors_shut": 0.8, "ui_doors_open": 0.5, "fx_mickey_pour": 0.6, "fx_gulp": 0.75, "fx_vault": 0.8,
+    "fx_chains_break": 0.9}
 
 
 def main():

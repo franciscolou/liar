@@ -35,6 +35,8 @@ extends RefCounted
 ##   before_morale_loss {target, source, amount, cause, play}  cancellable
 ##   morale_lost {target, source, amount, cause, play} / morale_gained {player, amount}
 ##     (source is null when the Morale was staked on a wrong LIAR! call)
+##   morale_spent {player, amount, play}        Morale paid as the price of `play`
+##     (see GameEngine.spend_morale): not a blow, so nothing gets to stop it
 ##   damage_dealt {source, target, play}
 ##   player_eliminated {player, killer, play}
 ##   cards_changed {player, index, reason, old} / cards_swapped {a, a_index, b, b_index}

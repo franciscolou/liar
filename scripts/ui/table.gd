@@ -1619,7 +1619,16 @@ func present(e: GameEvent) -> void:
 			await _anim_reroll()
 		&"morale_lost":
 			await _anim_damage(d.target, d.amount)
+		&"morale_spent":
+			await _anim_morale_spent(d)
+		&"income":
+			# Whatever is left of a broken Entropy has had its chance.
+			_play_fx.drop_debris()
 		&"morale_gained":
+			var healed: Variant = _node_of(d.player)
+			if healed != null and _play_fx.releasing(d.player):
+				# Out of the chains of an Entropy.
+				await _play_fx.release_morale(d.player, healed.heart_spot(d.player.morale - 1))
 			_play_sfx("heal")
 			_float(Loc.t("+%d MORALE") % d.amount, _anchor(d.player), UI.GREEN, 22)
 			await _wait(0.4)
@@ -1668,9 +1677,13 @@ func present(e: GameEvent) -> void:
 				_sync()
 				_node_of(d.player).doll_landed()
 				_play_fx.drop_doll(true)
+			if d.status == &"entropy":
+				# The chains are thrown on while the word is up.
+				_sync()
+				_play_sfx("fx_chains")
 			var def: Dictionary = Content.statuses.get(d.status, {})
 			_float(Loc.t(def.get("name", String(d.status))).to_upper(), _anchor(d.player), def.get("color", UI.PURPLE).lightened(0.35), 20)
-			await _wait(0.4)
+			await _wait(0.65 if d.status == &"entropy" else 0.4)
 		&"status_removed":
 			await _anim_status_broken(d)
 		&"counter_changed":
@@ -2100,6 +2113,23 @@ func _anim_coins(d: Dictionary) -> void:
 	# A Cash Out pays out of the vault standing open on the table.
 	if d.reason == &"vault" and _play_fx.vault_mouth(p) != Vector2.INF:
 		there = _play_fx.vault_mouth(p)
+	# The change of a Materialize comes out of where the item did.
+	if d.reason == &"materialize" and _play_fx.made_at(p) != Vector2.INF:
+		there = _play_fx.made_at(p)
+	# What a Materialize costs on top of the Morale is fed to the singularity.
+	if d.reason == &"cost" and delta < 0 and _materializing(p):
+		await _play_fx.hoard_cost(d)
+		if bar != null:
+			bar.coin_bias = 0
+		_float("%+d" % delta, here + Vector2(0, -18), UI.RED, 22)
+		return
+	# The chains of an Entropy: what is left of them becomes the coins.
+	if d.reason == &"entropy" and delta > 0 and _play_fx.releasing(p):
+		await _play_fx.release_coins(d)
+		if bar != null:
+			bar.coin_bias = 0
+		_float("+%d" % delta, here + Vector2(0, -18), UI.GOLD, 22)
+		return
 	# A Shakedown: the boot stamps the coins out of the pile and carries
 	# them home itself.
 	if d.reason == &"stolen" and delta < 0 and _play_fx.booting(d.other, p):
@@ -2154,6 +2184,32 @@ func _anim_coins(d: Dictionary) -> void:
 	if bar != null:
 		bar.coin_bias = 0
 	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
+
+
+## True while a Materialize of `p` is the claim being played out.
+func _materializing(p: PlayerState) -> bool:
+	if _stage_stack.is_empty():
+		return false
+	var play: Play = _stage_stack.back().play
+	return play.actor == p and play.source.id == &"entity.materialize"
+
+
+## Morale given up as the price of something. For a Materialize it is what
+## the singularity is fed: the heart goes round it until it is the item.
+func _anim_morale_spent(d: Dictionary) -> void:
+	var p: PlayerState = d.player
+	var box: Variant = _node_of(p)
+	# The heart is gone from its place: it is the one that flies.
+	if box != null:
+		box.sync()
+	var play: Variant = d.get("play")
+	if box != null and play is Play and play.params.get("item") is ItemDef and _play_fx.materializing(p):
+		var def: ItemDef = play.params.item
+		await _play_fx.spaghettify(p, box.heart_spot(p.morale), UI.tex(def.texture_path), "+ %s" % def.display_name.to_upper())
+		return
+	_play_sfx("spend")
+	_float(Loc.t("-%d MORALE") % d.amount, _anchor(p), UI.PURPLE.lightened(0.3), 22)
+	await _wait(0.5)
 
 
 ## The doll's cut of what a hexed player gains, carried by the same purple
@@ -2359,6 +2415,10 @@ func _anim_item_gained(d: Dictionary) -> void:
 	if _play_fx.conjuring(d.player):
 		var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
 		await _play_fx.item_conjured(texture, _item_spot(d.player, d.player.items.size() - 1), label)
+		return
+	if _play_fx.made_for(d.player):
+		# Made out of Morale: it stands where the singularity was.
+		await _play_fx.item_materialized(_item_spot(d.player, d.player.items.size() - 1), 0.8 if d.player == viewer else 0.4)
 		return
 	if _play_fx.copying(d.player):
 		var texture := UI.tex(UI.ITEM_BACK if concealed else instance.def.texture_path)
@@ -3009,6 +3069,13 @@ func _anim_status_broken(d: Dictionary) -> void:
 		_play_fx.burst(rect.get_center(), UI.CREAM, 4, 110.0, 0.35, 520.0, 4.0)
 	else:
 		_play_sfx("status_break")
+	if d.status == &"entropy":
+		# The chains do not crumble: they go all at once, and what is left
+		# of them hangs in the air to be made into what they pay.
+		var links: Array[Vector2] = box.status_pieces(d.status)
+		box.sync()
+		await _play_fx.chains_break(d.player, links)
+		return
 	for piece: Vector2 in box.status_pieces(d.status):
 		_play_fx.burst(piece, color.lightened(0.35), 7, 150.0, 0.45, 360.0, 6.0)
 		_play_fx.ring(piece, color.lightened(0.5), 6.0, 26.0, 0.25, 3.0)

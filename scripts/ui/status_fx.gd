@@ -1,19 +1,22 @@
 extends Control
 ## What a player's statuses look like on their box: stars circling someone
 ## groggy, the Voodooist's doll slumped in a corner, a bundle of dynamite with
-## its fuse lit. The chips next to the player still name every status and
+## its fuse lit, the chains of the Entity wound about the box. The chips next to the player still name every status and
 ## explain it; this is the part that can be read from across the table.
 ##
 ## Everything is drawn in small pixels and moves by itself for as long as the
-## status lasts. The doll is a node of its own (VoodooDoll), kept here. To give another status a look, add its id to LOOKS and
+## status lasts. The doll is a node of its own (VoodooDoll), kept here, and so
+## are the chains (chains_fx.gd). To give another status a look, add its id to LOOKS and
 ## draw it from _draw(). No class name: preload it (see SeatView, HeroPanel).
 
 const VoodooDoll := preload("res://scripts/ui/voodoo_doll.gd")
+const ChainsFx := preload("res://scripts/ui/chains_fx.gd")
 
 const GROGGY := &"groggy"
 const HEXED := &"hexed"
 const TICKING := &"ticking"
-const LOOKS: Array[StringName] = [GROGGY, HEXED, TICKING]
+const ENTROPY := &"entropy"
+const LOOKS: Array[StringName] = [GROGGY, HEXED, TICKING, ENTROPY]
 
 const CELL := 2.0
 ## The ring a groggy player's stars fly on: radians per second, and how much
@@ -25,6 +28,8 @@ const RING_TILT := -0.07
 const TURBULENCE := 1.0
 ## Seconds for a look to fade in or out.
 const FADE := 0.25
+## Seconds the chains take to be thrown round the box.
+const BIND := 0.55
 const OUTLINE := Color("1a100c")
 const GOLD := Color("f2c84b")
 const GLINT := Color("fff3c4")
@@ -104,7 +109,13 @@ var doll_hangs := true:
 var doll_drop := Vector2(0, -60)
 ## Where the dynamite stands: the middle of its base.
 var bomb_foot := Vector2.ZERO
+## What the chains are wound about: the player's box.
+var chain_box := Rect2():
+	set(value):
+		chain_box = value
+		_chains.box = value
 var _doll: VoodooDoll
+var _chains: ChainsFx
 
 var _wanted := {}  # status id -> bool
 var _level := {}  # status id -> 0..1, how far its look has faded in
@@ -121,6 +132,8 @@ func _init() -> void:
 	_doll = VoodooDoll.new()
 	_doll.level = 0.0
 	add_child(_doll)
+	_chains = ChainsFx.new()
+	add_child(_chains)
 	# So that two players under the same spell do not move as one.
 	_time = randf() * 20.0
 
@@ -137,6 +150,8 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 	if _wanted[TICKING]:
 		var planted: int = player.statuses[TICKING].get("planted", 0)
 		_urgent = engine.current == player and planted < engine.turn_count
+	if not _wanted[ENTROPY]:
+		_chains.bound = 0.0
 	if _wanted.values().has(true):
 		set_process(true)
 
@@ -157,6 +172,8 @@ func pieces(id: StringName) -> Array[Vector2]:
 			out.append(onto * (doll_foot + _doll.heart()))
 		TICKING:
 			out.append(onto * (bomb_foot + Vector2(0, -14)))
+		ENTROPY:
+			out = _chains.links()
 	return out
 
 
@@ -190,6 +207,10 @@ func _process(delta: float) -> void:
 		_level[id] = move_toward(_level.get(id, 0.0), target, delta / FADE)
 		busy = busy or _level[id] > 0.0
 	_doll.level = _level.get(HEXED, 0.0)
+	# The chains are thrown on link by link, and are gone at once: they do
+	# not fade, they break (see PlayFx.chains_break).
+	_chains.bound = move_toward(_chains.bound, 1.0, delta / BIND) if _wanted.get(ENTROPY, false) else 0.0
+	_level[ENTROPY] = 1.0 if _wanted.get(ENTROPY, false) else 0.0
 	if not busy:
 		set_process(false)
 	queue_redraw()

@@ -236,10 +236,15 @@ def light_mask(a):
 # The hand and the cigar, and a little more under the watch for the wrist to
 # turn without a gap. The forefinger ends at its nail: the lit shape
 # left of the nail (x 423) is his lower lip and stays on the face. The tip of the
-# thumb, over the end of the cigar, goes with the hand, outline and all, and
-# so does the dark under the forefinger: it is the shadow of the hand.
-HAND = [(421.5, 306), (424, 305.2), (431, 304.5), (437, 303.5), (441, 302.5), (444, 301), (444, 292),
-		(448, 287), (470, 286), (474, 291), (500, 290), (506, 289), (517, 291), (518, 304),
+# finger behind the cigar (the brightest shape there, x 452-468, y 290-297)
+# goes with the hand, and so does the dark under the forefinger, which is
+# the shadow of the hand. The line is tight around all of it: the cheek
+# beside and above that fingertip, the end of the moustache and the strip of
+# ear past the edge of the face are his, and stay.
+HAND = [(421.5, 306), (424, 305.2), (431, 304.5), (437, 303.5), (441, 302.5), (444, 301), (449, 300),
+		(451.8, 298), (451.8, 292), (455, 289.4), (462, 289.4), (466.5, 290.6), (468.8, 293),
+		(468.8, 297.4), (477, 297.4), (478, 296.4), (483, 296), (484, 292.6), (498, 292.6),
+		(500, 289.6), (508, 289), (517, 291), (518, 304),
 		(507, 308), (511, 312), (521, 322), (533, 342), (549, 366), (560, 384), (552, 398),
 		(536, 414), (527, 412), (520, 402), (505, 394), (490, 388), (470, 381), (455, 378),
 		(450, 380), (443, 376), (441, 368), (432, 370), (427, 366), (428, 348), (430, 333),
@@ -300,21 +305,18 @@ def paint_face(a, hidden):
 	fill((60, 26, 8), [(438, 284), (468, 284), (468, 300), (466, 311), (461, 322), (453, 335),
 			(444, 345), (432, 349), (422, 349), (422, 318), (440, 316), (441, 303), (443, 301), (446, 297),
 			(444, 292), (440, 288)])
-	fill((73, 31, 10), [(440, 284), (467, 284), (467, 298), (462, 306), (452, 308), (446, 303), (447, 297),
+	fill((74, 32, 10), [(440, 284), (467, 284), (467, 298), (462, 306), (452, 308), (446, 303), (447, 297),
 			(445, 291)])
-	fill((80, 34, 11), [(449, 289), (457, 288), (462, 292), (459, 297), (452, 298), (448, 294)])
+	# Beside the moustache the painting has it brighter: that goes on down.
+	fill((90, 39, 13), [(443, 284), (453, 284), (453.5, 293), (452.5, 299), (449, 301), (447, 296), (444, 291)])
 	fill((44, 19, 6), [(463, 304), (467, 300), (466, 311), (461, 322), (453, 335), (444, 345), (436, 348),
 			(438, 343), (448, 333), (456, 321), (461, 311)])
 	fill((48, 21, 7), [(426, 339), (440, 337), (446, 341), (440, 347), (426, 349)])
 	# The cheek is not one smooth round: the painting breaks its faces into
-	# patches. The hollow under the cheekbone, the light on the bone, the
-	# fold that runs down from it, and the shadow of a beard coming in
-	# towards the jaw, in dabs.
-	fill((52, 22, 7), [(449, 300.5), (455, 298.5), (461, 300), (463, 304), (459, 307.5), (452, 307)])
-	fill((66, 28, 9), [(446, 309), (452, 308.5), (455, 312), (452, 317), (447, 316)])
-	fill((88, 39, 14), [(454, 289.5), (459, 289), (462, 292), (460, 295.5), (455.5, 295.5), (453, 292.5)])
-	fill((98, 46, 19), [(456, 290.5), (459, 290.5), (460, 292.5), (457.5, 294)])
-	stroke((48, 20, 6), [(456, 308), (456.6, 313), (455, 319), (452, 324)], 1.1)
+	# patches. The hollow under the cheekbone, the fold that runs down from
+	# it, and the shadow of a beard coming in towards the jaw, in dabs.
+	fill((58, 25, 8), [(457, 300.5), (462, 299.5), (464, 303), (462, 307), (458, 306)])
+	stroke((48, 20, 6), [(459, 309), (459.4, 314), (457.5, 320), (454.5, 325)], 1.1)
 	dabs = np.random.default_rng(41)
 	for i in range(46):
 		x, y = dabs.uniform(441, 465), dabs.uniform(310, 340)
@@ -338,10 +340,14 @@ def paint_face(a, hidden):
 			(448.5, 346), (442, 349.5), (421, 350.5)])
 	for x, y, lean in ((435, 336, -1.5), (440, 338, 1.0), (444, 339, -1.0), (448, 340.5, 1.5), (431.5, 331, 1.5)):
 		stroke((8, 4, 1), [(x, y + 1), (x + lean, y - 3.2)], 1.3)
-	# The crease from the nose past the corner of the mouth, with the light
-	# on the edge of it.
-	stroke((30, 12, 4), [(446, 297), (444.4, 304), (443.8, 311), (445, 316.5)], 1.4)
-	stroke((76, 33, 11), [(447.6, 298), (446, 305), (445.6, 311)], 0.9)
+	# The end of the moustache. On the side the painting shows it hangs
+	# past the corner of the mouth, well below the lip; so it does here,
+	# from where the painting leaves it (x 449, y 297), with a softer edge.
+	fill((28, 12, 4), [(438, 296), (449.5, 295.8), (452.6, 298.5), (455, 303.5), (455.4, 308.5), (454, 313),
+			(451, 315.8), (447.6, 314), (446.8, 309), (444.8, 304.8), (441, 302.6), (438, 302.6)])
+	fill((3, 2, 2), [(438, 296.6), (449, 296.6), (451.6, 299.2), (454, 303.8), (454.3, 308.5), (453, 312.6),
+			(450.8, 314.6), (448.6, 313.2), (448, 309), (446, 304.6), (442, 302), (438, 302)])
+	fill((3, 5, 5), [(449.6, 303.6), (451.8, 304), (452.6, 307), (451.4, 309), (450, 308)])
 	# The line of the jaw.
 	stroke((4, 2, 0), [(468.5, 284), (468.5, 300), (466.5, 311), (461.5, 322), (453.5, 335), (444, 346),
 			(432, 350)], 2.0)
@@ -360,6 +366,11 @@ def paint_face(a, hidden):
 	fine *= (1.0 + (cv2.GaussianBlur(blocky_noise(fine.shape[:2], 4, rng), (0, 0), 1.2) - 0.5) * 0.24)[..., None]
 	new = a.copy()
 	new[y0:y1, x0:x1] = fine
+	# Where the new paint meets the painting it gives way to it over a few
+	# pixels, so no line shows where the hand used to end.
+	far, at = ndimage.distance_transform_edt(hidden, return_indices=True)
+	give = (np.clip(1.0 - (far - 0.5) / 3.0, 0.0, 1.0) * 0.75)[..., None]
+	new = new * (1.0 - give) + a[at[0], at[1]] * give
 	a[hidden] = new[hidden]
 
 

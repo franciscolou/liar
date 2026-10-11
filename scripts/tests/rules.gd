@@ -41,6 +41,12 @@ static func run() -> int:
 		"a shield stops a shakedown": _shakedown.bind(&"shield", 0),
 		"a mirror turns a shakedown round": _shakedown.bind(&"mirror", -3),
 		"a silver tongue keeps the coins from a shakedown": _shakedown.bind(&"bard", 0),
+		"entropy breaks into 1 Morale and 3 coins": _entropy.bind(2, 1, 3),
+		"entropy at full Morale breaks into 5 coins": _entropy.bind(3, 0, 5),
+		"entropy takes the whole turn": _entropy_whole_turn,
+		"a Morale becomes an item, and the change": _materialize.bind(&"shield", 1),
+		"a dearer item is paid for on top of the Morale": _materialize.bind(&"potion", -4),
+		"the last Morale is not for sale": _materialize_last,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -125,6 +131,78 @@ static func _demolition() -> String:
 	if table.engine.players[0].coins != coins:
 		return "it cost %d coins" % (coins - table.engine.players[0].coins)
 	return "" if table.held(1) == [&"shield", &"mirror"] else "kept %s" % [table.held(1)]
+
+
+## Player 0, on `morale`, claims Entropy and then starts a turn: `healed` and
+## `coins` are what the chains should break into.
+static func _entropy(morale: int, healed: int, coins: int) -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	p.cards = [&"entity", &"judge"]
+	p.morale = morale
+	p.cards.resize(engine.hand_limit(p))
+	await engine.claim(p, table.ability(&"entity.entropy"))
+	if not p.has_status(&"entropy"):
+		return "no chains"
+	if p.morale != morale or p.coins != 20:
+		return "paid at once: %d Morale, %d coins" % [p.morale, p.coins]
+	await engine.fire(&"turn_started", {"player": p})
+	if p.has_status(&"entropy"):
+		return "still in chains"
+	if p.morale != morale + healed:
+		return "%d Morale" % p.morale
+	return "" if p.coins == 20 + coins else "gained %d coins" % (p.coins - 20)
+
+
+static func _entropy_whole_turn() -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var entropy := table.ability(&"entity.entropy")
+	if engine.claim_block_reason(engine.players[0], entropy) != "":
+		return "not offered on a fresh turn"
+	engine.players[0].turn["busy"] = true
+	return "" if engine.claim_block_reason(engine.players[0], entropy) != "" else "offered after something else"
+
+
+## Player 0 turns a Morale into `item`: `coins` is what that does to their
+## purse. The item is theirs at once, but not to be used in that turn.
+static func _materialize(item: StringName, coins: int) -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	p.cards = [&"entity", &"judge"]
+	engine.turn_count = 1
+	table.puppets[0].answers[Decision.Kind.PICK] = func(d: Decision) -> int:
+		for i: int in d.options.size():
+			if d.options[i].has("item") and d.options[i].item.id == item:
+				return i
+		return -1
+	await engine.claim(p, table.ability(&"entity.materialize"))
+	if p.morale != 2 or table.held(0) != [item]:
+		return "%d Morale, holding %s" % [p.morale, table.held(0)]
+	if p.coins != 20 + coins:
+		return "purse went by %d" % (p.coins - 20)
+	var use: Dictionary = engine.turn_options(p).use[0]
+	if Content.items[item].kind == ItemDef.Kind.ACTIVE and use.enabled:
+		return "usable in the turn it was made"
+	engine.turn_count = 2
+	use = engine.turn_options(p).use[0]
+	if Content.items[item].kind == ItemDef.Kind.ACTIVE and not use.enabled:
+		return "still sealed a turn later: %s" % use.reason
+	return ""
+
+
+static func _materialize_last() -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	p.morale = 1
+	p.cards = [&"entity"]
+	if table.ability(&"entity.materialize").can_use(p, engine) == "":
+		return "offered on the last Morale"
+	await engine.claim(p, table.ability(&"entity.materialize"))
+	return "" if p.morale == 1 and table.held(0) == [] else "%d Morale, holding %s" % [p.morale, table.held(0)]
 
 
 ## Player 0 shakes player 1 down. `defence` is what player 1 has against it

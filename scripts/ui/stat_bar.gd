@@ -94,6 +94,12 @@ func hearts_center() -> Vector2:
 	return _hearts.global_position + _hearts.size / 2.0
 
 
+## The middle of the Morale point at `index`, counted from the left.
+func heart_center(index: int) -> Vector2:
+	var step := _icon_size + 1.0
+	return _hearts.global_position + Vector2(step * maxi(index, 0) + _icon_size / 2.0, _hearts.size.y / 2.0)
+
+
 func _icon(path: String) -> TextureRect:
 	var t := TextureRect.new()
 	t.texture = UI.tex(path)

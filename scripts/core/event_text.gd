@@ -45,6 +45,8 @@ static func describe(e: GameEvent) -> String:
 				return Loc.t("%s reflects it!") % d.target.name
 		&"morale_lost":
 			return Loc.t("%s loses %d Morale.") % [d.target.name, d.amount]
+		&"morale_spent":
+			return Loc.t("%s gives up %d Morale.") % [d.player.name, d.amount]
 		&"morale_gained":
 			return Loc.t("%s recovers %d Morale.") % [d.player.name, d.amount]
 		&"player_eliminated":

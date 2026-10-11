@@ -127,6 +127,7 @@ func _init() -> void:
 	_status_fx.doll_drop = Vector2(0, 44 - SIZE.y)
 	_status_fx.doll_drain = SIZE / 2.0
 	_status_fx.bomb_foot = Vector2(-9, SIZE.y + 1)
+	_status_fx.chain_box = Rect2(Vector2.ZERO, SIZE)
 	add_child(_status_fx)
 	# The chips are for reading: nothing a status draws goes over them.
 	move_child(_chips, -1)
@@ -327,6 +328,11 @@ func doll_landed() -> void:
 ## The points the look of status `id` breaks up from (see StatusFx.pieces).
 func status_pieces(id: StringName) -> Array[Vector2]:
 	return _status_fx.pieces(id)
+
+
+## Where the Morale point at `index` is shown.
+func heart_spot(index: int) -> Vector2:
+	return _stats.heart_center(index)
 
 
 func coin_anchor() -> Vector2:

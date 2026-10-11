@@ -24,15 +24,15 @@ const FLAME_FOOT := 348.0
 const FLAME_TOP := 292.0
 # The smoke of the cigar: the stretch of wall it may rise through, and the
 # tip of the cigar it leaves from.
-const SMOKE_AREA := Rect2(360, 40, 300, 262)
+const SMOKE_AREA := Rect2(300, 0, 440, 302)
 const EMBER := Vector2(511, 291)
-const TRAIL := 30
+const TRAIL := 44
 const TRAIL_STEP := 0.3
 # The man. Where each sprite was cut from (the boxes the tool prints).
 const TORSO_AT := Vector2(100, 340)
 const HEAD_AT := Vector2(298, 156)
-const HAND_AT := Vector2(421, 286)
-const HAND_RIM_AT := Vector2(419, 284)
+const HAND_AT := Vector2(421, 289)
+const HAND_RIM_AT := Vector2(419, 287)
 const FOREARM_AT := Vector2(518, 364)
 const EYE_LEFT_AT := Vector2(364, 258)
 const EYE_RIGHT_AT := Vector2(420, 246)
@@ -119,19 +119,23 @@ void fragment() {
 const SMOKE_SHADER := "shader_type canvas_item;
 // The thread of smoke off the tip of the cigar, in the blocks and the few
 // tones of the painting. The scene lets go of a bit of smoke at the tip every
-// moment and each one rises on its own (trail: x, y, age, newest first); the
-// thread is drawn through them. So when the hand moves the smoke already in
-// the air stays where it was, and only what comes next leaves from the new
-// place. Each bit keeps the sideways push it was born with and spreads as it
-// ages, so the curls travel up with it.
+// moment and each one rises on its own (trail: x, y, age and how much smoke
+// it was let go with, newest first); the thread is drawn through them. So
+// when the hand moves, or the tip smokes less for a while, the smoke already
+// in the air stays as it was: only what comes next is different. Each bit
+// keeps the sideways push it was born with, so the curls travel up with it.
+// Low down it is a tight thread; as it climbs it opens into a loose, thin
+// cloud that breaks up into scattered pixels and is gone.
 
 uniform vec2 size;
 uniform float time_s;
-uniform float amount = 1.0;
-uniform float life = 8.5;
+uniform float life = 13.0;
 uniform float cell = 2.0;
-uniform vec3 trail[30];
+uniform vec4 trail[44];
 uniform vec3 tone : source_color = vec3(0.6, 0.45, 0.35);
+
+const float BAYER[16] = float[](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+		3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -149,21 +153,28 @@ float strand(vec2 px, float from, float age, float born, float seed, float girth
 	float old = clamp(age / life, 0.0, 1.0);
 	float push = sin(born * 1.9 + seed) * 0.55 + sin(born * 1.1 + seed * 2.3) * 0.5
 			+ sin(born * 3.1 + seed * 0.7) * 0.22;
-	float reach = 2.0 + 34.0 * sqrt(old);
+	float reach = 2.0 + 44.0 * sqrt(old);
 	float middle = from + push * reach * smoothstep(0.0, 0.5, age)
-			+ sin(age * 1.4 + time_s * 0.35 + seed) * 5.0 * old;
-	float wide = (2.2 + 22.0 * old) * girth;
-	return 1.0 - smoothstep(wide * 0.3, wide, abs(px.x - middle));
+			+ sin(age * 1.4 + time_s * 0.35 + seed) * 9.0 * old;
+	float wide = (2.2 + 16.0 * old + 70.0 * old * old) * girth;
+	// The same smoke over a wider stretch is thinner.
+	float spread = mix(1.0, 0.5, smoothstep(0.25, 1.0, old));
+	return (1.0 - smoothstep(wide * 0.3, wide, abs(px.x - middle))) * spread;
 }
 
 void fragment() {
-	vec2 px = (floor(UV * size / cell) + 0.5) * cell;
+	vec2 at = floor(UV * size / cell);
+	vec2 px = (at + 0.5) * cell;
+	// Higher up the air stirs it.
+	float height = clamp((trail[0].y - px.y) / 300.0, 0.0, 1.0);
+	vec2 air = px * 0.03 + vec2(0.0, time_s * 0.25);
+	vec2 stirred = px + (vec2(noise(air), noise(air + 31.0)) - 0.5) * 34.0 * height * height;
 	float thick = 0.0;
-	for (int i = 0; i < 29; i++) {
-		vec3 low = trail[i];
-		vec3 high = trail[i + 1];
+	for (int i = 0; i < 43; i++) {
+		vec4 low = trail[i];
+		vec4 high = trail[i + 1];
 		float span = low.y - high.y;
-		float along = (low.y - px.y) / (abs(span) < 0.01 ? 0.01 : span);
+		float along = (low.y - stirred.y) / (abs(span) < 0.01 ? 0.01 : span);
 		if (along < 0.0 || along >= 1.0) {
 			continue;
 		}
@@ -173,13 +184,16 @@ void fragment() {
 		float age = mix(low.z, high.z, along);
 		float born = time_s - age;
 		float old = clamp(age / life, 0.0, 1.0);
-		float here = max(strand(px, from, age, born, 0.0, 1.0), strand(px, from, age, born, 2.6, 0.7) * 0.75);
-		float torn = noise(vec2(px.x * 0.07, born * 1.5 + px.y * 0.01));
+		float here = max(strand(stirred, from, age, born, 0.0, 1.0), strand(stirred, from, age, born, 2.6, 0.7) * 0.75);
+		float torn = noise(vec2(stirred.x * 0.07, born * 1.5 + stirred.y * 0.01));
 		here *= mix(1.0, torn * 1.9, sqrt(old));
-		here *= pow(1.0 - old, 0.8) * smoothstep(0.0, 0.1, age);
+		here *= (1.0 - smoothstep(0.45, 1.0, old)) * smoothstep(0.0, 0.1, age) * mix(low.w, high.w, along);
 		thick = max(thick, here);
 	}
-	thick *= amount;
+	// Hard steps low down, where it is a thread; dithered ones higher, so
+	// it thins out instead of ending.
+	float step_at = BAYER[int(mod(at.y, 4.0)) * 4 + int(mod(at.x, 4.0))] / 16.0 - 0.5;
+	thick += step_at * 0.22 * smoothstep(0.15, 0.6, height) * step(0.03, thick);
 	float veil = thick > 0.55 ? 0.46 : thick > 0.3 ? 0.28 : thick > 0.1 ? 0.13 : 0.0;
 	COLOR = vec4(tone, veil);
 }"
@@ -340,7 +354,7 @@ var _sky: ShaderMaterial
 var _flame: ShaderMaterial
 var _smoke: ShaderMaterial
 var _light: ShaderMaterial
-var _trail := PackedVector3Array()
+var _trail := PackedVector4Array()
 var _hand_rim: Sprite2D
 var _trail_in := 0.0
 var _drift := Vector2.ZERO
@@ -409,7 +423,7 @@ func _ready() -> void:
 	_smoke.set_shader_parameter("size", SMOKE_AREA.size)
 	var tip := _tip()
 	for i in TRAIL:
-		_trail.append(Vector3(tip.x, tip.y - smoke_rise * TRAIL_STEP * i, TRAIL_STEP * i))
+		_trail.append(Vector4(tip.x, tip.y - smoke_rise * TRAIL_STEP * i, TRAIL_STEP * i, smoke_amount))
 
 	var light := ColorRect.new()
 	light.size = PAINTING
@@ -469,24 +483,28 @@ func _step(delta: float) -> void:
 	_move_man(delta)
 
 	# The smoke, and where the tip of the cigar has been.
-	# Every bit of smoke already in the air climbs on its own; the newest one
-	# is still at the tip, and now and then it is let go and another begins.
+	# Every bit of smoke already in the air climbs on its own, with the
+	# amount of smoke it left with; the newest one is still at the tip, and
+	# now and then it is let go and another begins. Drawn on, the tip smokes
+	# less; let go, it smokes more for a while: that only changes what
+	# leaves from then on.
 	var moved := 0.0 if still else delta
 	for i in range(1, TRAIL):
-		_trail[i] += Vector3(0.9 * moved, -smoke_rise * moved, moved)
+		_trail[i] += Vector4(0.9 * moved, -smoke_rise * moved, moved, 0.0)
 	_trail_in -= moved
 	if _trail_in <= 0.0:
 		_trail_in = TRAIL_STEP
 		_trail.insert(1, _trail[0])
 		_trail.resize(TRAIL)
-	var tip := _tip()
-	_trail[0] = Vector3(tip.x, tip.y, 0.0)
-	_smoke.set_shader_parameter("time_s", t)
-	# Drawn on, the tip smokes less; let go, it smokes more for a while.
 	var drawing := _span(DRAW.x, DRAW.x + 0.4) * (1.0 - _span(AWAY.x, AWAY.y))
 	var after := _span(AWAY.x, AWAY.y) * (1.0 - _span(BLOW.y, PULL_ENDS))
-	_smoke.set_shader_parameter("amount",
+	var tip := _tip()
+	_trail[0] = Vector4(tip.x, tip.y, 0.0,
 			0.0 if still else smoke_amount * (1.0 - drawing * 0.7 + after * 0.6))
+	if still:
+		for i in TRAIL:
+			_trail[i].w = 0.0
+	_smoke.set_shader_parameter("time_s", t)
 	_smoke.set_shader_parameter("trail", _trail)
 
 

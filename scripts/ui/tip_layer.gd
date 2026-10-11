@@ -5,12 +5,19 @@ extends CanvasLayer
 
 ## Widest a tooltip gets before its text wraps.
 const MAX_WIDTH := 280.0
+## Clear space between a tooltip and its control, and between it and the
+## edge of the screen.
+const GAP := 16.0
+const EDGE := 6.0
+
+enum { ABOVE, BELOW, RIGHT, LEFT }
 
 static var current: TipLayer
 
 var _panel: PanelContainer
 var _text: RichTextLabel
 var _owner: Control
+var _side := -1
 
 
 func _ready() -> void:
@@ -55,6 +62,7 @@ func show_tip(control: Control, bbcode: String) -> void:
 	if bbcode == "":
 		return
 	_owner = control
+	_side = -1
 	# Laid out unwrapped first, to learn how wide the text really is.
 	_text.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_text.custom_minimum_size = Vector2.ZERO
@@ -70,27 +78,70 @@ func show_tip(control: Control, bbcode: String) -> void:
 	await get_tree().process_frame
 	if _owner != control or not is_instance_valid(control):
 		return
+	_side = -1
+	_place()
+	_panel.create_tween().tween_property(_panel, "modulate:a", 1.0, 0.08)
+
+
+## The tooltip follows its control: most of them grow, lift or slide under
+## the mouse, and the text can settle a frame late.
+func _process(_delta: float) -> void:
+	if _panel.visible and _side >= 0 and is_instance_valid(_owner):
+		_place()
+
+
+## Puts the tooltip beside its control, never over it: above, below, right
+## or left, whichever has the room, keeping the side it already took.
+func _place() -> void:
 	_panel.reset_size()
 	var screen := get_viewport().get_visible_rect().size
-	var rect := control.get_global_rect()
+	var rect := _reach(_owner)
 	var size := _panel.size
-	var pos := Vector2(rect.get_center().x - size.x / 2.0, rect.position.y - size.y - 10)
-	if pos.y < 6:
-		pos.y = rect.end.y + 10
-	if pos.y + size.y > screen.y - 6:
-		pos.y = screen.y - size.y - 6
-		pos.x = rect.end.x + 10 if rect.end.x + size.x + 16 < screen.x else rect.position.x - size.x - 10
-	pos.x = clampf(pos.x, 6, screen.x - size.x - 6)
-	_panel.position = pos
-	_panel.create_tween().tween_property(_panel, "modulate:a", 1.0, 0.08)
+	var room := [
+		rect.position.y - GAP - EDGE - size.y,
+		screen.y - EDGE - rect.end.y - GAP - size.y,
+		screen.x - EDGE - rect.end.x - GAP - size.x,
+		rect.position.x - GAP - EDGE - size.x,
+	]
+	if _side < 0 or room[_side] < 0.0:
+		_side = 0
+		for side in room.size():
+			if room[side] >= 0.0:
+				_side = side
+				break
+			if room[side] > room[_side]:
+				_side = side
+	var pos := rect.get_center() - size / 2.0
+	match _side:
+		ABOVE:
+			pos.y = rect.position.y - GAP - size.y
+		BELOW:
+			pos.y = rect.end.y + GAP
+		RIGHT:
+			pos.x = rect.end.x + GAP
+		LEFT:
+			pos.x = rect.position.x - GAP - size.x
+	pos.x = clampf(pos.x, EDGE, maxf(EDGE, screen.x - size.x - EDGE))
+	pos.y = clampf(pos.y, EDGE, maxf(EDGE, screen.y - size.y - EDGE))
+	_panel.position = pos.round()
+
+
+## The space a control takes on screen while hovered. A control that draws
+## past its own rect then (a card lifting) says so in `tip_rect()`.
+func _reach(control: Control) -> Rect2:
+	if control.has_method(&"tip_rect"):
+		return control.call(&"tip_rect")
+	return control.get_global_rect()
 
 
 func hide_all() -> void:
 	_owner = null
+	_side = -1
 	_panel.visible = false
 
 
 func hide_tip(control: Control) -> void:
 	if _owner == control:
 		_owner = null
+		_side = -1
 		_panel.visible = false

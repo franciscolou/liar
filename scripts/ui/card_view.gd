@@ -7,6 +7,8 @@ signal clicked
 const BASE := Vector2(55, 100)
 ## The size a caption is written at, and the smallest it shrinks to when the
 ## name does not fit on the plate.
+## How much the card grows under the mouse.
+const HOVER_SCALE := 1.08
 const CAPTION_FONT := 11
 const CAPTION_SMALLEST := 7
 ## How far above the middle of its line the text of a caption is put: the
@@ -148,6 +150,18 @@ func _tip() -> String:
 	return UI.character_tip(def, note) if def != null else ""
 
 
+## The space the card takes while hovered, lifted and grown: what its
+## tooltip has to stay out of.
+func tip_rect() -> Rect2:
+	var rect := get_global_rect()
+	if not interactive:
+		return rect
+	var grown := rect.size * (HOVER_SCALE - 1.0) / 2.0
+	rect = rect.grow_individual(grown.x, grown.y, grown.x, grown.y)
+	rect.position.y -= lift * get_global_transform().get_scale().y
+	return rect
+
+
 func _hover(inside: bool) -> void:
 	if not interactive:
 		return
@@ -156,7 +170,7 @@ func _hover(inside: bool) -> void:
 	z_index = 5 if inside else 0
 	_tween = create_tween().set_parallel()
 	_tween.tween_property(_inner, "position:y", -lift if inside else 0.0, 0.1)
-	_tween.tween_property(_inner, "scale", Vector2.ONE * (1.08 if inside else 1.0), 0.1)
+	_tween.tween_property(_inner, "scale", Vector2.ONE * (HOVER_SCALE if inside else 1.0), 0.1)
 
 
 func _gui_input(event: InputEvent) -> void:

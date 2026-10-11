@@ -74,7 +74,20 @@ const CASE := Rect2(408, -32, 724, 606)
 ## In the case: the ridge between the characters and the items, the title
 ## of the items and the row they lie in.
 const CASE_RIDGE := 468.0
+## How far the line about the deck is lifted off the ridge below it.
+const SUMMARY_RISE := 3.0
 const CASE_ITEMS := 502.0
+## The switch of the book of suspicions: its size, and its knob in blocks.
+const SWITCH := Vector2(42, 22)
+const KNOB: Array[String] = [
+	"..###..",
+	".#o###.",
+	"#o#####",
+	"#######",
+	"#####x#",
+	".###x#.",
+	"..###..",
+]
 ## The sheet of the house rules: its sides, its foot, and where its top is
 ## while the rules are open. Folded away, it is pulled up over the lines of
 ## the clipboard nobody signed (see _place_file).
@@ -107,6 +120,9 @@ var _refreshers: Array = []  # Callables that redraw a stepper value
 var _mode_random: Button
 var _mode_picked: Button
 var _count_row: Control
+var _book_switch: Button
+var _book_knob := 1.0  # where the knob of the switch is: 0 = off, 1 = on
+var _book_tween: Tween
 var _summary: Label
 var _start: Button
 var _resets: Array = []  # {button, is_default: Callable}
@@ -562,9 +578,44 @@ func _build_case() -> void:
 	head.add_child(_mode_picked)
 	box.add_child(head)
 
+	# One row for the switch of the book and for the number of characters,
+	# which only shows while they are drawn at random: the row keeps its
+	# height without it, or everything under it would move up.
+	var options := HBoxContainer.new()
+	options.add_theme_constant_override("separation", 10)
+	options.custom_minimum_size = Vector2(0, 26)
+	box.add_child(options)
+	var book_tip := "Gives every player a book at the table to note down who they think holds each card: filled in by hand, or by the book itself."
+	var book_label := UI.label("Suspicion book", 14, UI.CREAM)
+	book_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	TipLayer.attach(book_label, book_tip)
+	options.add_child(book_label)
+	_book_switch = Button.new()
+	_book_switch.toggle_mode = true
+	_book_switch.focus_mode = Control.FOCUS_NONE
+	_book_switch.custom_minimum_size = SWITCH
+	_book_switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+		_book_switch.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	_book_switch.draw.connect(_draw_book_switch)
+	_book_switch.mouse_entered.connect(_book_switch.queue_redraw)
+	_book_switch.mouse_exited.connect(_book_switch.queue_redraw)
+	_book_switch.toggled.connect(func(on: bool) -> void:
+		_config.suspect_book = on
+		_refresh())
+	TipLayer.attach(_book_switch, book_tip)
+	options.add_child(_book_switch)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(24, 0)
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	options.add_child(gap)
 	_count_row = _stepper("How many characters", "", func(): return _config.character_count,
 			func(v): _config.character_count = v, 3, Content.characters.size())
-	box.add_child(_count_row)
+	_count_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Next to its buttons, not adrift in the middle of the row.
+	(_count_row.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	options.add_child(_count_row)
+	options.custom_minimum_size.y = _count_row.get_combined_minimum_size().y
 
 	# One row while the cast fits in it, two rows of smaller cards after that.
 	var defs := Content.character_list()
@@ -575,7 +626,7 @@ func _build_case() -> void:
 	var row_height := card_height + 16.0
 	var step := GRID_WIDTH / per_row
 	var grid := Control.new()
-	grid.custom_minimum_size = Vector2(GRID_WIDTH, rows * row_height + 6.0)
+	grid.custom_minimum_size = Vector2(GRID_WIDTH, rows * row_height + 2.0)
 	box.add_child(grid)
 	for i in defs.size():
 		var def: CharacterDef = defs[i]
@@ -604,8 +655,14 @@ func _build_case() -> void:
 	box.add_child(_stepper("Copies of each character", "More copies make every claim more believable.",
 			func(): return maxi(_config.copies_per_character, _min_copies()),
 			func(v): _config.copies_per_character = v, 2, 6))
+	# Held a little above its own line, clear of the ridge of the case.
+	var foot := Control.new()
+	foot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_summary = UI.label("", 13, UI.CREAM.darkened(0.25))
-	box.add_child(_summary)
+	_summary.position = Vector2(0, -SUMMARY_RISE)
+	foot.custom_minimum_size = Vector2(0, _summary.get_combined_minimum_size().y - SUMMARY_RISE)
+	foot.add_child(_summary)
+	box.add_child(foot)
 	_build_items()
 
 
@@ -822,6 +879,10 @@ func _redraw() -> void:
 	_style_toggle(_mode_random, _random)
 	_style_toggle(_mode_picked, not _random)
 	_count_row.visible = _random
+	_book_switch.set_pressed_no_signal(_config.suspect_book)
+	_book_switch.disabled = not _host
+	_book_switch.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _host else Control.CURSOR_ARROW
+	_slide_book_knob()
 	for character_id: StringName in _cards:
 		var card: CardView = _cards[character_id]
 		var chosen: bool = not _random and _picked.has(character_id)
@@ -846,6 +907,44 @@ func _redraw() -> void:
 	_start.disabled = problem != ""
 	for reset: Dictionary in _resets:
 		reset.button.visible = _host and not reset.is_default.call()
+
+
+func _slide_book_knob() -> void:
+	var to := 1.0 if _config.suspect_book else 0.0
+	if is_equal_approx(_book_knob, to) or (_book_tween != null and _book_tween.is_running()):
+		return
+	_book_tween = create_tween()
+	_book_tween.tween_method(_set_book_knob, _book_knob, to, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# The room may have changed its mind while the knob was on its way.
+	_book_tween.tween_callback(_slide_book_knob)
+
+
+func _set_book_knob(at: float) -> void:
+	_book_knob = at
+	_book_switch.queue_redraw()
+
+
+## A switch for the velvet of the case: a groove in a red almost black,
+## rimmed in gold thread, and a round gold knob that slides across it.
+func _draw_book_switch() -> void:
+	var b := _book_switch
+	var on := _config.suspect_book
+	var rim := UI.GOLD if on or (b.is_hovered() and _host) else Desk.BRASS
+	var groove := Desk.VELVET_DEEP.lerp(Desk.VELVET_LIGHT, 0.55 * _book_knob)
+	for layer in 2:
+		var inset := 2.0 * layer
+		var ink := rim if layer == 0 else groove
+		b.draw_rect(Rect2(inset + 4.0, inset, SWITCH.x - inset * 2.0 - 8.0, SWITCH.y - inset * 2.0), ink)
+		b.draw_rect(Rect2(inset + 2.0, inset + 2.0, SWITCH.x - inset * 2.0 - 4.0, SWITCH.y - inset * 2.0 - 4.0), ink)
+		b.draw_rect(Rect2(inset, inset + 4.0, SWITCH.x - inset * 2.0, SWITCH.y - inset * 2.0 - 8.0), ink)
+	var metal := Desk.BRASS_DARK.lerp(UI.GOLD, _book_knob)
+	var at := Vector2(roundf(lerpf(4.0, SWITCH.x - 18.0, _book_knob) / 2.0) * 2.0, 4.0)
+	for y in KNOB.size():
+		for x in KNOB[y].length():
+			var bit := KNOB[y][x]
+			if bit != ".":
+				var ink := metal.lightened(0.45) if bit == "o" else metal.darkened(0.3) if bit == "x" else metal
+				b.draw_rect(Rect2(at + Vector2(x, y) * 2.0, Vector2(2, 2)), ink)
 
 
 func _style_toggle(b: Button, on: bool) -> void:

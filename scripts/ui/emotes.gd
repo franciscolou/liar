@@ -214,8 +214,7 @@ func _place(amount: float) -> void:
 
 func _draw_toggle() -> void:
 	var lit := _toggle.is_hovered() or _open
-	_toggle.draw_rect(Rect2(Vector2.ZERO, BUTTON), Color(UI.INK, 0.72))
-	_toggle.draw_rect(Rect2(Vector2.ZERO, BUTTON), UI.GOLD if lit else UI.BORDER.darkened(0.3), false, 2.0)
+	_frame(_toggle, BUTTON, 0.72, lit)
 	var ink := UI.GOLD if lit else UI.CREAM
 	for y in GLYPH.size():
 		for x in GLYPH[y].length():
@@ -223,10 +222,16 @@ func _draw_toggle() -> void:
 				_toggle.draw_rect(Rect2(3 + x * 2, 5 + y * 2, 2, 2), ink)
 
 
+## The box of the log, which the button sits on top of: same fill, same
+## border and the same rounded corners.
+func _frame(canvas: Control, extent: Vector2, opacity: float, lit: bool) -> void:
+	var edge := UI.GOLD if lit else UI.BORDER.darkened(0.3)
+	UI.box(Color(UI.INK, opacity), edge, 2, 4, 0).draw(canvas.get_canvas_item(), Rect2(Vector2.ZERO, extent))
+
+
 func _draw_option(option: Button, kind: int) -> void:
 	var lit := option.is_hovered()
-	option.draw_rect(Rect2(Vector2.ZERO, OPTION), Color(UI.INK, 0.86))
-	option.draw_rect(Rect2(Vector2.ZERO, OPTION), UI.GOLD if lit else UI.BORDER.darkened(0.3), false, 2.0)
+	_frame(option, OPTION, 0.86, lit)
 	Bubble.icon(option, kind, Vector2(3, 2 if lit else 3), 2.0)
 
 

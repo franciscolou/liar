@@ -21,6 +21,7 @@ const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
+const SuspectBook := preload("res://scripts/ui/suspect_book.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
@@ -163,6 +164,8 @@ var _time_glide: Tween
 var _play_fx: PlayFx
 var _pause: Control
 var _peek_all: Button  # for a viewer who is out of the match (see _sync_peek)
+var _book: Control  # the book of suspicions (suspect_book.gd); null while spectating
+var _book_toggle: Button
 # The keyboard (see _key_stops): whether it is what the player is using, the
 # set of stops it is walking and where in it, the control it is on, and the
 # place it was left at in the sets that remember theirs.
@@ -300,6 +303,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		var number: int = event.keycode - KEY_1 if event.keycode < KEY_KP_0 else event.keycode - KEY_KP_1
 		if number >= 0 and number < Emotes.KINDS.size():
 			_emotes.pick(number)
+	if _book != null and not is_instance_valid(_pause) and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_B:
+		_toggle_book()
 
 
 func _input(event: InputEvent) -> void:
@@ -328,6 +333,9 @@ func _back_out() -> bool:
 		return true
 	if _choosing_target():
 		_answer(null)
+		return true
+	if _book != null and _book.is_open():
+		_toggle_book()
 		return true
 	# A choice that hangs over the whole table, with a Cancel of its own.
 	if _pending != null and _pending.kind == Decision.Kind.PICK and _pending.cancellable \
@@ -386,7 +394,7 @@ func _build() -> void:
 	# its tooltip: with a full table, one with words on it lay over the
 	# boxes of the players up there.
 	_peek_all = UI.button("", UI.BORDER, 13)
-	_peek_all.position = Vector2(1040, 8)
+	_peek_all.position = Vector2(1008, 8)
 	_peek_all.size = Vector2(30, 28)
 	_peek_all.pivot_offset = _peek_all.size / 2.0
 	_peek_all.visible = false
@@ -405,11 +413,17 @@ func _build() -> void:
 	_play_fx = PlayFx.new(self)
 	_fx.add_child(_play_fx)
 	_overlay = _layer()
+	_build_book()
+	if _book == null:
+		# Nothing between the eye and the menu.
+		_peek_all.position.x = 1040
 	_popup = _layer()
 	_modal = _layer()
 	# Above anything _lift_hovered brings forward.
 	for layer: Control in [_fx, _overlay, _popup, _modal]:
 		layer.z_index = 2
+	if _book != null:
+		_book.z_index = 2
 	_key_cursor = _layer()
 	_key_cursor.z_index = 3
 	_key_cursor.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -719,6 +733,55 @@ func _show_emote(seat: int, kind: int) -> void:
 	_fx.add_child(bubble)
 	_emote_bubbles[seat] = bubble
 	_play_sfx("emote_" + Emotes.KINDS[kind].id)
+
+
+# === book of suspicions =======================================================
+
+## The viewer's notes on who holds what (see suspect_book.gd): a button next
+## to the menu's, the B key, and a board over the table, under its menus.
+## It is only theirs: nothing of it goes through the engine or the room.
+func _build_book() -> void:
+	if viewer == null or not engine.config.suspect_book:
+		return
+	_book = SuspectBook.new()
+	add_child(_book)
+	_book.setup(engine, viewer)
+	_book.closed.connect(func() -> void: _book_toggle.queue_redraw())
+	_book.marked.connect(_play_sfx.bind("ui_key"))
+	# A button like the menu's, with an open book in it.
+	_book_toggle = UI.button("", UI.BORDER, 13)
+	_book_toggle.position = Vector2(1040, 8)
+	_book_toggle.size = Vector2(30, 28)
+	_book_toggle.pivot_offset = _book_toggle.size / 2.0
+	_book_toggle.draw.connect(_draw_book_toggle)
+	_book_toggle.pressed.connect(_toggle_book)
+	TipLayer.attach(_book_toggle, "[b]Suspicion book[/b]\nWho you think holds each card: your own notes, or the ones the book keeps for you (B).")
+	add_child(_book_toggle)
+	# Under the layers that were made before the book was.
+	move_child(_book_toggle, _prompt.get_index())
+
+
+func _toggle_book() -> void:
+	_book.toggle()
+	_play_sfx("card_draw")
+	_book_toggle.queue_redraw()
+
+
+func _draw_book_toggle() -> void:
+	var ink := UI.GOLD if _book_toggle.is_hovered() or _book.is_open() else UI.CREAM
+	var rows := [
+		".###.###.",
+		"#...#...#",
+		"#.#.#.#.#",
+		"#...#...#",
+		"#.#.#.#.#",
+		"#...#...#",
+		".###.###.",
+	]
+	for y: int in rows.size():
+		for x: int in rows[y].length():
+			if rows[y][x] == "#":
+				_book_toggle.draw_rect(Rect2(6 + x * 2, 7 + y * 2, 2, 2), ink)
 
 
 func _layout_seats() -> void:
@@ -2198,6 +2261,9 @@ func present(e: GameEvent) -> void:
 		&"game_over":
 			await _game_over(d.winner)
 			return
+	# Once the table has shown it: the book must not tell before the cards do.
+	if _book != null:
+		_book.record(e)
 	_sync()
 
 

@@ -24,6 +24,8 @@ var shop_slots := 3
 var reroll_cost := 2
 var inventory_limit := 3
 var anim_speed := 1.0
+## Whether the players get the book of suspicions at the table (suspect_book.gd).
+var suspect_book := false
 var max_turns := 0  # 0 = unlimited (used by headless simulations)
 var rng_seed := 0  # 0 = random
 
@@ -49,7 +51,7 @@ func min_copies(char_count: int) -> int:
 const WIRE_FIELDS := [
 	"seats", "character_count", "copies_per_character", "hand_size", "start_morale",
 	"start_coins", "income", "doubt_cost", "shop_slots", "reroll_cost",
-	"inventory_limit", "anim_speed", "max_turns", "rng_seed",
+	"inventory_limit", "anim_speed", "max_turns", "rng_seed", "suspect_book",
 ]
 
 

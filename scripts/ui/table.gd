@@ -16,6 +16,7 @@ const CROWDED_SEATS := {
 }
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
+const Board := preload("res://scripts/ui/saloon_board.gd")
 const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const Room := preload("res://scripts/net/room.gd")
@@ -1377,7 +1378,7 @@ func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color:
 				quick.call())
 	_popup.add_child(catcher)
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.97), UI.GOLD, 2, 6, 10))
+	Board.frame(panel, UI.BORDER, 14)
 	_popup.add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
@@ -1400,6 +1401,8 @@ func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color:
 			box.add_child(info)
 			continue
 		var b := UI.button(spec.text, spec.get("accent", UI.BORDER), 15)
+		if not spec.has("accent"):
+			Board.plank(b)
 		b.custom_minimum_size = Vector2(270, 36)
 		b.disabled = not spec.get("enabled", true)
 		b.pressed.connect(spec.action)
@@ -1440,7 +1443,7 @@ func _open_modal(title: String) -> VBoxContainer:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_modal.add_child(dim)
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.98), UI.GOLD, 3, 8, 18))
+	Board.frame(panel, UI.BORDER, 22)
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -1468,7 +1471,7 @@ func _toggle_pause() -> void:
 	_pause.z_index = 20
 	add_child(_pause)
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.98), UI.GOLD, 3, 8, 22))
+	Board.frame(panel, UI.BORDER, 24)
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -1476,31 +1479,39 @@ func _toggle_pause() -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
 	panel.add_child(box)
-	var heading := UI.label("PAUSED", 28, UI.GOLD, true)
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var heading: Control = Board.plaque("PAUSED", 26)
 	box.add_child(heading)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 2)
+	box.add_child(gap)
 	var resume := UI.button("Resume", UI.GOLD, 18)
+	Board.plank(resume, UI.GOLD)
 	resume.custom_minimum_size = Vector2(240, 44)
 	resume.pressed.connect(_toggle_pause)
 	box.add_child(resume)
 	var settings := UI.button("Settings", UI.BORDER, 18)
+	Board.plank(settings)
 	settings.pressed.connect(func(): _pause.add_child(SettingsPanel.new()))
 	box.add_child(settings)
 	var help := UI.button("How to play", UI.BORDER, 18)
+	Board.plank(help)
 	help.pressed.connect(func(): _pause.add_child(HelpPanel.new()))
 	box.add_child(help)
 	var fullscreen := UI.button("Fullscreen: on" if UI.is_fullscreen(get_window()) else "Fullscreen: off", UI.BORDER, 18)
 	fullscreen.pressed.connect(func():
 		UI.toggle_fullscreen(get_window())
 		fullscreen.text = "Fullscreen: on" if UI.is_fullscreen(get_window()) else "Fullscreen: off")
+	Board.plank(fullscreen)
 	TipLayer.attach(fullscreen, "Also F11 or Alt+Enter, on any screen.")
 	box.add_child(fullscreen)
 	if _room != null and _room.hosting:
 		var lobby := UI.button("End the match", UI.RED, 18)
+		Board.plank(lobby, UI.RED)
 		lobby.pressed.connect(_confirm.bind("End the match for everyone and take the whole room back to the lobby?", "End the match", _room.to_lobby))
 		TipLayer.attach(lobby, "Stops the match for everyone and takes the whole room back to the lobby.")
 		box.add_child(lobby)
 	var quit := UI.button("Quit to menu", UI.RED, 18)
+	Board.plank(quit, UI.RED)
 	var leave := func() -> void:
 		if Room.current != null:
 			Room.current.leave()
@@ -1525,7 +1536,7 @@ func _confirm(question: String, yes: String, action: Callable) -> void:
 	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_pause.add_child(veil)
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.98), UI.RED, 3, 8, 22))
+	Board.frame(panel, UI.RED, 24)
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -1543,10 +1554,12 @@ func _confirm(question: String, yes: String, action: Callable) -> void:
 	row.add_theme_constant_override("separation", 14)
 	box.add_child(row)
 	var back := UI.button("Cancel", UI.BORDER, 18)
+	Board.plank(back)
 	back.custom_minimum_size = Vector2(150, 44)
 	back.pressed.connect(veil.queue_free)
 	row.add_child(back)
 	var go := UI.button(yes, UI.RED, 18)
+	Board.plank(go, UI.RED)
 	go.custom_minimum_size = Vector2(170, 44)
 	go.pressed.connect(action)
 	row.add_child(go)

@@ -2,9 +2,11 @@ class_name SettingsPanel
 extends ColorRect
 ## The settings overlay: music and sound volume, and the language. Shared by
 ## the title screen and the pause menu; add it as a child and it covers the
-## screen until closed.
+## screen until closed. Its look is saloon_board.gd.
 
 signal closed
+
+const Board := preload("res://scripts/ui/saloon_board.gd")
 
 const PREVIEW_SOUND := "res://assets/sounds/spend.mp3"
 
@@ -19,7 +21,7 @@ func _init() -> void:
 	theme = UI.theme()
 
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.98), UI.GOLD, 3, 8, 22))
+	Board.frame(panel, UI.BORDER, 24)
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
@@ -27,9 +29,7 @@ func _init() -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)
 	panel.add_child(box)
-	var heading := UI.label("SETTINGS", 28, UI.GOLD, true)
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(heading)
+	box.add_child(Board.plaque("SETTINGS", 26))
 
 	box.add_child(_volume_row("Music", Settings.music, func(v: float): Settings.set_music(v)))
 	var sfx_row := _volume_row("Sound effects", Settings.sfx, func(v: float): Settings.set_sfx(v))
@@ -40,6 +40,7 @@ func _init() -> void:
 	var language_row := _row("Language")
 	for code: String in Loc.LANGUAGES:
 		var b := UI.button(Loc.LANGUAGES[code], UI.BORDER, 15)
+		Board.plank(b)
 		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		b.custom_minimum_size = Vector2(124, 32)
 		b.pressed.connect(_on_language_pressed.bind(code))
@@ -49,6 +50,7 @@ func _init() -> void:
 	_restyle_languages()
 
 	var back := UI.button("Back", UI.GOLD, 18)
+	Board.plank(back, UI.GOLD)
 	back.custom_minimum_size = Vector2(200, 42)
 	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	back.pressed.connect(close)
@@ -91,6 +93,7 @@ func _volume_row(text: String, value: float, setter: Callable) -> HBoxContainer:
 	slider.custom_minimum_size = Vector2(210, 24)
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slider.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	Board.rail(slider)
 	row.add_child(slider)
 	var percent := UI.label("", 18, UI.GOLD, true)
 	percent.custom_minimum_size = Vector2(56, 0)
@@ -114,7 +117,4 @@ func _on_language_pressed(code: String) -> void:
 func _restyle_languages() -> void:
 	for code: String in _language_buttons:
 		var b: Button = _language_buttons[code]
-		var on := code == Settings.language
-		var accent := UI.GOLD if on else UI.BORDER.darkened(0.3)
-		b.add_theme_stylebox_override("normal", UI.box(accent.darkened(0.6) if on else UI.PANEL, accent, 2, 4, 6))
-		b.add_theme_color_override("font_color", UI.GOLD if on else UI.MUTED)
+		Board.plank(b, UI.BORDER, code == Settings.language)

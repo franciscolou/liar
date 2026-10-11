@@ -10,6 +10,7 @@ extends ColorRect
 signal closed
 
 const Stall := preload("res://scripts/ui/shop_stall.gd")
+const Board := preload("res://scripts/ui/saloon_board.gd")
 
 const SIZE := Vector2(1040, 584)
 const STAGE := Rect2(24, 92, 600, 412)
@@ -121,7 +122,7 @@ func _init() -> void:
 	Content.ensure_loaded()
 
 	_panel = Panel.new()
-	_panel.add_theme_stylebox_override("panel", UI.box(Color(UI.INK, 0.98), UI.GOLD, 3, 8, 0))
+	Board.frame(_panel, UI.BORDER, 0, true)
 	_panel.size = SIZE
 	_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_panel.offset_left = -SIZE.x / 2.0
@@ -129,10 +130,11 @@ func _init() -> void:
 	_panel.offset_right = SIZE.x / 2.0
 	_panel.offset_bottom = SIZE.y / 2.0
 	add_child(_panel)
-	var heading := UI.label("HOW TO PLAY", 26, UI.GOLD, true)
+	var heading := CenterContainer.new()
 	heading.position = Vector2(0, 10)
 	heading.size = Vector2(SIZE.x, 34)
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	heading.add_child(Board.plaque("HOW TO PLAY", 24))
 	_panel.add_child(heading)
 
 	var gap := 6.0
@@ -147,7 +149,7 @@ func _init() -> void:
 		_done.append(false)
 
 	var felt := Panel.new()
-	felt.add_theme_stylebox_override("panel", UI.box(FELT, UI.BORDER.darkened(0.2), 2, 4, 0))
+	Board.inset(felt, FELT)
 	felt.position = STAGE.position
 	felt.size = STAGE.size
 	felt.clip_contents = true
@@ -179,6 +181,7 @@ func _init() -> void:
 	_text.mouse_filter = Control.MOUSE_FILTER_PASS
 	_panel.add_child(_text)
 	_task_box = PanelContainer.new()
+	Board.inset(_task_box, UI.INK, Board.FRAME_DARK, 10)
 	_task_box.position = COLUMN.position + Vector2(0, 334)
 	_task_box.size = Vector2(COLUMN.size.x, 78)
 	_panel.add_child(_task_box)
@@ -187,11 +190,13 @@ func _init() -> void:
 	_task_box.add_child(_task)
 
 	var previous := UI.button("<", UI.BORDER, 18)
+	Board.plank(previous)
 	previous.position = Vector2(364, 520)
 	previous.size = Vector2(46, 44)
 	previous.pressed.connect(_step.bind(-1))
 	_panel.add_child(previous)
 	var back := UI.button("Back", UI.BORDER, 18)
+	Board.plank(back)
 	back.position = Vector2(420, 520)
 	back.size = Vector2(200, 44)
 	back.pressed.connect(close)
@@ -274,16 +279,15 @@ func _refresh() -> void:
 	var done: bool = _done[_index]
 	var ink := UI.GREEN if done else UI.GOLD
 	_task.text = "[b][color=%s]%s[/color][/b]\n%s" % [UI.hex(ink), Loc.t("DONE" if done else "TRY IT"), Loc.t(lesson.task)]
-	_task_box.add_theme_stylebox_override("panel", UI.box(ink.darkened(0.78), ink.darkened(0.25), 2, 4, 10))
+	_task_box.set_meta(&"board_fill", ink.darkened(0.8))
+	_task_box.set_meta(&"board_edge", ink.darkened(0.3))
+	_task_box.queue_redraw()
 	# Done: the way on lights up.
-	_next.add_theme_stylebox_override("normal", UI.box(UI.GOLD.darkened(0.55), UI.GOLD, 2, 4, 6) if done else UI.box(UI.PANEL_LIGHT, UI.BORDER, 2, 4, 6))
-	_next.add_theme_color_override("font_color", UI.GOLD if done else UI.CREAM)
+	Board.plank(_next, UI.GOLD if done else UI.BORDER)
 	for i: int in _tabs.size():
 		var b: Button = _tabs[i]
 		var on := i == _index
-		var accent := UI.GOLD if on else (UI.GREEN.darkened(0.2) if _done[i] else UI.BORDER.darkened(0.3))
-		b.add_theme_stylebox_override("normal", UI.box(accent.darkened(0.6) if on else UI.PANEL, accent, 2, 4, 6))
-		b.add_theme_color_override("font_color", UI.GOLD if on else (UI.GREEN if _done[i] else UI.MUTED))
+		Board.plank(b, UI.GREEN if _done[i] else UI.BORDER, on)
 
 
 # --- stage props ---------------------------------------------------------------

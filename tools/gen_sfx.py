@@ -438,34 +438,100 @@ def fx_shade():
 
 
 def fx_lute():
-    """A sly little run on the lute."""
+    """A sly little run on the Bard's strings."""
     out = silence(1.0)
     for i, freq in enumerate((293.7, 349.2, 440.0, 523.3, 587.3)):  # D4 F4 A4 C5 D5
-        mix(out, pluck(freq, 0.6, 0.32), i * 0.075, 0.7)
-    mix(out, pluck(146.8, 0.8, 0.5), 0.0, 0.5)
-    return out
+        mix(out, harp(freq, 1.3), i * 0.075, 0.7)
+    mix(out, harp(146.8, 1.3), 0.0, 0.5)
+    return let_ring(out)
 
 
-def harp(freq, seconds, decay):
-    """A harp string, plucked with the flesh of the finger: the instrument
-    the Bard's tunes are played on. Soft and round where pluck() is bright:
-    the overtones fall away as on a real string plucked two fifths of the
-    way along it (a little brighter than 1/n squared, which was found
-    muffled; every fifth one missing), the higher
-    ones die much sooner than the note, they are a hair sharp as on a
-    stretched string, and the attack is a small thump instead of a click.
+def lute(freq, seconds, decay):
+    """A string of the Bard's lute, plucked with the fingertip close to the
+    bridge: what his tunes are played on. It has to read as a string at once,
+    so it is built the way one sounds. The overtones are those of a string
+    plucked a fifth of the way along it (bright, every fifth one missing) and
+    a hair sharp, as on a stretched string. Each one is two strings of a
+    course, a shade apart: one loud and soon gone (the snap of the attack),
+    one quieter that rings on (the sustain), and the two beat slowly against
+    each other. The higher ones die sooner than the note. Under the attack
+    there is the finger leaving the string (a short, bright tick) and the
+    belly of the lute answering (two low knocks of wood). It was once a harp
+    plucked near the middle, found soft and not much like a string.
     `freq` may be a function of t, for a note that is bent."""
     pitch = freq if callable(freq) else (lambda t: freq)
+    first = pitch(0.0)
     out = silence(seconds)
-    for n in range(1, 15):
-        level = abs(math.sin(n * math.pi * 0.4)) / n ** 1.5
+    for n in range(1, 25):
+        if first * n > 9000.0:
+            break
+        level = abs(math.sin(n * math.pi * 0.2)) / n ** 1.15
         if level < 0.004:
             continue
-        sharp = n * math.sqrt(1.0 + 0.00012 * n * n)
-        partial = tone(lambda t, k=sharp: pitch(t) * k, seconds, 0.005, decay / (1.0 + 0.16 * (n - 1) ** 1.2))
-        mix(out, partial, 0.0, level)
-    mix(out, lowpass(noise(0.02, 0.001, 0.008, int(pitch(0.0))), 2200), 0.0, 0.1)
+        sharp = n * math.sqrt(1.0 + 0.00016 * n * n)
+        ring = decay / (1.0 + 0.11 * (n - 1) ** 1.15)
+        snap = tone(lambda t, k=sharp: pitch(t) * k, seconds, 0.0012, min(ring, 0.16 + 0.5 / n))
+        mix(out, snap, 0.0, level * 0.6)
+        twin = tone(lambda t, k=sharp * 1.0009: pitch(t) * k, seconds, 0.003, ring)
+        mix(out, twin, 0.0, level * 0.55)
+    mix(out, bandpass(noise(0.012, 0.0004, 0.005, int(first)), 1800, 7500), 0.0, 0.22)
+    for knock, gain, ring in ((108.0, 0.10, 0.07), (196.0, 0.07, 0.05)):
+        mix(out, tone(knock, min(seconds, 0.14), 0.001, ring), 0.0, gain)
     return out
+
+
+def harp(freq, seconds, decay=0.0):
+    """A harp string: what the Bard plays. Its timbre is measured from a
+    recording of a harp the user gave as the model (an arpeggio of G major,
+    G3 to G6; Downloads/harp.mp3), and it is a dark, pure one:
+    - the note is almost all fundamental: the second overtone is about an
+      eighth of it, the third less than a tenth, and there is next to
+      nothing above 3 kHz, even at the pluck;
+    - the attack in the recording is soft, with no click (here it is given
+      a snap all the same: see the end of the function);
+    - it rings and is not damped: in the recording a note near 290 Hz takes
+      about 3.4 s to fall by 60 dB, one near 500 Hz 2.9 s, one near 1000 Hz
+      1.1 s, so the time to ~5% here goes as 1.5 s * (293 / f) ** 0.85;
+    - a small part of it (about a seventh) is gone in the first tenth of a
+      second, the rest dies evenly; the overtones die sooner than the note.
+    `decay`, if longer than what the string would do by itself, is used
+    instead (the note the tunes hold). Earlier voices: pluck() (found
+    "techno"), a softer harp made by ear (found dull), lute() (found to
+    sound like a banjo) and a brighter harp plucked at a third (before the
+    recording was given). `freq` may be a function of t, for a note that is
+    bent."""
+    pitch = freq if callable(freq) else (lambda t: freq)
+    first = pitch(0.0)
+    ring = max(decay, 1.5 * (293.0 / first) ** 0.85)
+    out = silence(seconds)
+    for n, level in ((1, 1.0), (2, 0.2), (3, 0.12), (4, 0.05), (5, 0.03), (6, 0.015)):
+        if first * n > 5000.0:
+            break
+        sharp = n * math.sqrt(1.0 + 0.00008 * n * n)
+        last = ring / n ** 0.6
+        mix(out, tone(lambda t, k=sharp: pitch(t) * k, seconds, 0.002, last), 0.0, level * 0.86)
+        mix(out, tone(lambda t, k=sharp: pitch(t) * k, seconds, 0.002, min(last, 0.1)), 0.0, level * 0.14)
+    # The snap of the string as the finger lets it go (asked for: built to
+    # the recording alone, the note was found muffled). For a few hundredths
+    # of a second the string is still the bent shape it was pulled into,
+    # with every overtone in it; they are gone before the note has settled,
+    # so what rings on is as dark as before.
+    snap = min(seconds, 0.2)
+    for n in range(2, 15):
+        if first * n > 8000.0:
+            break
+        sharp = n * math.sqrt(1.0 + 0.00008 * n * n)
+        level = 0.55 * abs(math.sin(n * math.pi * 0.23)) / n ** 0.9
+        mix(out, tone(lambda t, k=sharp: pitch(t) * k, snap, 0.001, 0.035 + 0.11 / n), 0.0, level)
+    mix(out, bandpass(noise(0.01, 0.0005, 0.004, int(first)), 1500, 6500), 0.0, 0.14)
+    return out
+
+
+def let_ring(samples, fade=0.5):
+    """The end of a sound whose strings are still ringing: faded out over
+    its last `fade` seconds instead of cut."""
+    n = int(fade * RATE)
+    return [s * min(1.0, (len(samples) - i) / n) for i, s in enumerate(samples)]
 
 
 def bent(below, freq, climb=0.06):
@@ -491,18 +557,22 @@ def serenade_lead(melody, hold=True):
     is bent into from (see bent), and a fifth how long the bend takes. With
     `hold`, the last one is held instead: struck as written (a B flat) and
     slid up a whole tone to C with a vibrato on it. Each tune then builds
-    its own room around it, and is passed through lowpass(out, 4800) at the
-    end."""
+    its own room around it, and is passed through lowpass(out, 9000) at the
+    end (it was 4800, which took the edge off the strings)."""
     # How loud the harp is over what is under it.
     lead = 1.5
-    # A string that is stopped is damped by the hand, not cut: this much
-    # of it is still heard after the time the note was given.
-    release = 0.12
+    # A string is not stopped when the next one is plucked: it rings on
+    # under it for this long after the time the note was given, dying away
+    # (it was 0.12 s, damped by the hand, and the tune was found to want
+    # sustain; a harp's strings are left to ring, and in the recording the
+    # timbre was taken from they do).
+    release = 0.8
     out = silence(4.6)
     for entry in melody[:-1] if hold else melody:
         freq, at, note = entry[:3]
-        # A long note is let ring for its whole time instead of dying early.
-        decay = max(0.5, note * 1.4)
+        # A long note is let ring for its whole time instead of dying early;
+        # a short one dies as the string does (see harp).
+        decay = note * 1.8 if note > 1.0 else 0.0
         # A note held for more than a second is let go of slowly, inside its
         # own time, instead.
         short = note <= 1.0
@@ -529,7 +599,7 @@ def serenade_lead(melody, hold=True):
         return low * 2.0 ** ((200.0 * up + waver) / 1200.0)
 
     # It dies away slowly, so that the slide is heard to its end.
-    ringing = harp(sliding, held, 4.5)
+    ringing = harp(sliding, held, 6.0)
     ringing = [s * min(1.0, (len(ringing) - i) / (fade_out * RATE)) for i, s in enumerate(ringing)]
     mix(out, ringing, at, lead)
     return out
@@ -554,7 +624,7 @@ def fx_serenade():
             mix(out, vibes(freq, ring, ring * 0.8), at + i * 0.012, 0.16)
     for at in (0.8, 1.6, 3.2, 4.0):
         mix(out, brush(0.16, 43 + int(at * 10)), at, 0.22)
-    return lowpass(out, 4800)
+    return lowpass(out, 9000)
 
 
 def fx_serenade_2():
@@ -585,7 +655,7 @@ def fx_serenade_2():
     for at in (0.8, 1.6, 2.0):
         mix(out, brush(0.12, 43 + int(at * 10)), at, 0.2)
     mix(out, brush(1.2, 77), 3.2, 0.1)
-    return lowpass(out, 4800)
+    return lowpass(out, 9000)
 
 
 def fx_serenade_3():
@@ -620,7 +690,7 @@ def fx_serenade_3():
     for at, seed in ((0.0, 81), (2.4, 83)):
         stir = noise(1.5, 0.5, 1.0, seed)
         mix(out, bandpass(stir, 1500, 5000), at, 0.05)
-    return lowpass(out, 4800)
+    return lowpass(out, 9000)
 
 
 def fx_serenade_4():
@@ -648,7 +718,7 @@ def fx_serenade_4():
         for i, freq in enumerate(chord):
             mix(out, piano(freq, ring, ring * 0.8), at + i * 0.04, 0.12)
     mix(out, bandpass(noise(1.5, 0.5, 1.0, 87), 1500, 5000), 1.8, 0.05)
-    return lowpass(out, 4800)
+    return lowpass(out, 9000)
 
 
 def fx_serenade_5():
@@ -672,7 +742,7 @@ def fx_serenade_5():
         for i, freq in enumerate(chord):
             mix(out, vibes(freq, ring, ring * 0.8), at + i * 0.035, 0.14)
     mix(out, bandpass(noise(1.5, 0.5, 1.0, 91), 1500, 5000), 2.2, 0.05)
-    return lowpass(out, 4800)
+    return lowpass(out, 9000)
 
 
 def fx_doll_hit():
@@ -688,10 +758,10 @@ def fx_lute_flourish():
     """A quick turn and a bright chord: nothing sticks to him."""
     out = silence(0.8)
     for i, freq in enumerate((587.3, 523.3, 587.3)):
-        mix(out, pluck(freq, 0.3, 0.15), i * 0.06, 0.6)
+        mix(out, harp(freq, 0.5), i * 0.06, 0.6)
     for freq in (293.7, 370.0, 440.0, 587.3):  # D major
-        mix(out, pluck(freq, 0.55, 0.36), 0.2, 0.5)
-    return out
+        mix(out, harp(freq, 1.3), 0.2, 0.5)
+    return let_ring(out)
 
 
 def slack_string(freq, seconds, decay, drop, wobble, seed):

@@ -27,12 +27,27 @@ const DOORS := &"doors"
 const KEYHOLE := &"keyhole"
 const DEAL := &"deal"
 const GATHER := &"gather"
+## Between two screens laid on the same desk (noir_desk.gd): nothing covers
+## the screen. What lies on the desk is dragged off it to the sides, and what
+## the next screen has is dragged on. Both scenes answer `desk_slide(amount)`
+## (0: everything in place, 1: the desk is bare); leaving a scene that does
+## not, this is the keyhole.
+const DESK := &"desk"
 ## Seconds each style takes to cover the screen and to uncover it.
 const TIMES := {
 	DOORS: [0.45, 0.7],
 	KEYHOLE: [0.55, 0.65],
 	DEAL: [0.75, 0.9],
 	GATHER: [0.6, 0.9],
+	DESK: [0.5, 0.65],
+}
+## The sound of each style as it covers the screen, and as it uncovers it.
+const SOUNDS := {
+	DOORS: ["ui_doors_shut", "ui_doors_open"],
+	KEYHOLE: ["ui_lock", "ui_unlock"],
+	DEAL: ["ui_deal", "ui_gather"],
+	GATHER: ["ui_deal", "ui_gather"],
+	DESK: ["ui_gather", "ui_gather"],
 }
 ## The least time the screen stays covered.
 const HOLD := 0.18
@@ -66,6 +81,14 @@ static func go(path: String, style := DOORS, cut := false) -> void:
 		# The root is busy while a scene is on its way in.
 		root.add_child.call_deferred(node)
 	node._go(path, style, cut)
+
+
+## True while a DESK transition has the desk bare or on its way to it: a
+## scene that opens then starts with nothing on its desk (it would show
+## whole for a frame before being told).
+static func desk_bare() -> bool:
+	var node: Node = (Engine.get_main_loop() as SceneTree).root.get_node_or_null(NODE_NAME)
+	return node != null and node._style == DESK and node._phase != Phase.IDLE
 
 
 func _init() -> void:
@@ -103,6 +126,10 @@ func _go(path: String, style: StringName, cut: bool) -> void:
 		viewport.gui_release_focus()
 	match _phase:
 		Phase.IDLE:
+			# Not get_tree(): the first time, this node is not in the tree yet.
+			var leaving := (Engine.get_main_loop() as SceneTree).current_scene
+			if style == DESK and (leaving == null or not leaving.has_method(&"desk_slide")):
+				style = KEYHOLE
 			_style = style
 			_screen.style = style
 			_screen.deal()
@@ -111,7 +138,7 @@ func _go(path: String, style: StringName, cut: bool) -> void:
 			if cut:
 				_t = 1.0
 			else:
-				_play({DOORS: "ui_doors_shut", KEYHOLE: "ui_lock", DEAL: "ui_deal", GATHER: "ui_deal"}[style])
+				_play(SOUNDS[style][0])
 			set_process(true)
 			_show()
 		Phase.UNCOVER:
@@ -147,7 +174,7 @@ func _process(_delta: float) -> void:
 					_change()
 				elif _t >= HOLD:
 					_enter(Phase.UNCOVER)
-					_play({DOORS: "ui_doors_open", KEYHOLE: "ui_unlock", DEAL: "ui_gather", GATHER: "ui_gather"}[_style])
+					_play(SOUNDS[_style][1])
 		Phase.UNCOVER:
 			_t = minf(_t + delta / TIMES[_style][1], 1.0)
 			if _t >= 1.0:
@@ -157,6 +184,7 @@ func _process(_delta: float) -> void:
 				_doors.hide()
 				_hole.hide()
 				offset = Vector2.ZERO
+				_slide(0.0)
 				return
 	_show()
 
@@ -185,6 +213,8 @@ func _show() -> void:
 		# They fall shut faster and faster, and open the way a door is pushed.
 		var shut := smoothstep(0.0, 1.0, cover) if _phase == Phase.UNCOVER else cover * cover
 		(_doors.material as ShaderMaterial).set_shader_parameter("shut", shut)
+	if _style == DESK:
+		_slide(cover)
 	_hole.visible = _style == KEYHOLE
 	if _style == KEYHOLE:
 		# Slow near the keyhole, fast when the whole door is out of sight.
@@ -194,6 +224,15 @@ func _show() -> void:
 	if _style == DOORS and _phase == Phase.HOLD:
 		var slam := maxf(1.0 - _t / HOLD, 0.0)
 		offset = Vector2(0, roundf(sin(_t * 70.0) * 5.0 * slam))
+
+
+## Tells the scene on the screen how bare its desk is.
+func _slide(amount: float) -> void:
+	if _style != DESK:
+		return
+	var scene := (Engine.get_main_loop() as SceneTree).current_scene
+	if scene != null and scene.is_node_ready() and scene.has_method(&"desk_slide"):
+		scene.call(&"desk_slide", amount)
 
 
 func _play(sound: String) -> void:

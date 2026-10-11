@@ -176,7 +176,7 @@ func _fail(reason: String) -> void:
 		return
 	notice = reason
 	leave()
-	_show(SCREEN, Transition.KEYHOLE)
+	_show(SCREEN, Transition.DESK)
 
 
 func _on_join_timeout() -> void:
@@ -330,7 +330,7 @@ func _lobby(state: Dictionary) -> void:
 	config = GameConfig.from_wire(state.config)
 	if not _joined:
 		_joined = true
-		_show(LOBBY, Transition.KEYHOLE)
+		_show(LOBBY, Transition.DESK)
 	changed.emit()
 
 

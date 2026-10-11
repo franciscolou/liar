@@ -124,6 +124,8 @@ var _shop_tween: Tween
 var _onlooker: Control
 var _deck_label: Label
 var _stage: PanelContainer
+## Claims declared and not over yet: one made in answer to another is nested.
+var _claims_open := 0
 var _stage_stack: Array = []
 var _prompt: PanelContainer
 var _popup: Control
@@ -1576,6 +1578,7 @@ func present(e: GameEvent) -> void:
 			await _anim_coins(d)
 		&"claim_declared":
 			# A claim made in the middle of a borrowed action is nobody's copy.
+			_claims_open += 1
 			_play_fx.step_in(d.play)
 			await _anim_claim(d.play)
 		&"doubt_declared":
@@ -1586,7 +1589,12 @@ func present(e: GameEvent) -> void:
 			_play_sfx("cancel")
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolved":
-			_play_fx.put_away()
+			# A claim answering another one (a Silver Tongue caught lying, a
+			# Swindle) ends in the middle of it: what the first left out on
+			# the table is still waiting.
+			_claims_open = maxi(_claims_open - 1, 0)
+			if _claims_open == 0:
+				_play_fx.put_away()
 			_play_fx.step_out(d.play)
 			if d.play.aimed() != d.play:
 				# The Impostor's borrowed action is over, and so is its look.

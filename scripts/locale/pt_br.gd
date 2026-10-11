@@ -52,6 +52,8 @@ const MESSAGES := {
 	"Nothing to repeat yet": "Ainda não há ação para repetir",
 	"Nobody holds an item to copy": "Ninguém tem um item para copiar",
 	"Which item do you copy?": "Qual item você copia?",
+	"Copy it for %d coins.": "Copie por %d moedas.",
+	"Copy it for free.": "Copie de graça.",
 	"Gain 7 coins.": "Ganhe 7 moedas.",
 	"Pay 5 coins to also damage another player.": "Pague 5 moedas para também causar dano a outro jogador.",
 	"When you deal damage": "Quando você causa dano",

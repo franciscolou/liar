@@ -201,6 +201,11 @@ func _purse_note(coins: int) -> String:
 	return Loc.t("An even trade for the Morale.")
 
 
+## The items in their orbit, in the order the keyboard walks them.
+func views() -> Array[ItemView]:
+	return _views
+
+
 func _pick(index: int) -> void:
 	picked.emit(index)
 

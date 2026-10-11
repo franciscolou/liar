@@ -115,6 +115,16 @@ const SPIN_UP := 2.1
 const UNWIND := 0.7
 const NOODLE := 1.5
 const MADE := Vector2(61, 64)
+## What is made, on its way to the inventory: the seconds it takes, how far
+## round it goes on the way (radians), how much wider its circle gets (as a
+## share of the distance, within these bounds) and the part of the way it
+## spends still going round the hole before its circle sets off.
+const SLING := 1.05
+const SLING_SWEEP := 8.8
+const SLING_SWELL := 0.2
+const SLING_SWELL_MIN := 26.0
+const SLING_SWELL_MAX := 60.0
+const SLING_STAY := 0.28
 ## A card thrown on the tray of a Last Call, and where one is held up to be
 ## seen before it goes in (from the middle of the tray).
 ## The shadow of a Sneak Peek: how far short of the hand its hat stops, the
@@ -191,7 +201,8 @@ var _debris_owner: PlayerState
 ## item itself, standing where it was until it is gained.
 var _hole: SingularityFx
 var _hole_owner: PlayerState
-var _made: PrismFx
+## True once what goes round the hole is the item it made.
+var _made := false
 var _made_at := Vector2.INF
 ## What makes a borrowed action look and sound wrong (see corrupt).
 ## The shadow of a Sneak Peek, out and waiting for card_peeked.
@@ -2841,7 +2852,7 @@ func _open_hole(who: PlayerState) -> SingularityFx:
 
 ## True while the singularity of `who` is open with nothing made yet.
 func materializing(who: PlayerState) -> bool:
-	return _hole != null and is_instance_valid(_hole) and _hole_owner == who
+	return _hole != null and is_instance_valid(_hole) and _hole_owner == who and not _made
 
 
 ## The coins a Materialize costs on top of the Morale (`d` is their "coins"
@@ -2868,7 +2879,7 @@ func hoard_cost(d: Dictionary) -> void:
 ## `from` for the singularity and goes round it with whatever coins are
 ## there already, faster and faster, drawn out longer and thinner, until on
 ## one of the turns what comes round is `item`. That slows down, is itself
-## again and is left where the singularity was, for item_materialized.
+## again and goes on round the singularity, for item_materialized.
 ## `label` is what the table calls it.
 func spaghettify(who: PlayerState, from: Vector2, item: Texture2D, label: String) -> void:
 	if not materializing(who) or item == null:
@@ -2913,28 +2924,13 @@ func spaghettify(who: PlayerState, from: Vector2, item: Texture2D, label: String
 	if not is_instance_valid(hole):
 		return
 
-	# It is a thing now: it comes off the turn and stands where the hole was.
-	var pose := hole.pose()
-	hole.clear()
-	var made := PrismFx.new(item, MADE)
-	made.position = pose[0]
-	made.rotation = pose[1]
-	made.split = 8.0
-	add_child(made)
-	_hole = null
-	_made = made
+	# It is a thing now, and goes on round the hole until it is somebody's
+	# (item_materialized).
+	_made = true
 	_made_at = at
-	var land := made.create_tween().set_parallel()
-	land.tween_property(made, "position", at, 0.26 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	land.tween_property(made, "rotation", snappedf(pose[1], TAU), 0.26 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	land.tween_property(made, "split", 0.0, 0.3 / speed)
-	var close := hole.create_tween()
-	close.tween_property(hole, "open", 0.0, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-	close.tween_callback(hole.queue_free)
-	await _wait(0.28)
 	ring(at, Color.WHITE, 10.0, 60.0, 0.3, 3.0)
-	table._float(label, at + Vector2(0, -MADE.y / 2.0 - 10.0), UI.BLUE)
-	await _wait(0.3)
+	table._float(label, at + Vector2(0, -ORBIT - MADE.y / 2.0 - 6.0), UI.BLUE)
+	await _wait(0.2)
 
 
 ## A closing ring about the singularity: everything near it leans in.
@@ -2943,9 +2939,9 @@ func _drawn_in(hole: SingularityFx) -> void:
 		_prism_rings(hole.position, 84.0, 16.0, 0.3, 2.0)
 
 
-## True while what `who` made out of Morale stands on the table, not yet theirs.
+## True while what `who` made out of Morale goes round the hole, not yet theirs.
 func made_for(who: PlayerState) -> bool:
-	return _made != null and is_instance_valid(_made) and _hole_owner == who
+	return _made and _hole != null and is_instance_valid(_hole) and _hole_owner == who
 
 
 ## Where the singularity of `who` was: the change of a Materialize comes out
@@ -2954,23 +2950,66 @@ func made_at(who: PlayerState) -> Vector2:
 	return _made_at if _hole_owner == who else Vector2.INF
 
 
-## What was made goes to `home`, its place in the inventory, shrinking to
-## `shrink` of its size on the way.
+## What was made leaves the turn it was on for `home`, its place in the
+## inventory, without ever stopping: it goes on round, on a circle that opens
+## wide and then closes on `home`, shrinking to `shrink` of its size and
+## coming upright on the way. The hole closes behind it.
 func item_materialized(home: Vector2, shrink: float) -> void:
-	var item := _made
-	_made = null
-	if item == null or not is_instance_valid(item):
+	var hole := _hole
+	var made := _made
+	_hole = null
+	_made = false
+	if hole == null or not is_instance_valid(hole):
 		return
 	var speed: float = table._speed
-	var pocket := item.create_tween().set_parallel()
-	pocket.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	pocket.tween_property(item, "position", home, 0.3 / speed)
-	pocket.tween_property(item, "scale", Vector2.ONE * shrink, 0.3 / speed)
-	await _wait(0.3)
+	var picture := hole.held()
+	var pose := hole.pose()
+	var turning := hole.whirl_speed
+	var wide := hole.reach
+	var hub := hole.position
+	hole.clear()
+	var close := hole.create_tween()
+	close.tween_property(hole, "open", 0.0, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	close.tween_callback(hole.queue_free)
+	if not made or picture == null:
+		return
+	var item := PrismFx.new(picture, MADE)
+	item.position = pose[0]
+	item.rotation = pose[1]
+	item.split = 5.0
+	add_child(item)
+	var way := {
+		"hub": hub, "home": home, "wide": wide, "from": pose[1] - PI / 2.0,
+		# It leaves at the speed it was going round at, and gathers more.
+		"lead": turning * SLING, "sweep": maxf(SLING_SWEEP, turning * SLING),
+		"swell": clampf(hub.distance_to(home) * SLING_SWELL, SLING_SWELL_MIN, SLING_SWELL_MAX),
+		"upright": snappedf(pose[1], TAU), "shrink": shrink,
+	}
+	var fly := item.create_tween()
+	fly.tween_method(_sling.bind(item, way), 0.0, 1.0, SLING / speed)
+	await _wait(SLING)
 	_snd("item_get")
 	rise(home, COSMOS.lightened(0.4), 6, 16.0)
 	if is_instance_valid(item):
 		item.queue_free()
+
+
+## One moment (`t`, 0 to 1) of the way of a made item from the hole to its
+## place: it goes on round the hole on a circle that opens, then the middle
+## of the circle sets off for the place while the circle closes to nothing.
+func _sling(t: float, item: PrismFx, way: Dictionary) -> void:
+	if not is_instance_valid(item):
+		return
+	var lead: float = way.lead
+	var angle: float = way.from + lead * t + (way.sweep - lead) * t * t
+	var middle: Vector2 = (way.hub as Vector2).lerp(way.home, smoothstep(SLING_STAY, 1.0, t))
+	var wide: float = (way.wide + way.swell * smoothstep(0.0, 0.45, t)) * (1.0 - smoothstep(0.5, 1.0, t))
+	item.position = middle + Vector2.from_angle(angle) * wide
+	# Turned along its way at first, upright by the time it is there.
+	var settled := smoothstep(0.4, 0.95, t)
+	item.rotation = lerp_angle(angle + PI / 2.0, way.upright, settled)
+	item.scale = Vector2.ONE * lerpf(1.0, way.shrink, smoothstep(0.5, 1.0, t))
+	item.split = 5.0 * (1.0 - t)
 
 
 ## Closes a singularity nothing came out of, with whatever was going round it.
@@ -2980,11 +3019,9 @@ func drop_hole() -> void:
 		close.tween_property(_hole, "open", 0.0, 0.2 / table._speed)
 		close.parallel().tween_property(_hole, "modulate:a", 0.0, 0.2 / table._speed)
 		close.tween_callback(_hole.queue_free)
-	if _made != null and is_instance_valid(_made):
-		_made.queue_free()
 	_hole = null
 	_hole_owner = null
-	_made = null
+	_made = false
 	_made_at = Vector2.INF
 
 
@@ -5600,6 +5637,10 @@ class SingularityFx extends Control:
 
 	func clear() -> void:
 		_orbiters.clear()
+
+	## The picture of the first thing going round, or null.
+	func held() -> Texture2D:
+		return _orbiters[0].tex if not _orbiters.is_empty() else null
 
 	## Where the first thing going round is on screen, and how it is turned.
 	func pose() -> Array:

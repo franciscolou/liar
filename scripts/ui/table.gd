@@ -19,6 +19,7 @@ const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const Board := preload("res://scripts/ui/saloon_board.gd")
 const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
+const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
@@ -143,6 +144,20 @@ var _time_glide: Tween
 var _play_fx: PlayFx
 var _pause: Control
 var _peek_all: Button  # for a viewer who is out of the match (see _sync_peek)
+# The keyboard (see _key_stops): whether it is what the player is using, the
+# set of stops it is walking and where in it, the control it is on, and the
+# place it was left at in the sets that remember theirs.
+var _keys_on := false
+var _key_id := ""
+var _key_row := 0
+var _key_col := 0
+var _key_node: Control
+var _key_places: Dictionary = {}
+var _key_since := 0
+var _key_turn := -1
+var _key_cursor: Control
+var _key_in_shop := false
+var _card_pick: Dictionary = {}  # the card pick that is open: {veil, cards}
 
 
 func _ready() -> void:
@@ -238,9 +253,10 @@ func _retranslate() -> void:
 
 func _process(_delta: float) -> void:
 	_lift_hovered()
+	_track_keys()
 	# A shop opened by hovering folds again once the mouse leaves it, unless
-	# it was pinned or one of its menus is still up.
-	if not _shop_open or _shop_pinned or _popup.get_child_count() > 0:
+	# it was pinned, one of its menus is still up or the keyboard is in it.
+	if not _shop_open or _shop_pinned or _popup.get_child_count() > 0 or _key_in_shop:
 		return
 	if not _shop.get_global_rect().grow(8.0).has_point(get_global_mouse_position()):
 		_set_shop_open(false)
@@ -267,6 +283,11 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		if _choosing_target() and _back_out():
 			get_viewport().set_input_as_handled()
+	# The mouse takes over from the keyboard as soon as it is used.
+	if (event is InputEventMouseMotion and event.relative != Vector2.ZERO) or (event is InputEventMouseButton and event.pressed):
+		_keys_on = false
+	elif event is InputEventKey or event is InputEventJoypadButton:
+		_on_key(event)
 
 
 func _choosing_target() -> bool:
@@ -283,6 +304,11 @@ func _back_out() -> bool:
 		return true
 	if _choosing_target():
 		_answer(null)
+		return true
+	# A choice that hangs over the whole table, with a Cancel of its own.
+	if _pending != null and _pending.kind == Decision.Kind.PICK and _pending.cancellable \
+			and _pending.context.get("look") in [&"cosmos", &"wand"] and _modal.get_child_count() > 0:
+		_answer(-1)
 		return true
 	return false
 
@@ -354,6 +380,10 @@ func _build() -> void:
 	# Above anything _lift_hovered brings forward.
 	for layer: Control in [_fx, _overlay, _popup, _modal]:
 		layer.z_index = 2
+	_key_cursor = _layer()
+	_key_cursor.z_index = 3
+	_key_cursor.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_key_cursor.draw.connect(_draw_key_cursor)
 	add_child(TipLayer.new())
 
 	Jukebox.play(Jukebox.MATCH)
@@ -388,8 +418,8 @@ func _build_shop() -> void:
 
 	# The deck stays put at the right end whether the shop is open or not.
 	var deck_x := _shop_width - SHOP_DECK_WIDTH
-	var deck := CardView.new(0.62)
-	deck.position = Vector2(deck_x + 14, 18)
+	var deck := CardView.new(0.52)
+	deck.position = Vector2(deck_x + 16, 24)
 	deck.interactive = false
 	deck.mouse_entered.connect(_set_shop_open.bind(true))
 	_shop.add_child(deck)
@@ -659,6 +689,10 @@ func request(d: Decision) -> Variant:
 	_pending = d
 	match d.kind:
 		Decision.Kind.TURN:
+			# A new turn: the keyboard starts from the hand again.
+			if _key_turn != engine.turn_count:
+				_key_turn = engine.turn_count
+				_key_places.erase("turn")
 			_hero.set_turn(d.options)
 			_sync_shop()
 		Decision.Kind.TARGET:
@@ -1074,6 +1108,17 @@ func _open_pick(d: Decision) -> void:
 		_modal.add_child(sky)
 		_play_sfx("fx_stardust")
 		return
+	if d.context.get("look") == &"wand":
+		var spots := _wand_spots(d)
+		if not spots.is_empty():
+			# Not a window either: the items float up where they lie (see wand_pick.gd).
+			UI.clear(_modal)
+			var show := WandPick.new()
+			show.setup(d, spots, _price_ink())
+			show.picked.connect(_answer)
+			_modal.add_child(show)
+			_play_sfx("fx_stardust")
+			return
 	var panel := _open_modal(d.prompt)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1107,6 +1152,32 @@ func _open_pick(d: Decision) -> void:
 		cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		cancel.pressed.connect(_answer.bind(-1))
 		panel.add_child(cancel)
+
+
+## Where each item a Counterfeit may copy lies, and where it floats to while
+## the player chooses: under the box of whoever holds it, side by side.
+## [{option, from, to}], from the left of the screen to the right.
+func _wand_spots(d: Decision) -> Array:
+	var spots := []
+	for p: PlayerState in engine.opponents(d.player):
+		if not _seats.has(p.id):
+			continue
+		var held := []
+		for i in p.items.size():
+			var instance: ItemInstance = p.items[i]
+			if instance.hidden:
+				continue
+			for o in d.options.size():
+				if d.options[o].get("item") == instance.def:
+					held.append({"option": o, "from": _item_spot(p, i)})
+		var box: Rect2 = _seats[p.id].get_global_rect()
+		var step := 56.0
+		for i in held.size():
+			var x := box.get_center().x + (i - (held.size() - 1) / 2.0) * step
+			held[i]["to"] = Vector2(clampf(x, 30.0, size.x - 30.0), box.end.y + 36.0)
+		spots.append_array(held)
+	spots.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.to.x < b.to.x)
+	return spots
 
 
 ## Choosing among cards: no window, the table sinks into a dark red and the
@@ -1194,6 +1265,7 @@ func _open_card_pick(d: Decision) -> void:
 		veil.add_child(cancel)
 		late.append(cancel)
 	veil.set_meta(&"late", late)
+	_card_pick = {"veil": veil, "cards": cards}
 	var reveal := create_tween().bind_node(veil).set_parallel()
 	for node: Control in late:
 		reveal.tween_property(node, "modulate:a", 1.0, 0.3 / _speed).set_delay(0.3 / _speed)
@@ -1456,6 +1528,213 @@ func _open_modal(title: String) -> VBoxContainer:
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(heading)
 	return box
+
+
+# === keyboard =================================================================
+
+## What the keyboard can be on right now, or {} if there is nothing for it:
+## {id, rows, upright, start, keep}. `rows` are rows of controls, walked with
+## left and right, and from one row to the other with up and down; an
+## `upright` set is one column, walked with up and down. Enter does to the
+## control what a click would (_key_press). `start` is the control the
+## keyboard begins on; a set with `keep` is taken up again where it was left.
+func _key_stops() -> Dictionary:
+	if engine == null or (_pause != null and is_instance_valid(_pause)):
+		return {}
+	if _popup.get_child_count() > 0:
+		return {"id": "popup", "rows": [_buttons_in(_popup)], "upright": true}
+	if _modal.get_child_count() > 0:
+		var top := _modal.get_child(_modal.get_child_count() - 1)
+		var buttons := _buttons_in(_modal)
+		if top.has_method(&"views"):
+			var views: Array = top.call(&"views")
+			return {"id": "views", "rows": [views, buttons], "start": views.front() if not views.is_empty() else null}
+		var veil: Variant = _card_pick.get("veil")
+		if is_instance_valid(veil) and veil.get_parent() == _modal:
+			if veil.has_meta(&"closing"):
+				return {}
+			return {"id": "cards", "rows": [_card_pick.cards, buttons]}
+		return {"id": "modal", "rows": [buttons]}
+	if _pending == null:
+		return {}
+	match _pending.kind:
+		Decision.Kind.TURN:
+			var goods := []
+			for entry: Dictionary in _shop_entries:
+				if _entry_def(entry) != null:
+					goods.append(entry.view)
+			if _shop_reroll.visible and not _shop_reroll.disabled:
+				goods.append(_shop_reroll)
+			return {"id": "turn", "rows": [goods, _hero.key_stops()], "start": _hero.card(0), "keep": true}
+		Decision.Kind.TARGET:
+			var seats := []
+			for p: PlayerState in _pending.options:
+				if _seats.has(p.id):
+					seats.append(_seats[p.id])
+			seats.sort_custom(func(a: Control, b: Control) -> bool: return a.position.x < b.position.x)
+			return {"id": "target", "rows": [seats]}
+		Decision.Kind.DOUBT, Decision.Kind.REACT:
+			var buttons := _buttons_in(_prompt)
+			# Letting it pass is the answer a stray Enter costs the least.
+			return {"id": "prompt", "rows": [buttons], "start": buttons.back() if not buttons.is_empty() else null}
+		Decision.Kind.PICK:
+			var holder: Variant = _pending.context.get("held_by")
+			if holder is PlayerState and _seats.has(holder.id):
+				return {"id": "items", "rows": [_seats[holder.id].item_views()]}
+	return {}
+
+
+## Every button under `node` that can be pressed, in tree order.
+func _buttons_in(node: Node) -> Array:
+	var found := []
+	for child: Node in node.get_children():
+		if child is BaseButton and child.is_visible_in_tree() and not child.disabled:
+			found.append(child)
+		found.append_array(_buttons_in(child))
+	return found
+
+
+## An arrow or Enter. The first key after the mouse only shows where the
+## keyboard is; from then on arrows move it and Enter presses what it is on.
+func _on_key(event: InputEvent) -> void:
+	var step := Vector2i.ZERO
+	for way: Array in [["ui_left", Vector2i.LEFT], ["ui_right", Vector2i.RIGHT], ["ui_up", Vector2i.UP], ["ui_down", Vector2i.DOWN]]:
+		if event.is_action_pressed(way[0], true):
+			step = way[1]
+	var enter := event.is_action_pressed("ui_accept")
+	if step == Vector2i.ZERO and not enter:
+		return
+	var stops := _key_stops()
+	if stops.is_empty():
+		return
+	get_viewport().set_input_as_handled()
+	var rows: Array = stops.rows.filter(func(row: Array) -> bool: return not row.is_empty())
+	if rows.is_empty():
+		# A menu with nothing to press in it: Enter or down puts it away.
+		if (enter or step == Vector2i.DOWN) and stops.id == "popup":
+			_close_popup()
+		return
+	if not _keys_on:
+		_keys_on = true
+		_track_keys()
+		return
+	_track_keys()
+	if enter:
+		# Not the Enter that was meant for what was on screen a moment ago.
+		if Time.get_ticks_msec() - _key_since > 250:
+			_key_press(_key_node)
+		return
+	if stops.get("upright", false):
+		if stops.id == "popup" and step.y != 0 and (_key_col + step.y < 0 or _key_col + step.y >= rows[_key_row].size()):
+			# Down from the last button of a menu steps out of it, back to
+			# what it was opened from; up from the first one stays there.
+			if step.y > 0:
+				_close_popup()
+				_play_sfx("card_draw")
+		elif step.y != 0:
+			_key_col = posmod(_key_col + step.y, rows[_key_row].size())
+			_play_sfx("card_draw")
+	elif step.x != 0:
+		_key_col = posmod(_key_col + step.x, rows[_key_row].size())
+		_play_sfx("card_draw")
+	elif rows.size() > 1:
+		var to := clampi(_key_row + step.y, 0, rows.size() - 1)
+		if to != _key_row:
+			# The one straight above or below, as near as there is.
+			var from: float = rows[_key_row][_key_col].get_global_rect().get_center().x
+			var nearest := 0
+			for i in rows[to].size():
+				if absf(rows[to][i].get_global_rect().get_center().x - from) < absf(rows[to][nearest].get_global_rect().get_center().x - from):
+					nearest = i
+			_key_row = to
+			_key_col = nearest
+			_play_sfx("card_draw")
+	_track_keys()
+
+
+## Keeps the keyboard on a control of the set that is up now, and whatever
+## it is on under a pretend mouse: lifted, lit and with its tooltip out.
+func _track_keys() -> void:
+	var stops := _key_stops() if _keys_on else {}
+	var rows: Array = stops.get("rows", []).filter(func(row: Array) -> bool: return not row.is_empty())
+	var on: Control = null
+	var in_shop := false
+	if not rows.is_empty():
+		if stops.id != _key_id:
+			_key_id = stops.id
+			_key_since = Time.get_ticks_msec()
+			var place: Vector2i = _key_places.get(_key_id, Vector2i(-1, -1)) if stops.get("keep", false) else Vector2i(-1, -1)
+			if place.x < 0:
+				place = Vector2i(rows.size() - 1, 0)
+				for r in rows.size():
+					var c: int = rows[r].find(stops.get("start"))
+					if c != -1:
+						place = Vector2i(r, c)
+			_key_row = place.x
+			_key_col = place.y
+		_key_row = clampi(_key_row, 0, rows.size() - 1)
+		_key_col = clampi(_key_col, 0, rows[_key_row].size() - 1)
+		_key_places[_key_id] = Vector2i(_key_row, _key_col)
+		on = rows[_key_row][_key_col]
+		in_shop = _key_id == "turn" and rows.size() > 1 and _key_row == 0
+	elif _keys_on:
+		_key_id = ""
+		# Between two choices of the same turn the shop stays as it was.
+		in_shop = _key_in_shop and viewer != null and engine.current == viewer and not engine.over
+	if in_shop != _key_in_shop:
+		_key_in_shop = in_shop
+		if in_shop:
+			_set_shop_open(true)
+	if on != _key_node:
+		if _key_node != null and is_instance_valid(_key_node):
+			_key_node.mouse_exited.emit()
+		_key_node = on
+		if on != null:
+			on.mouse_entered.emit()
+			# A menu says under each button what it does: no tooltip over it.
+			if _key_id == "popup" and TipLayer.current != null:
+				TipLayer.current.hide_all()
+	_key_cursor.queue_redraw()
+
+
+## What Enter does to the control the keyboard is on: what a click would.
+func _key_press(node: Control) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	if node is BaseButton:
+		if not node.disabled:
+			node.pressed.emit()
+	elif node is SeatView:
+		_on_seat_clicked(node.player)
+	elif node.has_signal(&"clicked"):
+		node.emit_signal(&"clicked")
+
+
+## Four brass corners round what the keyboard is on, breathing.
+func _draw_key_cursor() -> void:
+	if _key_node == null or not is_instance_valid(_key_node) or not _key_node.is_visible_in_tree():
+		return
+	var box: Rect2 = _key_node.get_global_rect()
+	if _key_node is CardView:
+		# The card itself, lifted out of its place.
+		box = _key_node.get_child(0).get_global_rect()
+	var breath := 3.0 + roundf(1.5 + 1.5 * sin(Time.get_ticks_msec() / 160.0))
+	box = Rect2(box.position.round(), box.size.round()).grow(breath)
+	var arm := minf(12.0, minf(box.size.x, box.size.y) / 3.0)
+	for corner: Vector2 in [Vector2(0, 0), Vector2(1, 0), Vector2(0, 1), Vector2(1, 1)]:
+		var at := box.position + box.size * corner
+		var inward := Vector2(1, 1) - corner * 2.0
+		for pass_: int in 2:
+			# A dark edge under the brass, to read on anything.
+			var ink := UI.INK if pass_ == 0 else UI.GOLD
+			var fat := 6.0 if pass_ == 0 else 2.0
+			var off := (fat - 2.0) / 2.0
+			for bar: Vector2 in [Vector2(arm, 2), Vector2(2, arm)]:
+				var bar_size := bar + Vector2(off, off) * 2.0
+				var corner_at := at - inward * off
+				_key_cursor.draw_rect(Rect2(
+						Vector2(corner_at.x if inward.x > 0 else corner_at.x - bar_size.x, corner_at.y if inward.y > 0 else corner_at.y - bar_size.y),
+						bar_size), ink)
 
 
 func _toggle_pause() -> void:
@@ -2452,7 +2731,7 @@ func _anim_item_gained(d: Dictionary) -> void:
 		await _play_fx.item_conjured(texture, _item_spot(d.player, d.player.items.size() - 1), label)
 		return
 	if _play_fx.made_for(d.player):
-		# Made out of Morale: it stands where the singularity was.
+		# Made out of Morale: it is still going round the singularity.
 		await _play_fx.item_materialized(_item_spot(d.player, d.player.items.size() - 1), 0.8 if d.player == viewer else 0.4)
 		return
 	if _play_fx.copying(d.player):

@@ -262,6 +262,12 @@ func _mark_items() -> void:
 	_marks_pulse.tween_property(_marks, "modulate:a", 1.0, 0.45).set_trans(Tween.TRANS_SINE)
 
 
+## The items in the box, as they lie: what the keyboard walks while one of
+## them is being picked.
+func item_views() -> Array:
+	return _items.get_children()
+
+
 func _on_item_clicked(view: ItemView) -> void:
 	if _item_pick:
 		item_clicked.emit(view.get_index())

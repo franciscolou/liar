@@ -309,6 +309,27 @@ func character_card(character_id: StringName) -> CardView:
 	return card(held) if held != -1 else _strip_cards.get(character_id)
 
 
+## What the keyboard walks on this panel during the player's turn, from left
+## to right: the items, the hand, the other characters, END TURN and the
+## extras next to it.
+func key_stops() -> Array:
+	var stops := []
+	for frame: Node in _inventory.get_children():
+		for view: Node in frame.get_children():
+			if view is ItemView:
+				stops.append(view)
+	stops.append_array(_hand_cards)
+	for child: Node in _strip.get_children():
+		if child is CardView:
+			stops.append(child)
+	if not _end_turn.disabled:
+		stops.append(_end_turn)
+	for child: Node in _extras.get_children():
+		if child is Button and not child.disabled:
+			stops.append(child)
+	return stops
+
+
 func use_option(instance: ItemInstance) -> Variant:
 	if _options == null:
 		return null

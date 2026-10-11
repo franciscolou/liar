@@ -66,10 +66,13 @@ class Counterfeit extends Ability:
 		var d := Decision.new(Decision.Kind.PICK, play.actor)
 		d.prompt = Loc.t("Which item do you copy?")
 		d.cancellable = true
-		d.context = {"play": play}
+		# Not a menu: the table points the wand at the items where they lie,
+		# each with what its copy costs (`price`).
+		d.context = {"play": play, "look": &"wand"}
 		d.options = defs.map(func(def): return {
 			"label": "%s (%d)" % [def.display_name, engine.price(play.actor, _price(def))],
 			"description": def.description, "item": def,
+			"price": engine.price(play.actor, _price(def)),
 		})
 		var index: int = await engine.ask(d)
 		if index < 0 or index >= defs.size():

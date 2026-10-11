@@ -65,6 +65,8 @@ void fragment() {
 	float dark = 1.0 - light;
 	COLOR = vec4(tint, art.a * strength * edge * dark * dark * COLOR.a);
 }"
+## How long one ghost takes to give way to the next.
+const GHOST_BLEND := 0.12
 ## Where each thing lies on the desk.
 const CLIPBOARD := Rect2(20, 62, 376, 290)
 ## The lid of the case stands past the top of the screen.
@@ -117,6 +119,9 @@ var _reader: RichTextLabel
 var _read: StringName  # the character in the reader
 var _ghost: TextureRect
 var _ghost_tween: Tween
+## Holds the ghost and the ones before it that are still fading away.
+var _ghosts: Control
+var _ghost_look: ShaderMaterial
 ## The sheet the rules and the reader are on.
 var _file: Desk
 var _desk: Desk
@@ -343,15 +348,13 @@ func _build_rules() -> void:
 	_file.clip_at = _file.size.x - 56.0
 	add_child(_file)
 	# Before the text, so that the text is written over it.
-	_ghost = TextureRect.new()
-	_ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ghost.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_ghost.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	var look := ShaderMaterial.new()
-	look.shader = Shader.new()
-	look.shader.code = GHOST_SHADER
-	_ghost.material = look
-	_file.add_child(_ghost)
+	_ghosts = Control.new()
+	_ghosts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_file.add_child(_ghosts)
+	_ghost_look = ShaderMaterial.new()
+	_ghost_look.shader = Shader.new()
+	_ghost_look.shader.code = GHOST_SHADER
+	_ghost = _new_ghost()
 	var box := VBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 0)
 	box.offset_left = 14
@@ -389,12 +392,23 @@ func _build_rules() -> void:
 	_on_paper = false
 
 
+func _new_ghost() -> TextureRect:
+	var ghost := TextureRect.new()
+	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	ghost.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	ghost.material = _ghost_look
+	_ghosts.add_child(ghost)
+	return ghost
+
+
 ## The ghost fills the right side of the sheet, from top to bottom.
 func _place_ghost() -> void:
 	var height := _file.size.y - 4.0
 	var width := height * CardView.BASE.x / CardView.BASE.y
-	_ghost.position = Vector2(_file.size.x - 2.0 - width, 2.0)
-	_ghost.size = Vector2(width, height)
+	for ghost: TextureRect in _ghosts.get_children():
+		ghost.position = Vector2(_file.size.x - 2.0 - width, 2.0)
+		ghost.size = Vector2(width, height)
 
 
 ## Open, the rules lie under the clipboard. Folded away, the sheet is pulled
@@ -489,7 +503,7 @@ func _redraw_reader() -> void:
 	_rules.visible = _rules_open
 	_rules_arrow.queue_redraw()
 	_reader.visible = not _rules_open
-	_ghost.visible = not _rules_open
+	_ghosts.visible = not _rules_open
 	_place_file()
 	var def := Content.character(_read) if _read != &"" else null
 	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Hover a character to read its abilities here.")]
@@ -501,13 +515,22 @@ func _redraw_reader() -> void:
 		_reader.text = text
 	var art := UI.card_art(def.texture_path) if def != null else null
 	if _ghost.texture != art:
-		_ghost.texture = art
-		_ghost.texture_filter = UI.card_filter(art)
+		# One ink soaks in while the other fades: the ghost that was there
+		# goes on from where it is, so pointing at card after card never
+		# leaves the paper blank.
 		if _ghost_tween != null:
 			_ghost_tween.kill()
+		var old := _ghost
+		var fade := old.create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		fade.tween_property(old, "modulate:a", 0.0, GHOST_BLEND)
+		fade.tween_callback(old.queue_free)
+		_ghost = _new_ghost()
+		_ghost.texture = art
+		_ghost.texture_filter = UI.card_filter(art)
 		_ghost.modulate.a = 0.0
-		_ghost_tween = _ghost.create_tween()
-		_ghost_tween.tween_property(_ghost, "modulate:a", 1.0, 0.25)
+		_place_ghost()
+		_ghost_tween = _ghost.create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		_ghost_tween.tween_property(_ghost, "modulate:a", 1.0, GHOST_BLEND)
 
 
 ## An open briefcase: the characters lie on the lining of its upper

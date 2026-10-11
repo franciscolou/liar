@@ -1,6 +1,7 @@
 extends Control
-## Title screen. The artwork fills the screen and keeps its right side dark and
-## empty; the buttons are a column of plates stacked there.
+## Title screen. The artwork (the Scene node, the painting come alive) fills the
+## screen and keeps its right side dark and empty; the buttons are a column of
+## plates stacked there.
 
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
@@ -21,6 +22,7 @@ func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
 	Jukebox.play(Jukebox.LOBBY)
+	$TextureRect.texture = $Scene.get_texture()
 	var y := COLUMN.y
 	y = _plate("PLAY", y, MAIN_HEIGHT, 40,
 			func(): Transition.go("res://scenes/room.tscn", Transition.DOORS))

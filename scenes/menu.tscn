@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://cgo5gf51676n7" path="res://scripts/ui/menu.gd" id="1_vjb58"]
 [ext_resource type="Texture2D" uid="uid://byn07fdoemrh5" path="res://assets/StartScreen.png" id="1_yqeox"]
+[ext_resource type="Script" uid="uid://dmltbeco80mwo" path="res://scripts/ui/menu_scene.gd" id="3_con2f"]
 
 [node name="Control" type="Control" unique_id=1365599125]
 layout_mode = 3
@@ -20,3 +21,6 @@ offset_bottom = 648.0
 texture = ExtResource("1_yqeox")
 expand_mode = 1
 stretch_mode = 6
+
+[node name="Scene" type="SubViewport" parent="." unique_id=1956090711]
+script = ExtResource("3_con2f")

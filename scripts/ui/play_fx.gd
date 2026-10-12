@@ -4732,22 +4732,47 @@ class GlassFx extends Control:
 			draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
 
 
-## The rifle of a Collateral, seen from the side with its barrel along +x. It
-## turns about where it is held to keep pointing at `aim`, wherever the two
-## of them go. `beam` lights the laser under the barrel, all the way to the
-## aim; `kick` throws the barrel up (in radians) when it fires.
+## The rifle of a Collateral, seen from the side with its barrel along +x: a
+## bolt action in walnut and blued steel, with a scope, a suppressor, a
+## folded bipod and the laser under the barrel. It turns about where it is
+## held to keep pointing at `aim`, wherever the two of them go. `beam` lights
+## the laser, all the way to the aim; `kick` throws the barrel up (in
+## radians) when it fires.
 class SniperFx extends Control:
-	const PIXEL := 4.0
-	const EDGE := Color("0d0b12")
-	const STEEL_DARK := Color("3a4048")
-	const STEEL_LIT := Color("7b8591")
-	const WOOD := Color("7a4a24")
-	const WOOD_DARK := Color("4f2e14")
-	const LENS := Color("7fd6ff")
+	const PIXEL := 2.0
 	const LASER := Color("ff2a2a")
+	## Nothing but blacks and browns: outline, steel in three tones, walnut
+	## in three, the leather of the pad and the amber glass of the scope.
+	const INKS := {
+		"K": Color("0b0806"), "B": Color("1c1714"), "G": Color("3b2f27"), "H": Color("6a5747"),
+		"W": Color("6b3d1c"), "L": Color("94602f"), "D": Color("3f230e"), "R": Color("2a170b"),
+		"A": Color("8a4f1c"), "S": Color("d09a55"),
+	}
+	const BODY: Array = [
+		"...............................BB...........................................",
+		"..............................GGGG..........................................",
+		"..............................BBBB........GGHHHGGGBB........................",
+		"..................GGGKG..GG...BBBB....GG.BBBBBBBBS..........................",
+		".................RBBBKBGGGGGHGGGGGGHHGGGGBBBBBBBBA..........................",
+		".................RBBBKBBBBBBBBBBBBBBBBBBBBBBBBBBBA..........................",
+		"..................BBBKB..BB....BB.....BB..KKKKKKKKKK........................",
+		"....LLLLLLLLLL...........KK...........KK.........................GHHGGGGGK..",
+		"....DWWWWWWWWD.....GGGGGGGGGGGGGGGGGGHHGHHGHHGHHGHHGGGGGHHHHHHGGKBBKBKBKBK..",
+		"KRLLLLKLLLLKLLLLLLBBBBBKKKKKKBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBKBBKBKBKBK..",
+		"KRWWWWWWWDDDDDWDDWBBBBBBBBBBBBGGBLLLLLLLLLLLLLLLLLGGKGGKGGK......KKKKKKKKK..",
+		"KRWDDDDWWWWDDDDDDD.BBBBBBBBBBBBGGWWWWDDDDDWWDDDWWWBB.BBBBBK.................",
+		"KRWWWWWWWDDKKKKLWD.BBBHBBK.GBBB.HDDDDDDDDDDDDDDDDD..........................",
+		"KRWDDDWDD.....LWD..K..H..K.GBKB.GG..............GG..........................",
+		"KRWWWDD.......RWD..K...H.K.GBKB....KKGGGKGGGKGGGGB..........................",
+		"KRWDD........LWD....KKKKKK.GBKB....KKBBBKBBBKBBBB...........................",
+		"KRD..........RWD...........KKKK....KK.......................................",
+		"............DDD.............................................................",
+	]
+	## The cell of BODY that is held: the bore runs along the row above it.
+	const HELD := Vector2i(20, 11)
 	## Where the barrel ends and where the laser starts, in pixels of the rifle.
-	const MUZZLE := 27
-	const SIGHT := 19
+	const MUZZLE := 54
+	const SIGHT := 38
 
 	var aim := Vector2.ZERO
 	var beam := 0.0
@@ -4791,25 +4816,17 @@ class SniperFx extends Control:
 		rotation = angle + (kick if turned else -kick)
 
 	func _draw() -> void:
-		_cells(-7, -1, 3, 5, WOOD_DARK)
-		_cells(-4, -1, 8, 3, WOOD)
-		_cells(-4, -1, 8, 1, WOOD.lightened(0.2))
-		_cells(3, -2, 10, 3, STEEL_DARK)
-		_cells(3, -2, 10, 1, STEEL_LIT)
-		_cells(4, 1, 2, 3, WOOD_DARK)
-		_cells(8, 1, 2, 3, EDGE)
-		# The barrel and its brake.
-		_cells(13, -2, 13, 1, STEEL_LIT)
-		_cells(13, -1, 13, 1, STEEL_DARK)
-		_cells(25, -3, 2, 4, EDGE)
-		# The scope on its two mounts.
-		_cells(7, -3, 1, 1, EDGE)
-		_cells(11, -3, 1, 1, EDGE)
-		_cells(5, -6, 9, 3, EDGE)
-		_cells(5, -6, 9, 1, STEEL_DARK)
-		_cells(4, -6, 1, 3, STEEL_LIT)
-		_cells(14, -6, 1, 3, LENS)
-		_cells(15, 0, 4, 1, EDGE)
+		for y in BODY.size():
+			var row: String = BODY[y]
+			var x := 0
+			while x < row.length():
+				var cell := row[x]
+				var run := 1
+				while x + run < row.length() and row[x + run] == cell:
+					run += 1
+				if cell != ".":
+					draw_rect(Rect2(Vector2(x - HELD.x, y - HELD.y) * PIXEL, Vector2(run, 1) * PIXEL), INKS[cell])
+				x += run
 		if beam <= 0.0:
 			return
 		var reach := position.distance_to(aim)
@@ -4821,9 +4838,6 @@ class SniperFx extends Control:
 		draw_rect(Rect2(reach - 8.0, -6.0, 16.0, 16.0), Color(LASER, glow * 0.35))
 		draw_rect(Rect2(reach - 4.0, -2.0, 8.0, 8.0), Color(LASER, glow))
 		draw_rect(Rect2(reach - 2.0, 0.0, 4.0, 4.0), Color(1.0, 0.9, 0.85, glow))
-
-	func _cells(x: int, y: int, w: int, h: int, ink: Color) -> void:
-		draw_rect(Rect2(Vector2(x, y) * PIXEL, Vector2(w, h) * PIXEL), ink)
 
 
 ## The shade of the Assassin: a small hooded figure in the colours of his

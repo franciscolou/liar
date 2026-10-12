@@ -54,7 +54,7 @@ const MESSAGES := {
 	"Which item do you copy?": "Qual item você copia?",
 	"Copy it for %d coins.": "Copie por %d moedas.",
 	"Copy it for free.": "Copie de graça.",
-	"Gain 7 coins.": "Ganhe 7 moedas.",
+	"Gain 4 coins.": "Ganhe 4 moedas.",
 	"Pay 5 coins to also damage another player.": "Pague 5 moedas para também causar dano a outro jogador.",
 	"When you deal damage": "Quando você causa dano",
 	"Vault": "Cofre",

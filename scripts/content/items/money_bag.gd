@@ -6,7 +6,7 @@ const BONUS := 2
 func _init() -> void:
 	id = &"money_bag"
 	display_name = "Money Bag"
-	description = "While you hold it, your income at the start of each turn is %d coins higher." % BONUS
+	describe("While you hold it, your income at the start of each turn is %d coins higher.", [BONUS])
 	price = 5
 	texture_path = "res://assets/items/money_bag.png"
 	kind = Kind.PASSIVE

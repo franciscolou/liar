@@ -16,9 +16,9 @@ class HatTrick extends Ability:
 	func _init() -> void:
 		id = &"magician.hat_trick"
 		display_name = "Hat Trick"
-		description = "Pay 3 coins to pull a random item out of the hat."
+		description = "Pull a random item out of the hat."
 		on_turn = true
-		cost = 3
+		cost = 5
 
 	func can_use(player: PlayerState, engine: GameEngine) -> String:
 		if _hat(engine).is_empty():
@@ -40,12 +40,12 @@ class HatTrick extends Ability:
 
 
 class Counterfeit extends Ability:
-	const DISCOUNT := 3
+	const DISCOUNT := 2
 
 	func _init() -> void:
 		id = &"magician.counterfeit"
 		display_name = "Counterfeit"
-		description = "Copy an item another player holds, paying up to 3 coins less."
+		describe("Copy an item another player holds, paying up to %d coins less.", [DISCOUNT])
 		on_turn = true
 
 	func can_use(player: PlayerState, engine: GameEngine) -> String:

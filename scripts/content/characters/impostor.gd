@@ -18,7 +18,7 @@ class CoverStory extends Ability:
 	func _init() -> void:
 		id = &"impostor.cover_story"
 		display_name = "Cover Story"
-		description = "Shuffle your whole hand into the deck, draw as many new cards and gain %d coins." % PAY
+		describe("Shuffle your whole hand into the deck, draw as many new cards and gain %d coins.", [PAY])
 		on_turn = true
 
 	func resolve(play: Play) -> void:
@@ -34,7 +34,7 @@ class PerfectDisguise extends Ability:
 	func _init() -> void:
 		id = &"impostor.perfect_disguise"
 		display_name = "Perfect Disguise"
-		description = "Repeat the last action taken at the table as if it were yours, for what it costs and nothing more."
+		description = "Repeat the last action taken at the table as if it were yours."
 		on_turn = true
 		repeatable = false
 

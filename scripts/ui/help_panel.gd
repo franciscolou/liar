@@ -616,7 +616,7 @@ func _lesson_morale() -> void:
 		var word := UI.label(Loc.t(def.get("name", String(status_id))).to_upper(), 11, UI.CREAM, true)
 		word.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		chip.add_child(word)
-		TipLayer.attach(chip, "[b]%s[/b]\n%s" % [Loc.t(def.get("name", String(status_id))), Loc.t(def.get("description", ""))])
+		TipLayer.attach(chip, "[b]%s[/b]\n%s" % [Loc.t(def.get("name", String(status_id))), Loc.fill(def.get("description", ""), def.get("args", []))])
 		chips.add_child(chip)
 	_morale_sync()
 	_say(Loc.t("Three hearts, two cards. See what a hit does to your hand."))

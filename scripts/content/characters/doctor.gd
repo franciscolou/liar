@@ -16,7 +16,7 @@ class PatchUp extends Ability:
 	func _init() -> void:
 		id = &"doctor.patch_up"
 		display_name = "Patch Up"
-		description = "Pay 6 coins to recover 1 Morale. Only when you are down to your last one."
+		description = "Recover 1 Morale, only available when you are down to your last one."
 		on_turn = true
 		cost = 6
 		tags = [&"heal"]
@@ -39,8 +39,8 @@ class Antidote extends Ability:
 	func _init() -> void:
 		id = &"doctor.antidote"
 		display_name = "Antidote"
-		description = "Get rid of it at once, be it a hex, an oath, a spiked drink or a bomb."
-		trigger_text = "When another player puts a status on you"
+		description = "Get rid of it."
+		trigger_text = "When another player puts an effect on you"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		if event.type != &"status_added" or event.data.player != player:

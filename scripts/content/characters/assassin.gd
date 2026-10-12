@@ -16,7 +16,7 @@ class BloodCount extends Ability:
 	func _init() -> void:
 		id = &"assassin.blood_count"
 		display_name = "Blood Count"
-		description = "Pay 4 coins to deal 1 damage to a player."
+		description = "Deal 1 damage to a player."
 		on_turn = true
 		cost = 4
 		targeting = Targeting.OPPONENT
@@ -36,7 +36,7 @@ class StreakThirst extends Ability:
 	func _init() -> void:
 		id = &"assassin.streak_thirst"
 		display_name = "Streak Thirst"
-		description = "Pay 4 coins to deal 1 damage to another player."
+		description = "Deal 1 damage to another player."
 		trigger_text = "When you eliminate a player"
 		cost = 4
 		targeting = Targeting.OPPONENT

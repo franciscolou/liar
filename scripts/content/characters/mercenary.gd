@@ -18,7 +18,7 @@ class Bounty extends Ability:
 	func _init() -> void:
 		id = &"mercenary.bounty"
 		display_name = "Bounty"
-		description = "Gain %d coins." % REWARD
+		describe("Gain %d coins.", [REWARD])
 		trigger_text = "When you eliminate a player"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
@@ -32,7 +32,7 @@ class Collateral extends Ability:
 	func _init() -> void:
 		id = &"mercenary.collateral"
 		display_name = "Collateral"
-		description = "Pay 5 coins to also damage another player."
+		description = "Damage another player as well."
 		trigger_text = "When you deal damage"
 		cost = 5
 		targeting = Targeting.OPPONENT

@@ -22,6 +22,12 @@ static func t(text: String) -> String:
 	return String(TranslationServer.translate(text))
 
 
+## `text` translated and then formatted with `args`, so that a translation
+## keeps the placeholders and follows the numbers of the code.
+static func fill(text: String, args: Array) -> String:
+	return t(text) if args.is_empty() else t(text) % args
+
+
 static func language() -> String:
 	return _current
 

@@ -18,7 +18,7 @@ class Exhume extends Ability:
 	func _init() -> void:
 		id = &"gravedigger.exhume"
 		display_name = "Exhume"
-		description = "Look at the top %d cards of the deck. You may trade one card of your hand for one of them." % DEPTH
+		describe("Look at the top %d cards of the deck. You may trade one card of your hand for one of them.", [DEPTH])
 		on_turn = true
 
 	func can_use(_player: PlayerState, engine: GameEngine) -> String:

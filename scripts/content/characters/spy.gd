@@ -28,8 +28,8 @@ class Untraceable extends Ability:
 	func _init() -> void:
 		id = &"spy.untraceable"
 		display_name = "Untraceable"
-		description = "Your cards vanish until it is over: they can't be seen, taken or replaced."
-		trigger_text = "When another player is about to see, take or replace one of your cards"
+		description = "Your cards can't be seen, taken or replaced."
+		trigger_text = "When another player is about to see or mess with your cards"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		return event.type == &"before_hand_reach" and event.data.owner == player

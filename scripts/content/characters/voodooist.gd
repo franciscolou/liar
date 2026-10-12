@@ -16,12 +16,12 @@ func _init() -> void:
 	status_defs = {
 		&"hexed": {
 			"name": "Hexed",
-			"description": "Can't deal damage or heal. Half of every coin gain goes to the doll's owner. Break it for %d coins." % BREAK_COST,
+			"description": "Can't deal damage or heal. Half of every coin gain goes to the doll's owner. Break it for %d coins.", "args": [BREAK_COST],
 			"color": Color("8e4fb5"),
 		},
 	}
-	_add(PuppetStrings.new())
 	_add(Hex.new())
+	_add(PuppetStrings.new())
 
 
 func on_event(event: GameEvent, engine: GameEngine) -> void:
@@ -78,7 +78,7 @@ class PuppetStrings extends Ability:
 	func _init() -> void:
 		id = &"voodooist.puppet_strings"
 		display_name = "Puppet Strings"
-		description = "Your Voodoo victim can't deal damage or heal, and half of the coins they gain are yours. They can break the doll for 4 coins."
+		describe("Your Voodoo victim can't deal damage or heal, and half of the coins they gain are yours. They can break the doll for %d coins.", [BREAK_COST])
 		info_only = true
 
 

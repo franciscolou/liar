@@ -14,10 +14,11 @@ var title := "":
 var texture_path := ""
 var order := 0
 var abilities: Array = []  # Ability
-## status id -> {name, description, color}; shown as chips on the player.
+## status id -> {name, description, args, color}; shown as chips on the
+## player. `args` fill the placeholders of the description (see Loc.fill).
 ## Texts in these two are English too: pass them through Loc.t() to show them.
 var status_defs: Dictionary = {}
-## counter id -> {name, description, icon, private}; shown next to the player's
+## counter id -> {name, description, args, icon, private}; shown next to the player's
 ## coins. A private counter is only shown to its owner.
 var counter_defs: Dictionary = {}
 

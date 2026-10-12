@@ -14,9 +14,12 @@ var id: StringName
 var display_name := "":
 	get:
 		return Loc.t(display_name)
+## May hold placeholders, filled from `description_args` after translation
+## (see describe()): the numbers then follow the code in every language.
 var description := "":
 	get:
-		return Loc.t(description)
+		return Loc.fill(description, description_args)
+var description_args: Array = []
 var targeting := Targeting.NONE
 ## Free-form labels. Statuses can block tags (a hexed player can't use
 ## anything tagged &"damage" or &"heal").
@@ -30,6 +33,13 @@ var unstoppable := false
 ## ability to silence): it goes to whoever plays it first, not by seat (see
 ## GameEngine._contested_window).
 var contested := false
+
+
+## Sets a description whose numbers come from the code: `text` keeps its
+## placeholders ("Gain %d coins.") and is the translation key as written.
+func describe(text: String, args: Array) -> void:
+	description = text
+	description_args = args
 
 
 ## "" when usable, otherwise the reason shown to the player.

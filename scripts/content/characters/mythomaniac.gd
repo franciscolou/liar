@@ -17,7 +17,7 @@ func _init() -> void:
 	counter_defs = {
 		VAULT: {
 			"name": "Vault",
-			"description": "Grows by %d whenever a lie of yours goes undoubted or you catch a liar. Only you can see it. Claim Mythomaniac's Cash Out to collect it." % STASH,
+			"description": "Stores +%d whenever a lie of yours goes undoubted or you catch someone lying. Only you can see it. Claim Mythomaniac's 'Cash Out' to collect it.", "args": [STASH],
 			"icon": "res://assets/ui/vault.png",
 			# A public vault would give away every lie that got through.
 			"private": true,
@@ -42,7 +42,7 @@ class TallTale extends Ability:
 	func _init() -> void:
 		id = &"mythomaniac.tall_tale"
 		display_name = "Tall Tale"
-		description = "Every player has a secret Vault. It grows by %d coins whenever a lie of theirs goes undoubted or they catch a liar." % STASH
+		describe("Whenever you lie without being cought or catch someone lying, store %d coins in the Vault.", [STASH])
 		info_only = true
 
 
@@ -50,7 +50,7 @@ class CashOut extends Ability:
 	func _init() -> void:
 		id = &"mythomaniac.cash_out"
 		display_name = "Cash Out"
-		description = "Discard this card for a new one and collect every coin in your Vault."
+		description = "Replace this card with a new one and collect every coin in your Vault."
 		on_turn = true
 
 	func can_use(player: PlayerState, _engine: GameEngine) -> String:

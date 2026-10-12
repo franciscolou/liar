@@ -18,7 +18,7 @@ class Shakedown extends Ability:
 	func _init() -> void:
 		id = &"sheriff.shakedown"
 		display_name = "Shakedown"
-		description = "Steal %d coins from a player." % TOLL
+		describe("Steal %d coins from a player.", [TOLL])
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		tags = [&"steal"]
@@ -46,7 +46,7 @@ class Confiscate extends Ability:
 	func _init() -> void:
 		id = &"sheriff.confiscate"
 		display_name = "Confiscate"
-		description = "Pay 3 coins to seize an item from a player. You choose which; a hidden item is taken blind."
+		description = "Seize an item from a player. This skill can be blocked by Shields and Mirrors."
 		on_turn = true
 		cost = 3
 		targeting = Targeting.OPPONENT

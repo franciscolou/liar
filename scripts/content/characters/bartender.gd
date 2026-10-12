@@ -18,7 +18,7 @@ func _init() -> void:
 	status_defs = {
 		GROGGY: {
 			"name": "Groggy",
-			"description": "Whatever costs coins costs %d more: abilities, items, rerolls. Wears off at the end of the next turn of whoever spiked the drink." % SURCHARGE,
+			"description": "Whatever costs coins costs %d more: abilities, items, rerolls. Wears off at the end of the next turn of whoever spiked the drink.", "args": [SURCHARGE],
 			"color": Color("7f9a3c"),
 		},
 	}
@@ -48,7 +48,7 @@ class MickeyFinn extends Ability:
 	func _init() -> void:
 		id = &"bartender.mickey_finn"
 		display_name = "Mickey Finn"
-		description = "Spike a player's drink. Whatever costs them coins costs %d more until the end of your next turn." % SURCHARGE
+		describe("Spike a player's drink. Whatever costs them coins costs %d more until the end of your next turn.", [SURCHARGE])
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		inflicts = true
@@ -74,7 +74,7 @@ class LastCall extends Ability:
 	func _init() -> void:
 		id = &"bartender.last_call"
 		display_name = "Last Call"
-		description = "Show a card from your hand. Everyone holding that character, you included, discards it and draws a new card."
+		description = "Show a card from your hand. You and everyone else holding that character discards it and draws a new card."
 		on_turn = true
 
 	func resolve(play: Play) -> void:

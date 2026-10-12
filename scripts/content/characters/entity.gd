@@ -24,7 +24,7 @@ func _init() -> void:
 	status_defs = {
 		ENTROPY: {
 			"name": "Entropy",
-			"description": "In chains until this player's next turn starts. Then they break into 1 Morale and %d coins; Morale that can't be recovered becomes %d more coins. Calling LIAR! before that throws it all away." % [ENTROPY_COINS, MORALE_WORTH],
+			"description": "In chains until this player's next turn starts. Then they break into 1 Morale and %d coins; Morale that can't be recovered becomes %d more coins. Calling LIAR! before that throws it all away.", "args": [ENTROPY_COINS, MORALE_WORTH],
 			"color": Color("7f8cff"),
 			# For whoever is about to call LIAR! with it on, and for the bots.
 			"doubt_warning": "You are in chains: calling LIAR! throws your Entropy away, with nothing for it.",
@@ -58,7 +58,7 @@ class Entropy extends Ability:
 	func _init() -> void:
 		id = &"entity.entropy"
 		display_name = "Entropy"
-		description = "Spend your whole turn. When your next one starts, recover 1 Morale and gain %d coins; Morale you can't recover becomes %d more coins. Call LIAR! before then and you get nothing." % [ENTROPY_COINS, MORALE_WORTH]
+		describe("Spend your entire turn. When your next turn begins, recover 1 Morale and gain %d coins. If your Morale is full, receive %d additional coins. Calling LIAR! before receiving them cancels the effect, forfeiting the rewards.", [ENTROPY_COINS, MORALE_WORTH])
 		on_turn = true
 		fresh_turn = true
 
@@ -76,7 +76,7 @@ class Materialize extends Ability:
 	func _init() -> void:
 		id = &"entity.materialize"
 		display_name = "Materialize"
-		description = "Turn 1 Morale into an item worth up to %d coins: pay the difference for a dearer one, keep the change from a cheaper one. It doesn't end your turn, but the item can't be used during it. Never your last Morale." % WORTH
+		describe("Convert 1 Morale into an item costing up to %d coins. If the item costs more, pay the difference. Keep the change if it costs less. This does not end your turn, but the item cannot be used during the same turn it was created.", [WORTH])
 		on_turn = true
 		ends_turn = false
 		# Not the action of a turn: there is nothing in it for a disguise.
@@ -95,7 +95,7 @@ class Materialize extends Ability:
 		var engine := play.engine
 		var defs := _affordable(play.actor, engine)
 		var d := Decision.new(Decision.Kind.PICK, play.actor)
-		d.prompt = Loc.t("What does your Morale become?")
+		d.prompt = Loc.t("Which item would you like to create?")
 		d.cancellable = true
 		d.context = {
 			"play": play,

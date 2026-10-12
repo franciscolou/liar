@@ -36,6 +36,9 @@ static func run() -> int:
 		"a silver tongue keeps the coins from a swindle": _swindle_talked_down,
 		"the first to fall loses: the blow in the air is void": _first_to_fall,
 		"a demolition goes past shield and mirror": _demolition,
+		"a shield stops a time bomb as it is planted": _time_bomb.bind(&"shield"),
+		"a mirror sends a time bomb back as it is planted": _time_bomb.bind(&"mirror"),
+		"a ticking bomb goes past shield and mirror": _time_bomb.bind(&""),
 		"a shakedown takes 3 coins from one player": _shakedown.bind(&"", 3),
 		"a shakedown takes no more than there is": _shakedown.bind(&"broke", 2),
 		"a shield stops a shakedown": _shakedown.bind(&"shield", 0),
@@ -139,6 +142,39 @@ static func _demolition() -> String:
 	if table.engine.players[0].coins != coins:
 		return "it cost %d coins" % (coins - table.engine.players[0].coins)
 	return "" if table.held(1) == [&"shield", &"mirror"] else "kept %s" % [table.held(1)]
+
+
+## Player 0 plants a Time Bomb on player 1, who holds `defence` when it is
+## planted: it answers there and then. Whoever ends up carrying the bomb gets
+## a shield and a mirror only once it ticks, and neither stops the blast.
+static func _time_bomb(defence: StringName) -> String:
+	var table := Table.new(true, [&"bomber"])
+	var engine := table.engine
+	var bomber: PlayerState = engine.players[0]
+	var victim: PlayerState = engine.players[1]
+	bomber.cards = [&"bomber", &"judge"]
+	if defence != &"":
+		table.give(1, [defence])
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return victim
+	await engine.claim(bomber, table.ability(&"bomber.time_bomb"))
+	if table.held(1) != []:
+		return "kept %s" % [table.held(1)]
+	var carrier: PlayerState = bomber if defence == &"mirror" else victim
+	for p: PlayerState in [bomber, victim]:
+		if p.has_status(&"ticking") != (p == carrier and defence != &"shield"):
+			return "%s %s a bomb" % [p.name, "carries" if p.has_status(&"ticking") else "carries no"]
+	if defence == &"shield":
+		return ""
+	var seat := engine.players.find(carrier)
+	table.give(seat, [&"shield", &"mirror"])
+	var morale := carrier.morale
+	engine.turn_count += 1
+	await engine.fire(&"turn_ended", {"player": carrier})
+	if carrier.has_status(&"ticking"):
+		return "still ticking"
+	if table.held(seat) != [&"shield", &"mirror"]:
+		return "kept %s" % [table.held(seat)]
+	return "" if carrier.morale == morale - 1 else "Morale went from %d to %d" % [morale, carrier.morale]
 
 
 ## Player 0, on `morale`, claims Entropy and then starts a turn: `healed` and

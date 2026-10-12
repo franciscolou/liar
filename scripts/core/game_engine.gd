@@ -643,8 +643,8 @@ func use_item(player: PlayerState, instance: ItemInstance, trigger: GameEvent = 
 
 
 ## Carries out a play that was never announced as a claim or an item use (a
-## bomb going off, see bomber.gd): shields and mirrors get their say, the
-## table shows its effect and then it resolves.
+## bomb going off, see bomber.gd): shields and mirrors get their say (unless
+## it is `unstoppable`), the table shows its effect and then it resolves.
 func carry_out(play: Play) -> void:
 	await _resolve(play)
 

@@ -52,7 +52,7 @@ func sync(player: PlayerState, max_morale: int, owner_view := false) -> void:
 				continue
 			var icon := _icon(def.get("icon", "res://assets/ui/coin.png"))
 			icon.mouse_filter = Control.MOUSE_FILTER_PASS
-			TipLayer.attach(icon, "[b]%s[/b]\n%s" % [Loc.t(def.get("name", counter_id)), Loc.t(def.get("description", ""))])
+			TipLayer.attach(icon, "[b]%s[/b]\n%s" % [Loc.t(def.get("name", counter_id)), Loc.fill(def.get("description", ""), def.get("args", []))])
 			_counters.add_child(icon)
 			_counters.add_child(UI.label(str(player.counters[counter_id]), _coins.get_theme_font_size("font_size"), UI.BLUE, true))
 		UI.pop(_counters, 1.3)

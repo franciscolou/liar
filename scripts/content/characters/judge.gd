@@ -47,7 +47,7 @@ class ContemptOfCourt extends Ability:
 	func _init() -> void:
 		id = &"judge.contempt"
 		display_name = "Contempt of Court"
-		description = "Take %d coins from the player who doubted you. Whatever they can't pay comes from the bank." % FINE
+		describe("Take %d coins from the player who doubted you. Whatever they can't pay comes from the bank.", [FINE])
 		trigger_text = "When you are doubted and were telling the truth"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:

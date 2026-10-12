@@ -59,7 +59,7 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 		var color: Color = def.get("color", UI.MUTED)
 		var chip := _chip(Loc.t(def.get("name", String(status_id))).to_upper(), color)
 		chip.mouse_filter = Control.MOUSE_FILTER_PASS
-		var tip := "[b]%s[/b]\n%s" % [Loc.t(def.get("name", status_id)), Loc.t(def.get("description", ""))]
+		var tip := "[b]%s[/b]\n%s" % [Loc.t(def.get("name", status_id)), Loc.fill(def.get("description", ""), def.get("args", []))]
 		var by := engine.player_by_id(player.statuses[status_id].get("by", -1))
 		if by != null:
 			tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Placed by %s.") % by.name]

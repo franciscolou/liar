@@ -18,7 +18,7 @@ class StreetBargain extends Ability:
 	func _init() -> void:
 		id = &"vagabond.street_bargain"
 		display_name = "Street Bargain"
-		description = "Lose 6 coins instead of 1 Morale."
+		description = "Block the damage."
 		trigger_text = "When you would lose Morale"
 		cost = 6
 
@@ -41,7 +41,7 @@ class OnTheCuff extends Ability:
 	func _init() -> void:
 		id = &"vagabond.on_the_cuff"
 		display_name = "On the Cuff"
-		description = "Pay for something you can't afford, down to a balance of %d coins." % DEBT_LIMIT
+		describe("Pay for something you can't afford, down to a balance of %d coins.", [DEBT_LIMIT])
 		trigger_text = "When you are short on coins"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:

@@ -1,9 +1,10 @@
 extends CharacterDef
 ## Barnaby "Boom" Flint. A short fuse and a shorter list of friends.
 ##
-## The bomb is a status its carrier takes into their next turn. When that
-## turn ends it goes off as a play of its own (GameEngine.carry_out), so
-## shields and mirrors get to stop the blast like any other attack.
+## The bomb is a status its carrier takes into their next turn. Shields and
+## mirrors answer it as it is planted, like any other attack; once it ticks,
+## nothing but defusing it stops the blast, which goes off when that turn ends
+## as a play of its own (GameEngine.carry_out).
 
 const TICKING := &"ticking"
 const DEFUSE_COST := 4
@@ -20,7 +21,7 @@ func _init() -> void:
 	status_defs = {
 		TICKING: {
 			"name": "Ticking",
-			"description": "Carries a bomb: it goes off at the end of this player's next turn and costs them 1 Morale. They can defuse it for %d coins during that turn." % DEFUSE_COST,
+			"description": "Carries a bomb: it goes off at the end of this player's next turn and costs them 1 Morale. They can defuse it for %d coins during that turn.", "args": [DEFUSE_COST],
 			"color": Color("d8662a"),
 		},
 	}
@@ -89,9 +90,9 @@ class TimeBomb extends Ability:
 	func _init() -> void:
 		id = &"bomber.time_bomb"
 		display_name = "Time Bomb"
-		description = "Pay 3 coins to plant a bomb on a player. It goes off at the end of their next turn: they lose 1 Morale, unless they pay %d coins to defuse it first. Shields and Mirrors work against the blast. A player can only carry one bomb." % DEFUSE_COST
-		on_turn = true
 		cost = 3
+		describe("Pay %d coins to plant a bomb on a player. It goes off at the end of their next turn, dealing 1 point of damage, unless they pay %d coins to defuse it first.", [cost, DEFUSE_COST])
+		on_turn = true
 		targeting = Targeting.OPPONENT
 		tags = [&"damage"]
 		inflicts = true
@@ -115,14 +116,13 @@ class TimeBomb extends Ability:
 		return 1.0 + (3 - candidate.morale) + (0.6 if candidate.coins < DEFUSE_COST else 0.0)
 
 
-## The explosion itself, carried out by on_event.
 ## A round black bomb rolled at something a player holds. Nothing stops it:
 ## it is not the player it is after.
 class Demolition extends Ability:
 	func _init() -> void:
 		id = &"bomber.demolition"
 		display_name = "Demolition"
-		description = "Blow up an item a player holds. You choose which; a hidden item is picked blind. Shields and Mirrors don't stop it."
+		description = "Blow up one item from a player of your choice. Shields and Mirrors does not block this ability."
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		unstoppable = true
@@ -161,11 +161,14 @@ class Demolition extends Ability:
 		return float(candidate.items.size())
 
 
+## The explosion itself, carried out by on_event. The time to stop it was
+## when the bomb was planted.
 class Blast extends Ability:
 	func _init() -> void:
 		id = &"bomber.blast"
 		display_name = "Blast"
 		tags = [&"damage"]
+		unstoppable = true
 
 	func resolve(play: Play) -> void:
 		await play.engine.deal_damage(play.actor, play.target, play)

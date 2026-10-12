@@ -437,15 +437,6 @@ def fx_shade():
     return out
 
 
-def fx_lute():
-    """A sly little run on the Bard's strings."""
-    out = silence(1.0)
-    for i, freq in enumerate((293.7, 349.2, 440.0, 523.3, 587.3)):  # D4 F4 A4 C5 D5
-        mix(out, harp(freq, 1.3), i * 0.075, 0.7)
-    mix(out, harp(146.8, 1.3), 0.0, 0.5)
-    return let_ring(out)
-
-
 def lute(freq, seconds, decay):
     """A string of the Bard's lute, plucked with the fingertip close to the
     bridge: what his tunes are played on. It has to read as a string at once,
@@ -1094,15 +1085,6 @@ def fx_sniper():
 # The vault (fx_vault) is a recording: see cut_sfx.py.
 
 
-def fx_shutter():
-    """A camera: the shutter and the film advancing."""
-    out = silence(0.35)
-    mix(out, steel_click(0.7, 97), 0.0, 1.0)
-    mix(out, steel_click(0.8, 98), 0.06, 0.8)
-    mix(out, bandpass(noise(0.12, 0.01, 0.06, 99), 2000, 5000), 0.1, 0.25)
-    return out
-
-
 def fx_hush():
     """Something slipping out of sight."""
     body = noise(0.45, 0.12, 0.18, 103)
@@ -1216,18 +1198,6 @@ def fx_pour():
     return out
 
 
-def fx_whistle():
-    """A police whistle: one short blast and a longer one, the pea rattling."""
-    out = silence(0.62)
-    for at, seconds in ((0.0, 0.15), (0.22, 0.32)):
-        body = tone(2850, seconds, 0.008, seconds * 2.5)
-        trill = [s * (0.55 + 0.45 * math.sin(TAU * 34.0 * i / RATE)) for i, s in enumerate(body)]
-        mix(out, fade_out(trill), at, 0.8)
-        mix(out, fade_out(tone(5700, seconds, 0.008, seconds * 2.0)), at, 0.15)
-        mix(out, fade_out(bandpass(noise(seconds, 0.01, seconds * 2.0, 161), 2500, 7000)), at, 0.25)
-    return out
-
-
 def fx_glint():
     """Light caught on polished brass: one clean ping and the shimmer after it."""
     out = silence(0.7)
@@ -1275,18 +1245,6 @@ def fx_lasso_miss():
     # A let-down note, and the rope dragged back.
     mix(out, tone(392.0, 0.3, 0.02, 0.22, "tri", glide=0.62), 0.74, 0.2)
     mix(out, bandpass(noise(0.4, 0.12, 0.22, 225), 300, 1500), 1.05, 0.28)
-    return out
-
-
-def fx_wave():
-    """A shockwave rolling out across the room: the thump, the air rushing
-    after it, and a ring of brass on top."""
-    out = silence(1.0)
-    mix(out, tone(95, 0.5, 0.004, 0.28, glide=0.45), 0.0, 1.6)
-    mix(out, lowpass(noise(0.5, 0.01, 0.2, 221), 400), 0.0, 0.8)
-    rush = bandpass(noise(0.9, 0.12, 0.45, 223), 300, lambda t: 5000 * math.exp(-t * 3.0) + 500)
-    mix(out, rush, 0.02, 0.7)
-    mix(out, bell(784.0, 0.6, 0.5), 0.0, 0.12)
     return out
 
 
@@ -1583,19 +1541,6 @@ def ui_deal():
     return out
 
 
-def ui_flip():
-    """A row of cards turned over in one sweep of the hand."""
-    rng = random.Random(381)
-    out = silence(0.8)
-    mix(out, bandpass(noise(0.6, 0.2, 0.3, 383), 1500, lambda t: 2500 + 9000 * t), 0.0, 0.3)
-    for i in range(12):
-        at = 0.04 + 0.5 * i / 11
-        snap = highpass(noise(0.02, 0.0005, 0.008, 385 + i), 2600)
-        mix(out, snap, at, rng.uniform(0.35, 0.6))
-        mix(out, tone(rng.uniform(170, 230), 0.04, 0.001, 0.02), at, 0.2)
-    return out
-
-
 def ui_key():
     """The keyboard going from one thing to the next: a fingertip on the
     wood of the counter. Meant to be felt more than heard."""
@@ -1685,7 +1630,6 @@ SOUNDS = {
     "ui_lock": ui_lock,
     "ui_unlock": ui_unlock,
     "ui_deal": ui_deal,
-    "ui_flip": ui_flip,
     "ui_gather": ui_gather,
     "ui_key": ui_key,
     "emote_laugh": emote_laugh,
@@ -1704,7 +1648,6 @@ SOUNDS = {
     "coin_3": lambda: coin(((0.0, 1.0), (0.008, 0.35)), 0.97, 55),
     "fx_blade": fx_blade,
     "fx_shade": fx_shade,
-    "fx_lute": fx_lute,
     "fx_lute_flourish": fx_lute_flourish,
     "fx_lute_bonk": fx_lute_bonk,
     "fx_lute_bonk_1": fx_lute_bonk,
@@ -1736,7 +1679,6 @@ SOUNDS = {
     "fx_doll_hit": fx_doll_hit,
     "chalk": chalk,
     "fx_sniper": fx_sniper,
-    "fx_shutter": fx_shutter,
     "fx_hush": fx_hush,
     "fx_tin": fx_tin,
     "fx_scribble": fx_scribble,
@@ -1747,12 +1689,10 @@ SOUNDS = {
     "fx_dig": fx_dig,
     "fx_bell": fx_bell,
     "fx_pour": fx_pour,
-    "fx_whistle": fx_whistle,
     "fx_glint": fx_glint,
     "fx_lasso_spin": fx_lasso_spin,
     "fx_lasso_miss": fx_lasso_miss,
     "fx_lasso": fx_lasso,
-    "fx_wave": fx_wave,
     "fx_fuse": fx_fuse,
     "fx_boom": fx_boom,
     "fx_entropy": fx_entropy,
@@ -1779,16 +1719,16 @@ PEAK = 0.7
 # Sounds that sit lower in the mix than the rest.
 PEAKS = {
     "truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38, "item_roulette": 0.5,
-    "fx_hush": 0.4, "fx_shutter": 0.5, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5, "fx_lute": 0.55,
+    "fx_hush": 0.4, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5,
     "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "chalk": 0.28, "fx_serenade": 0.8, "fx_serenade_2": 0.8, "fx_serenade_3": 0.8, "fx_serenade_4": 0.8, "fx_serenade_5": 0.8, "fx_doll_hit": 0.6, "fx_sniper_aim": 0.3, "fx_sniper": 0.95, "fx_hex": 0.75,
     "item_death": 0.9,
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
-    "fx_whistle": 0.4, "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_wave": 0.75, "fx_fuse": 0.45, "fx_boom": 0.95,
+    "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_fuse": 0.45, "fx_boom": 0.95,
     "fx_scales_chain": 0.4, "fx_scales": 0.9,
     "fx_boot_step": 0.45, "fx_spur": 0.4, "fx_boot_stomp": 0.92,
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
-    "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5, "ui_flip": 0.45,
+    "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5,
     "ui_gather": 0.5, "ui_key": 0.09,
     "emote_laugh": 0.5, "emote_sad": 0.5, "emote_angry": 0.5, "emote_mystery": 0.5, "emote_handshake": 0.5, "emote_flex": 0.45,
     "fx_creep": 0.22, "fx_snatch": 0.5, "fx_puzzled": 0.4, "fx_bills": 0.5, "fx_syringe": 0.6,

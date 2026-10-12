@@ -3,7 +3,7 @@ extends Control
 ## chalk mark. A ring where it comes from, a line by an unsteady hand, and
 ## two strokes for the head where it ends. The chalk skips on the grain, so
 ## the line is made of blocks, some of them missing and no two as white.
-## It takes the place of ArrowFx. No class name: preload it (see table.gd).
+## No class name: preload it (see table.gd).
 
 const BLOCK := 3.0
 ## How far apart the blocks of a stroke are laid, and how far the hand

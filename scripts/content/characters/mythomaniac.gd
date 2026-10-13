@@ -56,12 +56,13 @@ class CashOut extends Ability:
 	func can_use(player: PlayerState, _engine: GameEngine) -> String:
 		return "" if player.counter(VAULT) > 0 else Loc.t("Vault is empty")
 
+	# A bluffer says now which card will go: asked later, it would give them away.
+	func prepare(play: Play) -> bool:
+		return await play.engine.choose_card_to_shed(play)
+
 	func resolve(play: Play) -> void:
 		var engine := play.engine
-		var index := play.actor.cards.find(character_id)
-		if index == -1:
-			index = await engine.pick_own_card(play.actor, Loc.t("%s, you don't hold the %s: choose the card to swap") % [play.actor.name, Content.character(character_id).display_name])
-		await engine.replace_card(play.actor, index, &"cash_out")
+		await engine.shed_card(play, &"cash_out")
 		var stash := play.actor.counter(VAULT)
 		await engine.set_counter(play.actor, VAULT, 0)
 		await engine.gain_coins(play.actor, stash, &"vault")

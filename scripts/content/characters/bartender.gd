@@ -2,8 +2,8 @@ extends CharacterDef
 ## Rosie Malone. Pours the drinks at the Quiver and hears every word.
 ##
 ## A spiked drink is a status with a `surcharge` (see GameEngine.price):
-## whatever has a price costs whoever drank it more. It wears off with the
-## turns of whoever poured it, not of whoever drank it, so it is ticked here.
+## whatever has a price costs whoever drank it more. It wears off the first
+## time they pay for something, with that surcharge on it: it is ticked here.
 
 const GROGGY := &"groggy"
 const SURCHARGE := 2
@@ -18,7 +18,7 @@ func _init() -> void:
 	status_defs = {
 		GROGGY: {
 			"name": "Groggy",
-			"description": "Whatever costs coins costs %d more: abilities, items, rerolls. Wears off at the end of the next turn of whoever spiked the drink.", "args": [SURCHARGE],
+			"description": "Whatever costs coins costs %d more: abilities, items, rerolls. Wears off once this player has paid for something.", "args": [SURCHARGE],
 			"color": Color("7f9a3c"),
 		},
 	}
@@ -26,29 +26,25 @@ func _init() -> void:
 	_add(LastCall.new())
 
 
+## What a payment is made for when it is a purchase (the `reason` of its
+## "coins" event): a claim or a turn extra, and the shop. A fine is not one.
+const PURCHASES: Array[StringName] = [&"cost", &"shop"]
+
+
 func on_event(event: GameEvent, engine: GameEngine) -> void:
-	match event.type:
-		&"turn_ended":
-			var host: PlayerState = event.data.player
-			for p: PlayerState in engine.players:
-				if not p.alive or not p.has_status(GROGGY):
-					continue
-				var status: Dictionary = p.statuses[GROGGY]
-				# Poured during this very turn: it lasts through the next one.
-				if status.get("by", -1) == host.id and status.get("poured", 0) < engine.turn_count:
-					await engine.remove_status(p, GROGGY)
-		&"player_eliminated":
-			var dead: PlayerState = event.data.player
-			for p: PlayerState in engine.players:
-				if p.alive and p.has_status(GROGGY) and p.statuses[GROGGY].get("by", -1) == dead.id:
-					await engine.remove_status(p, GROGGY)
+	# The drink is slept off with the first thing it made dearer.
+	if event.type != &"coins" or event.data.delta >= 0 or not PURCHASES.has(event.data.reason):
+		return
+	var drinker: PlayerState = event.data.player
+	if drinker.alive and drinker.has_status(GROGGY):
+		await engine.remove_status(drinker, GROGGY)
 
 
 class MickeyFinn extends Ability:
 	func _init() -> void:
 		id = &"bartender.mickey_finn"
 		display_name = "Mickey Finn"
-		describe("Spike a player's drink. Whatever costs them coins costs %d more until the end of your next turn.", [SURCHARGE])
+		describe("Spike a player's drink. The next thing they pay coins for costs them %d more.", [SURCHARGE])
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		inflicts = true
@@ -59,7 +55,7 @@ class MickeyFinn extends Ability:
 
 	func resolve(play: Play) -> void:
 		await play.engine.add_status(play.target, GROGGY, {
-			"by": play.actor.id, "surcharge": SURCHARGE, "poured": play.engine.turn_count,
+			"by": play.actor.id, "surcharge": SURCHARGE,
 		})
 
 	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
@@ -74,16 +70,28 @@ class LastCall extends Ability:
 	func _init() -> void:
 		id = &"bartender.last_call"
 		display_name = "Last Call"
-		description = "Show a card from your hand. You and everyone else holding that character discards it and draws a new card."
+		description = "Name any character of the match. You and everyone else holding it discards it and draws a new card."
 		on_turn = true
 
 	func resolve(play: Play) -> void:
 		var engine := play.engine
 		var actor := play.actor
-		var index := await engine.pick_own_card(actor, Loc.t("%s, last call: which card goes on the tray?") % actor.name)
-		if index < 0 or engine.over or not actor.alive:
+		# Any character of the match, held or not: it is named, not shown.
+		var cast: Array = engine.characters
+		var d := Decision.new(Decision.Kind.PICK, actor)
+		d.prompt = Loc.t("%s, last call: which character goes on the tray?") % actor.name
+		d.options = cast.map(func(def: CharacterDef) -> Dictionary: return {"label": def.display_name, "card": def.id})
+		d.context = {
+			"play": play, "foreign": true,
+			# A bot would rather not give up what it holds.
+			"weights": cast.map(func(def: CharacterDef) -> float: return 0.2 if actor.has_character(def.id) else 1.0),
+		}
+		var index: int = await engine.ask(d)
+		if index < 0 or index >= cast.size():
+			index = engine.rng.randi_range(0, cast.size() - 1)
+		if engine.over or not actor.alive:
 			return
-		await engine.recall_cards(actor, index)
+		await engine.recall_cards(actor, cast[index].id)
 
 	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
 		return 0.5

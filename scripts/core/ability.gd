@@ -45,6 +45,12 @@ func detail(_player: PlayerState, _engine: GameEngine) -> String:
 	return ""
 
 
+## A warning for `player` before they claim it, "" when there is none: what
+## the claim puts at risk beyond the usual (vagabond.gd).
+func caution(_player: PlayerState, _engine: GameEngine) -> String:
+	return ""
+
+
 func kind_label() -> String:
 	if info_only:
 		return Loc.t("Passive")

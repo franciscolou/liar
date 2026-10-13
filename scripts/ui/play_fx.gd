@@ -48,6 +48,10 @@ const BOMB_STRAY := 22.0
 const BOMB_HOPS: Array = [[0.6, 1.0, 96.0, 0.54], [0.84, 0.5, 38.0, 0.36], [0.95, 0.15, 15.0, 0.24], [1.0, 0.0, 5.0, 0.14]]
 ## Radians a second it spins at as it is thrown; each bounce takes some off.
 const BOMB_SPIN := 9.0
+## A bomb that found nothing to blow up (bomb_missed): the least it covers in
+## a hop as it bounces away, and how many hops it gets to leave the screen.
+const BOMB_ROLL := 110.0
+const BOMB_MISSES := 14
 ## The Bard's tunes, one of them drawn for each Swindle: the sound (see
 ## fx_serenade* in gen_sfx.py) and when each of its notes is played, in seconds
 ## from its start. The lute is plucked on every one of them. `long` is the
@@ -223,6 +227,8 @@ var _lurk: LurkFx
 var _lurk_owner: PlayerState
 ## The hands an Untraceable took off the table: player id -> their card views.
 var _vanished: Dictionary = {}
+## The inventories an Untraceable took off the table: player id -> true.
+var _hidden_items: Dictionary = {}
 ## The side bets lying on the table: player id -> BillsFx.
 var _bets: Dictionary = {}
 var _glitch: GlitchFx
@@ -570,7 +576,7 @@ func _fx_heir_sold_out(play: Play) -> void:
 	await _fireworks(play.actor, 2)
 
 
-func _fx_heir_passive_income(play: Play) -> void:
+func _fx_heir_party(play: Play) -> void:
 	await _fireworks(play.actor, 3)
 
 
@@ -1359,7 +1365,47 @@ func _slink(lurk: LurkFx) -> void:
 ## An Untraceable: the hand of the Spy goes up in smoke, and stays gone
 ## until whatever came for it has missed (hand_missed: hand_found).
 func _fx_spy_untraceable(play: Play) -> void:
-	await vanish(play.actor)
+	# It is their items that were being reached for, not their hand.
+	if play.event != null and play.event.type == &"before_item_reach":
+		await vanish_items(play.actor)
+	else:
+		await vanish(play.actor)
+
+
+## The items `who` holds disappear from their box in a puff of smoke, until
+## whatever came for them has missed (items_missed: items_found).
+func vanish_items(who: PlayerState) -> void:
+	var box: Variant = table._node_of(who)
+	if who == null or box == null or _hidden_items.has(who.id):
+		return
+	_hidden_items[who.id] = true
+	_snd("fx_hush")
+	_puff_items(who)
+	await _wait(0.1)
+	box.set_items_shown(false)
+	await _wait(0.4)
+
+
+## The items of `who` are back where they were, out of another puff.
+func items_found(who: PlayerState) -> void:
+	if who == null or not _hidden_items.has(who.id):
+		return
+	_hidden_items.erase(who.id)
+	var box: Variant = table._node_of(who)
+	if box == null:
+		return
+	_snd("fx_hush")
+	_puff_items(who)
+	await _wait(0.1)
+	box.set_items_shown(true)
+	await _wait(0.3)
+
+
+func _puff_items(who: PlayerState) -> void:
+	var points: Array = []
+	for i: int in who.items.size():
+		points.append(table._item_spot(who, i))
+	_smoke(points, 22.0 if who == table.viewer else 12.0, 12)
 
 
 func vanished(who: PlayerState) -> bool:
@@ -1411,6 +1457,11 @@ func drop_vanished() -> void:
 	for views: Array in _vanished.values():
 		table._set_cards_shown(views, true)
 	_vanished.clear()
+	for id: int in _hidden_items.keys():
+		var box: Variant = table._node_of(table.engine.player_by_id(id))
+		if box != null:
+			box.set_items_shown(true)
+	_hidden_items.clear()
 
 
 ## Smoke over each of the cards of `who`: a thick cloud that hangs and
@@ -1420,9 +1471,13 @@ func _puff(who: PlayerState, views: Array) -> void:
 		var view: Variant = views[i]
 		if view == null or not is_instance_valid(view):
 			continue
-		var at: Vector2 = table._card_center(who, i)
-		var reach: float = view.size.y * 0.5
-		for n: int in 22:
+		_smoke([table._card_center(who, i)], view.size.y * 0.5, 22)
+
+
+## A cloud of `count` puffs over each of `points`, `reach` px tall.
+func _smoke(points: Array, reach: float, count: int) -> void:
+	for at: Vector2 in points:
+		for n: int in count:
 			var off := Vector2(randf_range(-0.5, 0.5) * reach * 0.7, randf_range(-1.0, 1.0) * reach * 0.8)
 			_bits.append({
 				"p": at + off, "v": off * 1.6 + Vector2(randf_range(-20, 20), -randf_range(15, 55)),
@@ -1905,10 +1960,11 @@ func drop_tray() -> void:
 	_tray = null
 
 
-## The cards of a Last Call (the data of cards_recalled): the one that was
-## shown is held up over the tray and dropped on it, every other copy at the
-## table is thrown in after it, each in its own way, the tray is carried off
-## to the deck and the deck deals a new card to each place left empty.
+## The cards of a Last Call (the data of cards_recalled): the character that
+## was called is held up over the tray for the table to read (it is only
+## named: nobody's card), every copy at the table is thrown in, each in its
+## own way, the tray is carried off to the deck and the deck deals a new card
+## to each place left empty.
 func cards_binned(d: Dictionary) -> void:
 	var speed: float = table._speed
 	var tray := _tray
@@ -1937,20 +1993,14 @@ func cards_binned(d: Dictionary) -> void:
 		spots.append(table._card_center(hand.player, hand.index))
 		cards.append(card)
 
-	# The card that was shown. A viewer who just picked it has it in the
-	# middle of the screen already, face up.
-	var shown: TossedCard = cards[0]
-	shown.visible = true
-	# The handoff gives the picked card back to its place in the hand, so the
-	# place is emptied only after it.
-	var held: bool = table._take_pick_handoff(d.player, d.card)
-	table._set_cards_shown([views[0]], false)
-	if held:
-		shown.spot = table.SHOWN_CENTRE - tray.position
-		shown.zoom = CardView.BASE.x * table.SHOWN_SCALE / TOSSED.x
-		shown.flip_y = 0.0
-	else:
-		_snd("card_draw")
+	# The card that was called: only named, it is nobody's. It is held up
+	# over the tray for the table to read and then it is gone.
+	var shown := TossedCard.new(face, UI.tex(UI.CARD_BACK))
+	shown.spot = _at(d.player) - tray.position
+	shown.zoom = 33.0 / TOSSED.x
+	shown.flip_y = PI
+	tray.add_child(shown)
+	_snd("card_draw")
 	var lift := shown.create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	lift.tween_property(shown, "spot", TOSS_SHOWN, 0.4 / speed)
 	lift.tween_property(shown, "zoom", TOSS_SHOWN_ZOOM, 0.4 / speed)
@@ -1965,23 +2015,20 @@ func cards_binned(d: Dictionary) -> void:
 	await _wait(0.85)
 	if not is_instance_valid(tray):
 		return
-	var rest := _tray_rest()
-	var drop := shown.create_tween().set_parallel().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	drop.tween_property(shown, "spot", rest, 0.24 / speed)
-	drop.tween_property(shown, "zoom", 1.0, 0.24 / speed)
-	drop.tween_property(shown, "rotation", randf_range(-0.35, 0.35), 0.24 / speed)
-	drop.chain().tween_callback(_card_landed.bind(tray, rest))
-	await _wait(0.4)
+	var fade := shown.create_tween()
+	fade.tween_property(shown, "modulate:a", 0.0, 0.22 / speed)
+	fade.tween_callback(shown.queue_free)
+	await _wait(0.25)
 
-	# Everybody else's, one after the other and no two alike.
+	# Every copy at the table, one after the other and no two thrown alike.
 	var style := randi() % TOSS_STYLES
-	for i: int in range(1, cards.size()):
+	for i: int in cards.size():
 		style = (style + 1 + randi() % (TOSS_STYLES - 1)) % TOSS_STYLES
 		var wait: Tween = cards[i].create_tween()
-		wait.tween_interval(maxf((i - 1) * 0.17, 0.01) / speed)
+		wait.tween_interval(maxf(i * 0.17, 0.01) / speed)
 		wait.tween_callback(_toss.bind(tray, cards[i], views[i], style))
-	if cards.size() > 1:
-		await _wait((cards.size() - 2) * 0.17 + 1.0)
+	if not cards.is_empty():
+		await _wait((cards.size() - 1) * 0.17 + 1.0)
 	if not is_instance_valid(tray):
 		return
 
@@ -2877,6 +2924,55 @@ func item_bombed(texture: Texture2D, at: Vector2, item_size: Vector2, gone: Call
 	table._float("BOOM!", at + Vector2(0, -30), EMBER, 30)
 	UI.shake(table._table, 18.0, 0.4)
 	await _wait(0.7)
+
+
+## The bomb is tossed at where an item should be (`at`) and there is nothing
+## there to blow up (an Untraceable took the items off the table): it lands
+## short, bounces over the spot and goes on bouncing the same way, each hop
+## lower and quicker, until it is off the screen. It never goes off.
+func bomb_missed(at: Vector2) -> void:
+	var bomb := _bomb
+	_bomb = null
+	if bomb == null or not is_instance_valid(bomb):
+		return
+	var speed: float = table._speed
+	var from := bomb.position
+	var way := at - from
+	var along := way.normalized() if way.length() > 1.0 else Vector2.RIGHT
+	var spin := BOMB_SPIN * signf(along.x if along.x != 0.0 else 1.0)
+	var stride := maxf(way.length() * BOMB_HOPS[0][0], BOMB_ROLL)
+	var high: float = BOMB_HOPS[0][2]
+	var time: float = BOMB_HOPS[0][3]
+	var screen := Rect2(Vector2.ZERO, size).grow(BombFx.RADIUS * 2.0)
+	var left := from
+	_snd("card_draw")
+	for hop: int in BOMB_MISSES:
+		var lands := left + along * stride
+		var start := left
+		var top := high
+		var fly := bomb.create_tween().set_parallel()
+		fly.tween_method(func(t: float) -> void:
+			bomb.lift = top * 4.0 * t * (1.0 - t)
+			bomb.position = start.lerp(lands, t) + Vector2(0, -bomb.lift), 0.0, 1.0, time / speed)
+		fly.tween_property(bomb, "turn", bomb.turn + spin * time, time / speed)
+		await _wait(time)
+		if not is_instance_valid(bomb):
+			return
+		if not screen.has_point(lands):
+			break
+		# Iron on wood, and nothing where the item was.
+		_snd("fx_gavel")
+		burst(lands + Vector2(0, BombFx.RADIUS), EARTH.lightened(0.35), 4, 70.0, 0.25, 120.0, 4.0)
+		if hop == 0:
+			table._float(Loc.t("NOTHING THERE"), at, UI.MUTED, 16)
+		left = lands
+		stride = maxf(stride * 0.8, BOMB_ROLL)
+		high = maxf(high * 0.6, 22.0)
+		time = maxf(time * 0.78, 0.24)
+	if is_instance_valid(bomb):
+		var gone := bomb.create_tween()
+		gone.tween_property(bomb, "modulate:a", 0.0, 0.12 / speed)
+		gone.tween_callback(bomb.queue_free)
 
 
 ## Takes back a bomb that was never thrown.

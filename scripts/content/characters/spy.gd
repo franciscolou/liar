@@ -16,7 +16,7 @@ class SneakPeek extends Ability:
 	func _init() -> void:
 		id = &"spy.sneak_peek"
 		display_name = "Sneak Peek"
-		description = "See a random card from a chosen player."
+		description = "See a card of your choice from a player."
 		on_turn = true
 		targeting = Targeting.OPPONENT
 
@@ -28,11 +28,12 @@ class Untraceable extends Ability:
 	func _init() -> void:
 		id = &"spy.untraceable"
 		display_name = "Untraceable"
-		description = "Your cards can't be seen, taken or replaced."
-		trigger_text = "When another player is about to see or mess with your cards"
+		description = "Your cards and items can't be seen or manipulated."
+		trigger_text = "When another player is about to see or mess with your cards or your items"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
-		return event.type == &"before_hand_reach" and event.data.owner == player
+		# Their hand (GameEngine.reach_hand) or what they hold (reach_items).
+		return (event.type == &"before_hand_reach" or event.type == &"before_item_reach") and event.data.owner == player
 
 	func resolve(play: Play) -> void:
 		play.event.cancelled = true

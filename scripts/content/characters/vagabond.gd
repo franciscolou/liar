@@ -31,6 +31,12 @@ class StreetBargain extends Ability:
 		return not (event.data.cause == &"lie" and lie != null and lie.actor == player
 				and lie.is_claim() and lie.ability().character_id == &"vagabond")
 
+	# Caught, the lie costs a Morale and the blow it was meant to stop lands too.
+	func caution(player: PlayerState, _engine: GameEngine) -> String:
+		if player.has_character(character_id):
+			return ""
+		return Loc.t("Street Bargain would be a bluff: caught lying, you lose 2 Morale, one for the lie and the one you failed to block.")
+
 	func resolve(play: Play) -> void:
 		play.event.data.amount -= 1
 		if play.event.data.amount <= 0:

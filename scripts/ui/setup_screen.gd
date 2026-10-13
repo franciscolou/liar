@@ -22,6 +22,18 @@ const ROOM_SCENE := "res://scenes/room.tscn"
 const GRID_WIDTH := 664.0
 const GRID_ROW := 10
 const ANIM_SPEEDS := [50, 75, 100, 150, 200, 250, 300]  # percent
+## The seconds a turn may be given (GameConfig.turn_seconds), 0 for no clock,
+## and how each is written.
+const TURN_TIMES := [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+## No limit is the sign of infinity, drawn in blocks: the font has none.
+const INFINITY: Array[String] = [
+	".###...###.",
+	"#...#.#...#",
+	"#....#....#",
+	"#...#.#...#",
+	".###...###.",
+]
+const TURN_TIME_NAMES := [INFINITY, "5 s", "10 s", "15 s", "20 s", "25 s", "30 s", "35 s", "40 s", "45 s", "50 s", "55 s", "60 s"]
 ## Two arrows chasing each other clockwise (the reset buttons).
 const CYCLE_ICON: Array[String] = [
 	"..###....",
@@ -94,6 +106,10 @@ const KNOB: Array[String] = [
 const FILE_SIDES := Vector2(36, 400)
 const FILE_FOOT := 580.0
 const FILE_TOP := 352.0
+## How high and how low the top of the open sheet may be dragged, and how far
+## the mouse has to go before a press on its title is a drag and not a click.
+const FILE_REACH := Vector2(60, 540)
+const FILE_GRIP := 4.0
 ## From the top of the clipboard to the first line of its list, and from one
 ## line to the next.
 const SEAT_LINES := 70.0
@@ -120,6 +136,7 @@ var _refreshers: Array = []  # Callables that redraw a stepper value
 var _mode_random: Button
 var _mode_picked: Button
 var _count_row: Control
+var _draw_row: Control  # how many of the hand-picked ones are drawn
 var _book_switch: Button
 var _book_knob := 1.0  # where the knob of the switch is: 0 = off, 1 = on
 var _book_tween: Tween
@@ -140,12 +157,20 @@ var _ghosts: Control
 var _ghost_look: ShaderMaterial
 ## The sheet the rules and the reader are on.
 var _file: Desk
+var _file_box: VBoxContainer  # what is written on it
 var _desk: Desk
 var _things: Array = []
 var _case: Desk
 var _item_places: Array[Rect2] = []
 var _file_tween: Tween
-var _file_top := -1.0
+var _file_rest := Vector2(-1, -1)  # where its top was last put, and how tall
+## How far the player has dragged the open sheet from where it lies by
+## itself. Only this screen knows: the room never hears of it.
+var _file_pull := 0.0
+var _file_grip: Control  # the strip above the title, to hold it by
+var _file_held := false
+var _file_dragged := false
+var _file_grab := 0.0  # where the mouse took hold of it, less the pull it had
 ## True while the widgets being built go on paper, not on felt.
 var _on_paper := false
 
@@ -335,6 +360,7 @@ func _build_players() -> void:
 		_slim(name_edit, [&"normal", &"focus", &"read_only"])
 		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_edit.text_changed.connect(_on_renamed.bind(i))
+		name_edit.text_submitted.connect(func(_text: String): name_edit.release_focus())
 		row.add_child(name_edit)
 		var tag := Desk.written("", 14, Desk.INK_FADED, true)
 		tag.custom_minimum_size = Vector2(58, 0)
@@ -379,9 +405,15 @@ func _build_rules() -> void:
 	box.offset_bottom = -10
 	box.add_theme_constant_override("separation", 4)
 	_file.add_child(box)
+	_file_box = box
+	_file_grip = Control.new()
+	_file_grip.size = Vector2(_file.size.x, 10)
+	_file_grip.mouse_default_cursor_shape = Control.CURSOR_VSIZE
+	_file_grip.gui_input.connect(_on_file_held.bind(false))
+	_file.add_child(_file_grip)
 	box.add_child(_rules_header())
 	_rules = VBoxContainer.new()
-	_rules.add_theme_constant_override("separation", 2)
+	_rules.add_theme_constant_override("separation", 0)
 	box.add_child(_rules)
 	_rules.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
 			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
@@ -391,6 +423,11 @@ func _build_rules() -> void:
 			func(): return _config.income, func(v): _config.income = v, 0, 5))
 	_rules.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
 			func(): return _config.doubt_cost, func(v): _config.doubt_cost = v, 0, 6))
+	_rules.add_child(_stepper("Reward for a right LIAR!", "Coins you gain when you doubt someone who was lying.",
+			func(): return _config.doubt_reward, func(v): _config.doubt_reward = v, 0, 6))
+	_rules.add_child(_stepper("Turn timer", "How long each player has for their turn. When it runs out, the turn ends. The clock is the outline round the player's box, and it only runs while the table is waiting for them.",
+			_turn_time_index, func(v): _config.turn_seconds = TURN_TIMES[v],
+			0, TURN_TIMES.size() - 1, false, 1, "%s", TURN_TIME_NAMES))
 	_rules.add_child(_stepper("Shop slots", "",
 			func(): return _config.shop_slots, func(v): _config.shop_slots = v, 1, 4))
 	_rules.add_child(_stepper("Animation speed", "",
@@ -427,25 +464,64 @@ func _place_ghost() -> void:
 		ghost.size = Vector2(width, height)
 
 
-## Open, the rules lie under the clipboard. Folded away, the sheet is pulled
-## up over the lines nobody signed, so there is more of it to read.
+## Open, the rules lie under the clipboard, and the player may drag the sheet
+## up and down by its top (_file_pull). Folded away, the sheet is pulled up
+## over the lines nobody signed, so there is more of it to read.
 func _place_file(at_once := false) -> void:
-	var top := FILE_TOP
-	if not _rules_open:
-		top = minf(top, CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * SEAT_STEP + 8.0)
-	if top == _file_top:
+	var top := _file_home()
+	var rest := Vector2(top, FILE_FOOT - top)
+	if _rules_open:
+		# The whole sheet goes with the hand: it keeps its height.
+		_file_pull = clampf(top + _file_pull, FILE_REACH.x, maxf(FILE_REACH.y, top)) - top
+		rest.x = top + _file_pull
+	if rest == _file_rest:
 		return
-	at_once = at_once or _file_top < 0.0
-	_file_top = top
+	at_once = at_once or _file_rest.x < 0.0
+	_file_rest = rest
 	if _file_tween != null:
 		_file_tween.kill()
 	if at_once:
-		_file.position.y = top
-		_file.size.y = FILE_FOOT - top
+		_file.position.y = rest.x
+		_file.size.y = rest.y
 		return
 	_file_tween = create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_file_tween.tween_property(_file, "position:y", top, 0.18)
-	_file_tween.tween_property(_file, "size:y", FILE_FOOT - top, 0.18)
+	_file_tween.tween_property(_file, "position:y", rest.x, 0.18)
+	_file_tween.tween_property(_file, "size:y", rest.y, 0.18)
+
+
+## Where the top of the sheet lies when nobody has moved it.
+func _file_home() -> float:
+	if _rules_open:
+		# As far up as the rules need, and no further: the sheet lies over
+		# the foot of the clipboard.
+		return minf(FILE_TOP, FILE_FOOT - _file_box.get_combined_minimum_size().y - 20.0)
+	return minf(FILE_TOP, CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * SEAT_STEP + 8.0)
+
+
+## The mouse on the top of the sheet: the open sheet is dragged up and down
+## by it. A press that goes nowhere is a click, which `folds` says whether to
+## answer by folding the rules (the title) or not (the strip above it).
+func _on_file_held(event: InputEvent, folds: bool) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_file_held = true
+			_file_dragged = false
+			_file_grab = event.global_position.y - _file_pull
+		elif _file_held:
+			_file_held = false
+			if folds and not _file_dragged:
+				_set_rules_open(not _rules_open)
+	elif event is InputEventMouseMotion and _file_held and _rules_open:
+		var pull: float = event.global_position.y - _file_grab
+		if not _file_dragged and absf(pull - _file_pull) < FILE_GRIP:
+			return
+		if not _file_dragged and TipLayer.current != null:
+			TipLayer.current.hide_all()
+		_file_dragged = true
+		_file_pull = pull
+		_place_file(true)
+		# Clamped: the hand does not run ahead of the sheet.
+		_file_grab = event.global_position.y - _file_pull if pull != _file_pull else _file_grab
 
 
 ## Takes the padding above and below the text out of `control`, so that it
@@ -481,11 +557,9 @@ func _rules_header() -> Control:
 	row.add_child(_reset_button(_reset_rules, _rules_default))
 	row.mouse_entered.connect(func(): title.add_theme_color_override("font_color", Desk.INK_RED))
 	row.mouse_exited.connect(func(): title.add_theme_color_override("font_color", Desk.INK))
-	row.gui_input.connect(func(event: InputEvent):
-		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			_set_rules_open(not _rules_open))
+	row.gui_input.connect(_on_file_held.bind(true))
 	TipLayer.attach(row, func() -> String:
-		return Loc.t("Click to fold the rules away. While they are open, right-click a character to read its abilities here."
+		return Loc.t("Click to fold the rules away, or drag the sheet up and down. While they are open, right-click a character to read its abilities here."
 				if _rules_open else "Click to show the rules."))
 	return row
 
@@ -518,6 +592,7 @@ func _on_card_input(event: InputEvent, character_id: StringName) -> void:
 func _redraw_reader() -> void:
 	_rules.visible = _rules_open
 	_rules_arrow.queue_redraw()
+	_file_grip.visible = _rules_open
 	_reader.visible = not _rules_open
 	_ghosts.visible = not _rules_open
 	_place_file()
@@ -615,6 +690,14 @@ func _build_case() -> void:
 	# Next to its buttons, not adrift in the middle of the row.
 	(_count_row.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	options.add_child(_count_row)
+	# Hand-picked, the same place says how many of the chosen ones are drawn:
+	# all of them, unless the host wants the match to hide which.
+	_draw_row = _stepper("Quantos personagens", "How many of the characters you picked are in the match, drawn at random. Nobody knows which until they show up.",
+			_drawn_count, func(v): _config.pool_draw = 0 if v >= _picked.size() else v,
+			3, func() -> int: return maxi(_picked.size(), 3))
+	_draw_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	(_draw_row.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	options.add_child(_draw_row)
 	options.custom_minimum_size.y = _count_row.get_combined_minimum_size().y
 
 	# One row while the cast fits in it, two rows of smaller cards after that.
@@ -723,9 +806,25 @@ func _anim_speed_index() -> int:
 	return best
 
 
+## Position in TURN_TIMES of the time closest to the configured one.
+func _turn_time_index() -> int:
+	var best := 0
+	for i in TURN_TIMES.size():
+		if absi(TURN_TIMES[i] - _config.turn_seconds) < absi(TURN_TIMES[best] - _config.turn_seconds):
+			best = i
+	return best
+
+
+## How many of the hand-picked characters are drawn for the match.
+func _drawn_count() -> int:
+	return _config.pool_draw if _config.pool_draw > 0 and _config.pool_draw < _picked.size() else _picked.size()
+
+
 ## A labelled "- value +" row bound to a getter and a setter. With `shown`,
-## the value is an index into it and the entry is what gets displayed.
-func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low: int, high: int, big := false, step := 1, format := "%d", shown: Array = []) -> Control:
+## the value is an index into it and the entry is what gets displayed: a text,
+## or a bitmap of text rows to draw in its place (INFINITY). `high` is the top
+## of the range, or a Callable that says what it is right now.
+func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low: int, high: Variant, big := false, step := 1, format := "%d", shown: Array = []) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var paper := _on_paper
@@ -755,17 +854,29 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 	row.add_child(minus)
 	row.add_child(value)
 	row.add_child(plus)
+	var top := func() -> int: return high.call() if high is Callable else high
 	var change := func(delta: int):
-		setter.call(clampi(getter.call() + delta, low, high))
+		setter.call(clampi(getter.call() + delta, low, top.call()))
 		UI.pop(value, 1.4, 0.2)
 		_refresh()
 	minus.pressed.connect(change.bind(-step))
 	plus.pressed.connect(change.bind(step))
+	var ink := Desk.INK_RED if paper else UI.GOLD
+	value.draw.connect(func():
+		if value.has_meta(&"bits"):
+			_draw_bits(value, value.get_meta(&"bits"), ink))
 	_refreshers.append(func():
 		var current: int = getter.call()
-		value.text = format % (current if shown.is_empty() else shown[current])
+		var entry: Variant = current if shown.is_empty() else shown[current]
+		if entry is Array:
+			value.text = ""
+			value.set_meta(&"bits", entry)
+		else:
+			value.text = format % entry
+			value.remove_meta(&"bits")
+		value.queue_redraw()
 		minus.disabled = not _host or current <= low
-		plus.disabled = not _host or current >= high)
+		plus.disabled = not _host or current >= top.call())
 	return row
 
 
@@ -792,7 +903,7 @@ func _toggle_character(character_id: StringName) -> void:
 
 
 func _character_count() -> int:
-	return _config.character_count if _random else _picked.size()
+	return _config.character_count if _random else _drawn_count()
 
 
 func _min_copies() -> int:
@@ -829,6 +940,9 @@ func _read_config() -> void:
 
 func _write_config() -> void:
 	_config.character_ids = [] if _random else _picked.duplicate()
+	# Drawing all of them is no draw at all.
+	if _random or _config.pool_draw >= _picked.size():
+		_config.pool_draw = 0
 	_config.item_ids = []
 	if _items_on.values().has(false):
 		for item_id: StringName in _items_on:
@@ -866,7 +980,11 @@ func _redraw_seats() -> void:
 		# The name being typed is ahead of what the room has heard of it.
 		if not edit.has_focus() and edit.text != seat.name:
 			edit.text = seat.name
-		edit.editable = _host or seat.peer == me
+		# Nobody writes a name but their own.
+		var mine: bool = not seat.bot and seat.peer == me
+		edit.editable = mine
+		edit.focus_mode = Control.FOCUS_ALL if mine else Control.FOCUS_NONE
+		edit.mouse_filter = Control.MOUSE_FILTER_STOP if mine else Control.MOUSE_FILTER_IGNORE
 		row.tag.text = "BOT" if seat.bot else ("YOU" if seat.peer == me else ("HOST" if seat.peer == 1 else ""))
 		row.tag.add_theme_color_override("font_color", Desk.INK_RED if seat.peer == me else Desk.INK_FADED)
 		row.remove.visible = _host and seat.bot
@@ -879,6 +997,7 @@ func _redraw() -> void:
 	_style_toggle(_mode_random, _random)
 	_style_toggle(_mode_picked, not _random)
 	_count_row.visible = _random
+	_draw_row.visible = not _random
 	_book_switch.set_pressed_no_signal(_config.suspect_book)
 	_book_switch.disabled = not _host
 	_book_switch.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _host else Control.CURSOR_ARROW
@@ -895,11 +1014,12 @@ func _redraw() -> void:
 
 	var count := _character_count()
 	var copies := maxi(_config.copies_per_character, _min_copies())
-	_summary.text = Loc.t("%s  ·  deck of %d cards (%d characters x %d copies), %d dealt.") % [
-		Loc.t("%d drawn at random") % count if _random else Loc.t("%d hand-picked") % count,
+	_summary.text = Loc.t("%s  |  Deck of %d cards (%d characters x %d copies) | %d dealt") % [
+		Loc.t("%d drawn at random") % count if _random else (Loc.t("%d hand-picked") % count if count >= _picked.size()
+				else Loc.t("%d drawn from %d hand-picked") % [count, _picked.size()]),
 		count * copies, count, copies, _room.seats.size() * mini(_config.hand_size, _config.start_morale)]
 	var problem := ""
-	if count < 3:
+	if count < 3 or (not _random and _picked.size() < 3):
 		problem = "Pick at least 3 characters."
 	elif _room.seats.size() < 2:
 		problem = "A table needs at least 2 players. Add a bot or wait for someone to join."
@@ -986,6 +1106,8 @@ func _rules_default() -> bool:
 			and _config.start_coins == base.start_coins
 			and _config.income == base.income
 			and _config.doubt_cost == base.doubt_cost
+			and _config.doubt_reward == base.doubt_reward
+			and _config.turn_seconds == base.turn_seconds
 			and _config.shop_slots == base.shop_slots
 			and is_equal_approx(_config.anim_speed, base.anim_speed))
 
@@ -996,6 +1118,8 @@ func _reset_rules() -> void:
 	_config.start_coins = base.start_coins
 	_config.income = base.income
 	_config.doubt_cost = base.doubt_cost
+	_config.doubt_reward = base.doubt_reward
+	_config.turn_seconds = base.turn_seconds
 	_config.shop_slots = base.shop_slots
 	_config.anim_speed = base.anim_speed
 
@@ -1010,6 +1134,7 @@ func _reset_characters() -> void:
 	var base := GameConfig.new()
 	_random = true
 	_picked.clear()
+	_config.pool_draw = 0
 	_config.character_count = base.character_count
 	_config.copies_per_character = base.copies_per_character
 
@@ -1031,6 +1156,17 @@ func _on_start() -> void:
 func _on_leave() -> void:
 	_room.leave()
 	Transition.go(ROOM_SCENE, Transition.DESK)
+
+
+## A click anywhere but on the name being written, or Esc, puts the pen down.
+func _input(event: InputEvent) -> void:
+	var clicked: bool = event is InputEventMouseButton and event.pressed
+	if not clicked and not event.is_action_pressed(&"ui_cancel"):
+		return
+	for row: Dictionary in _seat_rows:
+		var edit: LineEdit = row.name
+		if edit.has_focus() and not (clicked and edit.get_global_rect().has_point(event.global_position)):
+			edit.release_focus()
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

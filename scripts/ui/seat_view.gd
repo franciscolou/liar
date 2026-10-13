@@ -9,8 +9,24 @@ signal clicked(player: PlayerState)
 ## One of the items in the box was clicked while they were up for picking
 ## (see set_item_pick).
 signal item_clicked(index: int)
+## One of the cards of the hand was clicked while they were up for picking
+## (see set_card_pick).
+signal card_clicked(index: int)
 
 const StatusFx := preload("res://scripts/ui/status_fx.gd")
+const TurnClock := preload("res://scripts/ui/turn_clock.gd")
+## The badge that says how the player stands in a question put to the whole
+## table (see set_answer): its size, where it sits on the case, and a tick.
+const BADGE := Vector2(22, 18)
+const BADGE_AT := Vector2(-8, -9)
+const TICK := [
+	"......#",
+	".....##",
+	"#...##.",
+	"##.##..",
+	".###...",
+	"..#....",
+]
 const SIZE := Vector2(176, 126)
 const PX := 2.0
 ## The plate the name is written on, from the top of the case.
@@ -61,6 +77,11 @@ var _item_pick := false
 ## The red frames on the items while one of them is to be picked.
 var _marks: Control
 var _marks_pulse: Tween
+var _card_pick := false
+var _clock: TurnClock
+## 0: not asked, 1: still thinking, 2: let it pass.
+var _answer := 0
+var _badge: Control
 var _targetable := false
 var _revealed := false
 var _peekable := false
@@ -135,6 +156,17 @@ func _init() -> void:
 	# The chips are for reading: nothing a status draws goes over them.
 	move_child(_chips, -1)
 
+	_clock = TurnClock.new()
+	_clock.box = Rect2(Vector2.ZERO, SIZE)
+	add_child(_clock)
+	_badge = Control.new()
+	_badge.position = BADGE_AT
+	_badge.size = BADGE
+	_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_badge.visible = false
+	_badge.draw.connect(_draw_badge)
+	add_child(_badge)
+
 	TipLayer.attach(self, _tip)
 
 	mouse_entered.connect(_hover.bind(true))
@@ -170,6 +202,7 @@ func sync() -> void:
 	while _cards.size() < hand.size():
 		var card := CardView.new(0.7)
 		card.lift = 4.0
+		card.clicked.connect(_on_card_clicked.bind(card))
 		_card_row.add_child(card)
 		_cards.append(card)
 	for i in _cards.size():
@@ -209,6 +242,8 @@ func leave(face_up := true, pace := 1.0) -> void:
 	_revealed = false
 	_active = false
 	scale = Vector2.ONE
+	_clock.left = -1.0
+	set_answer(0)
 	# Nothing stays floating over a box that is no longer there.
 	_status_fx.die()
 	_set_cursor()
@@ -316,6 +351,79 @@ func _mark_items() -> void:
 ## them is being picked.
 func item_views() -> Array:
 	return _items.get_children()
+
+
+## Puts the cards of the hand up for picking, face down as they are: each
+## gets a red frame, and a click on one is told by `card_clicked`.
+func set_card_pick(value: bool) -> void:
+	if value == _card_pick:
+		return
+	_card_pick = value
+	for card: CardView in _cards:
+		if is_instance_valid(card):
+			card.highlight(UI.RED if value and player.alive else null)
+			card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if value else Control.CURSOR_ARROW
+
+
+## The cards of the hand, as they lie.
+func card_views() -> Array:
+	return _cards.duplicate()
+
+
+func _on_card_clicked(card: CardView) -> void:
+	if _card_pick and player.alive:
+		card_clicked.emit(_cards.find(card))
+
+
+## Shows or hides what the player holds (an Untraceable takes it off the
+## table for a moment: see PlayFx.vanish_items).
+func set_items_shown(shown: bool) -> void:
+	_items.modulate.a = 1.0 if shown else 0.0
+
+
+## How much of the time of their turn is left, 1 to 0 (see turn_clock.gd);
+## below 0 there is no clock.
+func set_clock(left: float) -> void:
+	_clock.left = -1.0 if _gone else left
+
+
+## How the player stands in a question the whole table was asked at once:
+## 0 not asked (no badge), 1 still thinking, 2 let it pass.
+func set_answer(state: int) -> void:
+	if _gone:
+		state = 0
+	if state == _answer:
+		return
+	_answer = state
+	_badge.visible = state != 0
+	_badge.queue_redraw()
+	if state == 2:
+		UI.pop(_badge, 1.5, 0.2)
+
+
+func _process(_delta: float) -> void:
+	# The dots of a badge that is still waiting go round.
+	if _answer == 1:
+		_badge.queue_redraw()
+
+
+## The badge: three dots that light one after the other while the player
+## thinks, a green tick once they have let it pass.
+func _draw_badge() -> void:
+	var passed := _answer == 2
+	var edge := UI.GREEN if passed else UI.GOLD.darkened(0.2)
+	_badge.draw_rect(Rect2(Vector2.ZERO, BADGE), UI.INK)
+	_badge.draw_rect(Rect2(PX, PX, BADGE.x - PX * 2.0, BADGE.y - PX * 2.0), edge)
+	_badge.draw_rect(Rect2(PX * 2.0, PX * 2.0, BADGE.x - PX * 4.0, BADGE.y - PX * 4.0), UI.PANEL)
+	if passed:
+		for y: int in TICK.size():
+			for x: int in TICK[y].length():
+				if TICK[y][x] == "#":
+					_badge.draw_rect(Rect2(4 + x * PX, 3 + y * PX, PX, PX), UI.GREEN.lightened(0.2))
+		return
+	var lit := int(Time.get_ticks_msec() / 280.0) % 3
+	for dot in 3:
+		_badge.draw_rect(Rect2(5 + dot * 5, 8, PX, PX), UI.GOLD if dot == lit else UI.MUTED.darkened(0.3))
 
 
 func _on_item_clicked(view: ItemView) -> void:

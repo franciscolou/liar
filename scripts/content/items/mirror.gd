@@ -5,7 +5,7 @@ func _init() -> void:
 	id = &"mirror"
 	display_name = "Magic Mirror"
 	description = "While you hold it, the next ability or item aimed at you bounces back to its user. The mirror breaks. Their own Mirror or Shield may answer it."
-	price = 9
+	price = 8
 	texture_path = "res://assets/items/mirror.png"
 	kind = Kind.PASSIVE
 	guard = true

@@ -18,7 +18,7 @@ class PatchUp extends Ability:
 		display_name = "Patch Up"
 		description = "Recover 1 Morale, only available when you are down to your last one."
 		on_turn = true
-		cost = 6
+		cost = 4
 		tags = [&"heal"]
 
 	# An emergency, not a habit: healing at will would let a rich table sit

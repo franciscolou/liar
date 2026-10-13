@@ -21,6 +21,8 @@ const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
+const TurnClock := preload("res://scripts/ui/turn_clock.gd")
+const CoinPile := preload("res://scripts/ui/coin_pile.gd")
 const SuspectBook := preload("res://scripts/ui/suspect_book.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
@@ -66,6 +68,10 @@ const SIGHT_ICON := "res://assets/target.png"
 const COIN_ICON := "res://assets/ui/coin.png"
 const HEART_ICON := "res://assets/ui/heart.png"
 const PICK_SCALE := 1.9
+## Up to this many cards are picked from in one row; more stand in two rows,
+## at this scale.
+const PICK_ROW := 6
+const PICK_SCALE_SMALL := 1.55
 ## A peeked card held up to whoever peeks: how big (for a human, for a bot)
 ## and how far from them (from the hand on screen, from a seat).
 ## How a card looks tipped towards someone else: its length along the way to
@@ -103,6 +109,14 @@ const EMOTE_AT_HERO := Vector2(270, 442)
 ## how many of the same emote can be heard at once.
 const EMOTE_SCATTER := Vector2(16, 12)
 const EMOTE_VOICES := 16
+## Where the coins a claim cost lie while it is played out: on the table in
+## front of a seat (from its bottom left corner), in front of the viewer's
+## mat, and from one pile of the same player to the next. And how long a
+## pile takes to be swept to the bank or pulled back.
+const RESERVE_AT_SEAT := Vector2(58, 30)
+const RESERVE_AT_HERO := Vector2(264, 472)
+const RESERVE_STEP := 60.0
+const RESERVE_SWEEP := 0.5
 
 var engine: GameEngine
 var viewer: PlayerState  # whose hand is on screen; null while spectating
@@ -180,6 +194,31 @@ var _key_turn := -1
 var _key_cursor: Control
 var _key_in_shop := false
 var _card_pick: Dictionary = {}  # the card pick that is open: {veil, cards}
+var _speech: Dictionary = {}  # player id -> the line they typed that is still up
+## The price of each claim still being played out, lying on the table in
+## front of whoever paid it: Play -> {pile, player, amount}. See _reserve_coins.
+var _reserves: Dictionary = {}
+## The clock of a timed turn (GameConfig.turn_seconds). It only runs while the
+## match is waiting for the player whose turn it is: `_clock_open` are their
+## decisions that are open. Every machine keeps its own, to show; the one the
+## player sits at is the one that ends the turn when it runs out.
+var _clock_left := 0.0
+var _clock_turn := -1
+var _clock_open: Array = []
+var _clock_spent := -1  # the turn the viewer ran out of time in
+var _clock_shown: Variant  # the box the clock is drawn round (SeatView or HeroPanel)
+## The time a choice of its own has (Decision.context.seconds): {decision, left, total}.
+var _countdown: Dictionary = {}
+## The time the whole table is waiting on (a round of side bets), shown to
+## everyone, asked or not: {left, total}. It burns round the prompt like a
+## fuse (`_table_fuse`); whoever has no prompt of their own is shown a
+## notice to carry it (`_table_notice` says the prompt on screen is that).
+var _table_clock: Dictionary = {}
+var _table_fuse: TurnClock
+var _table_notice := false
+## The choices other players are taking their time over, in the open: the
+## Decision -> the seat that shows it (see _on_asking).
+var _thinking: Dictionary = {}
 
 
 func _ready() -> void:
@@ -215,6 +254,9 @@ func _ready() -> void:
 	if _room != null:
 		_room.seat_left.connect(_on_seat_left)
 		_room.out_of_step.connect(_on_out_of_step)
+	engine.polled.connect(_on_polled)
+	engine.asking.connect(_on_asking)
+	engine.settled.connect(_on_settled)
 
 	_build()
 	_hero.setup(engine)
@@ -273,9 +315,11 @@ func _retranslate() -> void:
 				_prompt_react(_pending)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_lift_hovered()
 	_track_keys()
+	_tick_clock(delta)
+	_tick_countdown(delta)
 	# A shop opened by hovering folds again once the mouse leaves it, unless
 	# it was pinned, one of its menus is still up or the keyboard is in it.
 	if not _shop_open or _shop_pinned or _popup.get_child_count() > 0 or _key_in_shop:
@@ -296,6 +340,13 @@ func _lift_hovered() -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	UI.handle_fullscreen_key(event, get_window())
+	# While a line is being typed the keys are letters, not shortcuts.
+	if _typing():
+		return
+	if _emotes != null and not is_instance_valid(_pause) and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_T:
+		_emotes.open_line(true)
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_cancel") and not _back_out():
 		_toggle_pause()
 	# 1 to 6: an emote, without opening the column.
@@ -308,10 +359,17 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
-	# A right click anywhere lets go of a target being chosen.
+	# A right click anywhere lets go of a target being chosen, or steps out of
+	# a choice that hangs over the whole table.
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
-		if _choosing_target() and _back_out():
+		if (_choosing_target() or _hanging_pick()) and _back_out():
 			get_viewport().set_input_as_handled()
+	if _typing():
+		# Esc puts the line away; every other key is for it.
+		if event.is_action_pressed("ui_cancel"):
+			_emotes.open_line(false)
+			get_viewport().set_input_as_handled()
+		return
 	# The mouse takes over from the keyboard as soon as it is used.
 	if (event is InputEventMouseMotion and event.relative != Vector2.ZERO) or (event is InputEventMouseButton and event.pressed):
 		_keys_on = false
@@ -321,6 +379,18 @@ func _input(event: InputEvent) -> void:
 
 func _choosing_target() -> bool:
 	return _pending != null and _pending.kind == Decision.Kind.TARGET and _pending.cancellable
+
+
+## True while a choice with a way out is hanging over the whole table (the
+## Materialize, the Counterfeit): looking is free, nothing is spent by it.
+func _hanging_pick() -> bool:
+	return _pending != null and _pending.kind == Decision.Kind.PICK and _pending.cancellable \
+			and _pending.context.get("look") in [&"cosmos", &"wand"] and _modal.get_child_count() > 0
+
+
+## True while the viewer is typing a line to the table.
+func _typing() -> bool:
+	return _emotes != null and _emotes.typing()
 
 
 ## Closes the most recent thing the player opened and can still take back: a
@@ -337,9 +407,8 @@ func _back_out() -> bool:
 	if _book != null and _book.is_open():
 		_toggle_book()
 		return true
-	# A choice that hangs over the whole table, with a Cancel of its own.
-	if _pending != null and _pending.kind == Decision.Kind.PICK and _pending.cancellable \
-			and _pending.context.get("look") in [&"cosmos", &"wand"] and _modal.get_child_count() > 0:
+	# A choice that hangs over the whole table, with a way back of its own.
+	if _hanging_pick():
 		_answer(-1)
 		return true
 	return false
@@ -696,10 +765,12 @@ func _build_emotes() -> void:
 		return
 	_emotes = Emotes.new()
 	_emotes.picked.connect(_send_emote)
+	_emotes.said.connect(_send_line)
 	_table.add_child(_emotes)
 	_place_log(_log_fold)
 	if _room != null:
 		_room.emoted.connect(_show_emote)
+		_room.said.connect(_show_line)
 	for kind: Dictionary in Emotes.KINDS:
 		var voice := _load_sfx("emote_" + kind.id)
 		if voice != null:
@@ -719,13 +790,9 @@ func _send_emote(kind: int) -> void:
 func _show_emote(seat: int, kind: int) -> void:
 	if seat < 0 or seat >= engine.players.size() or kind < 0 or kind >= Emotes.KINDS.size():
 		return
-	var p: PlayerState = engine.players[seat]
-	var at := EMOTE_AT_HERO
-	if p != viewer:
-		var box: SeatView = _seats.get(p.id)
-		if box == null:
-			return
-		at = box.position + Vector2(SeatView.SIZE.x, 0) + EMOTE_AT_SEAT
+	var at := _emote_spot(engine.players[seat])
+	if at == Vector2.INF:
+		return
 	if is_instance_valid(_emote_bubbles.get(seat)):
 		# Only drawing: the dice of the match are not for this.
 		at += Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * EMOTE_SCATTER
@@ -734,6 +801,46 @@ func _show_emote(seat: int, kind: int) -> void:
 	_fx.add_child(bubble)
 	_emote_bubbles[seat] = bubble
 	_play_sfx("emote_" + Emotes.KINDS[kind].id)
+
+
+## The middle of the balloon of whatever `p` says, Vector2.INF if they have
+## no place on this screen.
+func _emote_spot(p: PlayerState) -> Vector2:
+	if p == viewer:
+		return EMOTE_AT_HERO
+	var box: SeatView = _seats.get(p.id)
+	if box == null:
+		return Vector2.INF
+	return box.position + Vector2(SeatView.SIZE.x, 0) + EMOTE_AT_SEAT
+
+
+## A line typed to the table goes round the room like an emote: nothing of
+## it is kept, here or in the log.
+func _send_line(text: String) -> void:
+	if _room != null:
+		_room.say(text)
+	else:
+		_show_line(viewer.id, text)
+
+
+## The line `text` in a balloon over the player at `seat`. One at a time for
+## each player: a new line takes the place of the one before.
+func _show_line(seat: int, text: String) -> void:
+	var line := Emotes.clean(text)
+	if seat < 0 or seat >= engine.players.size() or line == "":
+		return
+	var at := _emote_spot(engine.players[seat])
+	if at == Vector2.INF:
+		return
+	if is_instance_valid(_speech.get(seat)):
+		_speech[seat].queue_free()
+	var bubble := Emotes.Speech.new(line)
+	_fx.add_child(bubble)
+	# Its tail where an emote's would be.
+	var tip := at + Vector2(4, Emotes.Bubble.SIZE.y) - Emotes.Bubble.SIZE / 2.0
+	bubble.position = (tip - Vector2(4, bubble.size.y)).clamp(Vector2(4, 12), size - bubble.size - Vector2(4, 4)).round()
+	_speech[seat] = bubble
+	_play_sfx("ui_key")
 
 
 # === book of suspicions =======================================================
@@ -812,6 +919,7 @@ func _layout_seats() -> void:
 			seat.bind(p, engine)
 			seat.clicked.connect(_on_seat_clicked)
 			seat.item_clicked.connect(_on_seat_item_clicked)
+			seat.card_clicked.connect(_on_seat_card_clicked.bind(p))
 			_table.add_child(seat)
 			_seats[p.id] = seat
 		var degrees := 270.0
@@ -831,6 +939,9 @@ func _layout_seats() -> void:
 # === decisions ================================================================
 
 func request(d: Decision) -> Variant:
+	# Out of time for this turn: whatever is still asked of it answers itself.
+	if _clock_spent == engine.turn_count and _on_the_clock(d):
+		return _nothing(d)
 	_pending = d
 	match d.kind:
 		Decision.Kind.TURN:
@@ -874,6 +985,8 @@ func _answer(value: Variant) -> void:
 	for seat: SeatView in _seats.values():
 		seat.set_targetable(false)
 		seat.set_item_pick(false)
+		seat.set_card_pick(false)
+	_countdown = {}
 	answered.emit(value)
 
 
@@ -967,9 +1080,16 @@ func _on_reroll_pressed() -> void:
 		_answer_turn(options.reroll)
 
 
+## The rerolls the viewer has for nothing right now (a Party: heir.gd).
+func _free_rerolls() -> int:
+	return engine.free_rerolls(viewer) if viewer != null and engine.current == viewer else 0
+
+
 func _reroll_tip() -> String:
 	var cost := _price(engine.config.reroll_cost)
 	var tip := Loc.t("[b]Reroll[/b]\nPay %d coins to replace every item in the shop slots.") % cost
+	if _free_rerolls() > 0:
+		tip = Loc.t("[b]Reroll[/b]\nOn the house: %d free rerolls left this turn. Each one replaces every item in the shop slots.") % _free_rerolls()
 	var kept := engine.fixed_items.map(func(def): return def.display_name)
 	if not kept.is_empty():
 		tip += " " + Loc.t("%s always stays on sale.") % Loc.t(" and ").join(kept)
@@ -1039,6 +1159,13 @@ func _use_now(instance: ItemInstance) -> void:
 ## An item picked where it lies, in the box of whoever holds it (see _open_pick).
 func _on_seat_item_clicked(index: int) -> void:
 	if _pending != null and _pending.kind == Decision.Kind.PICK and _pending.context.has("held_by") \
+			and index >= 0 and index < _pending.options.size():
+		_answer(index)
+
+
+## A card picked where it lies, face down, in the hand of `owner` (see _open_pick).
+func _on_seat_card_clicked(index: int, owner: PlayerState) -> void:
+	if _pending != null and _pending.kind == Decision.Kind.PICK and _pending.context.get("hand_of") == owner \
 			and index >= 0 and index < _pending.options.size():
 		_answer(index)
 
@@ -1283,6 +1410,8 @@ func _reaction_button(option: Dictionary) -> Dictionary:
 	tip += Loc.t("You hold %s: this is the truth." if option.legit else "You don't hold %s: this is a bluff.") % def.display_name
 	if option.credit:
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
+	if option.get("caution", "") != "":
+		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
 	return {
 		"text": "%s: %s%s" % [def.display_name, ability.display_name, cost], "tip": tip,
 		"accent": accent, "action": _answer.bind(option),
@@ -1292,23 +1421,66 @@ func _reaction_button(option: Dictionary) -> Dictionary:
 func _prompt_react(d: Decision) -> void:
 	var triggers := []
 	var buttons := []
+	# What a reaction puts at risk beyond the usual, said in the prompt itself:
+	# nobody should find it out from a tooltip.
+	var cautions := ""
 	for option: Dictionary in d.options:
 		if option.kind == &"ability" and not triggers.has(option.ability.trigger_text):
 			triggers.append(option.ability.trigger_text)
+		if option.get("caution", "") != "":
+			cautions += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
 		buttons.append(_reaction_button(option))
 	buttons.append({"text": "Pass", "action": _answer.bind(null)})
 	var why := ". ".join(triggers)
 	var event: GameEvent = d.context.get("event")
 	if event != null and event.type == &"before_gain":
 		why = Loc.t("%s is about to gain %d coins.") % [event.data.player.name, event.data.amount]
-	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [
+	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]%s" % [
 		Loc.t("%s, you may react.") % d.player.name, UI.hex(UI.MUTED),
-		why if why != "" else Loc.t("An opponent's ability is about to take effect.")], buttons)
+		why if why != "" else Loc.t("An opponent's ability is about to take effect."), cautions], buttons)
+
+
+## A round of side bets (gambler.gd): which side, or none, with the seconds
+## the whole table has for it running out over the prompt.
+func _prompt_bet(d: Decision) -> void:
+	var option: Dictionary = d.context.get("option", {})
+	var ability: Ability = option.get("ability")
+	var buttons := []
+	var text := "[b]%s[/b]" % d.prompt
+	if ability != null:
+		var def := Content.character(ability.character_id)
+		var legit: bool = option.get("legit", false)
+		var price: int = option.get("cost", ability.cost)
+		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("%s: %s for %d coins. Everyone bets at once.") % [
+			def.display_name, ability.display_name, price]]
+		text += "\n[color=%s]%s[/color]" % [UI.hex(UI.GREEN if legit else UI.RED),
+			Loc.t("You hold %s: this is the truth." if legit else "You don't hold %s: this is a bluff.") % def.display_name]
+		if option.get("credit", false):
+			text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
+		for i: int in d.options.size():
+			buttons.append({
+				"text": d.options[i].label, "tip": UI.ability_tip(ability),
+				"accent": UI.GREEN if legit else UI.RED, "action": _answer.bind(i),
+			})
+	buttons.append({"text": "No bet", "action": _answer.bind(-1)})
+	_show_prompt(text, buttons)
 
 
 func _open_pick(d: Decision) -> void:
+	if d.context.has("seconds"):
+		_countdown = {"decision": d, "left": float(d.context.seconds), "total": float(d.context.seconds)}
+	if d.context.get("look") == &"side_bet":
+		_prompt_bet(d)
+		return
 	if d.options.all(func(option: Dictionary): return option.has("card")):
 		_open_card_pick(d)
+		return
+	# The options are the cards another player holds, face down: they are
+	# picked right there, in that player's box.
+	var hand: Variant = d.context.get("hand_of")
+	if hand is PlayerState and _seats.has(hand.id) and hand.alive:
+		_seats[hand.id].set_card_pick(true)
+		_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click one of the highlighted cards.")], [])
 		return
 	# The options are the items another player holds, in the order they lie in
 	# that player's box: they are picked right there, with no menu.
@@ -1417,18 +1589,27 @@ func _open_card_pick(d: Decision) -> void:
 	veil.add_child(heading)
 	var late := [heading]
 
-	var card_size := CardView.BASE * PICK_SCALE
+	# One row while they fit; a whole cast (a Last Call) stands in two rows of
+	# smaller cards.
 	var count: int = d.options.size()
-	var gap := 44.0
-	var left := 576.0 - (count * card_size.x + (count - 1) * gap) / 2.0
+	var rows := 1 if count <= PICK_ROW else 2
+	var per_row := ceili(count / float(rows))
+	var pick_scale := PICK_SCALE if rows == 1 else PICK_SCALE_SMALL
+	var card_size := CardView.BASE * pick_scale
+	var gap := 44.0 if rows == 1 else minf(20.0, (1100.0 - per_row * card_size.x) / maxi(per_row - 1, 1))
+	veil.set_meta(&"scale", pick_scale)
 	var lifted := []
 	var cards := []
 	for i in count:
 		var option: Dictionary = d.options[i]
-		var card := CardView.new(PICK_SCALE)
+		var card := CardView.new(pick_scale)
 		card.set_card(option.card, true)
-		card.lift = 14.0
-		var rest := Vector2(left + i * (card_size.x + gap), 214)
+		card.lift = 14.0 if rows == 1 else 8.0
+		@warning_ignore("integer_division")
+		var row := i / per_row
+		var in_row := mini(per_row, count - row * per_row)
+		var left := 576.0 - (in_row * card_size.x + (in_row - 1) * gap) / 2.0
+		var rest := Vector2(left + (i % per_row) * (card_size.x + gap), 214.0 if rows == 1 else 146.0 + row * (card_size.y + 38.0))
 		var own: bool = d.player == viewer and not d.context.get("foreign", false)
 		var origin: CardView = _hero.card(i) if own else null
 		if origin != null and origin.card_id == option.card and origin.face_up:
@@ -1442,7 +1623,7 @@ func _open_card_pick(d: Decision) -> void:
 			card.modulate.a = 0.0
 		veil.add_child(card)
 		cards.append(card)
-		var name_tag := UI.label(option.get("label", ""), 16, UI.GOLD, true)
+		var name_tag := UI.label(option.get("label", ""), 16 if rows == 1 else 13, UI.GOLD, true)
 		name_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		name_tag.position = Vector2(-40, card_size.y + 12)
 		name_tag.size = Vector2(card_size.x + 80, 22)
@@ -1453,7 +1634,7 @@ func _open_card_pick(d: Decision) -> void:
 		var glide := card.create_tween().set_parallel()
 		card.set_meta(&"glide", glide)
 		glide.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		var time := (0.55 + 0.07 * i) / _speed
+		var time := (0.55 + (0.07 if rows == 1 else 0.02) * i) / _speed
 		glide.tween_property(card, "position", rest, time)
 		glide.tween_property(card, "scale", Vector2.ONE, time)
 		glide.tween_property(card, "modulate:a", 1.0, time * 0.6)
@@ -1506,8 +1687,9 @@ func _close_card_pick(veil: ColorRect, cards: Array, choice: int) -> void:
 				moving.kill()
 		card.modulate.a = 1.0
 	var out := create_tween().bind_node(veil).set_parallel()
-	# Cards from somewhere else have no animation waiting to pick them up.
-	if choice < 0 or d.context.get("foreign", false):
+	# Cards from somewhere else have no animation waiting to pick them up, and
+	# neither has one that was only chosen for later (context.quiet).
+	if choice < 0 or d.context.get("foreign", false) or d.context.get("quiet", false):
 		out.tween_property(veil, "modulate:a", 0.0, 0.28 / _speed)
 		await out.finished
 		if _pending == d:
@@ -1520,7 +1702,7 @@ func _close_card_pick(veil: ColorRect, cards: Array, choice: int) -> void:
 		var card: CardView = cards[i]
 		var origin: CardView = card.get_meta(&"origin", null)
 		if i == choice:
-			var grow := SHOWN_SCALE / PICK_SCALE
+			var grow: float = SHOWN_SCALE / veil.get_meta(&"scale", PICK_SCALE)
 			out.tween_property(card, "position", SHOWN_CENTRE - card.size * grow / 2.0, 0.45 / _speed)
 			out.tween_property(card, "scale", Vector2.ONE * grow, 0.45 / _speed)
 		elif origin != null and is_instance_valid(origin):
@@ -1573,6 +1755,7 @@ func _take_pick_handoff(p: PlayerState, card_id: StringName) -> bool:
 # === prompt, popup, modal =====================================================
 
 func _show_prompt(bbcode: String, buttons: Array) -> void:
+	_table_notice = false
 	UI.clear(_prompt)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -1833,6 +2016,13 @@ func _key_stops() -> Dictionary:
 			var holder: Variant = _pending.context.get("held_by")
 			if holder is PlayerState and _seats.has(holder.id):
 				return {"id": "items", "rows": [_seats[holder.id].item_views()]}
+			var hand: Variant = _pending.context.get("hand_of")
+			if hand is PlayerState and _seats.has(hand.id):
+				return {"id": "hand", "rows": [_seats[hand.id].card_views()]}
+			if _prompt.visible:
+				# A choice asked in the prompt (a side bet): none is the safe answer.
+				var answers := _buttons_in(_prompt)
+				return {"id": "prompt", "rows": [answers], "start": answers.back() if not answers.is_empty() else null}
 	return {}
 
 
@@ -2101,6 +2291,140 @@ func _confirm(question: String, yes: String, action: Callable) -> void:
 	UI.pop(panel, 1.06, 0.15)
 
 
+# === who is being waited for ==================================================
+
+## A question put to the whole table at once (a doubt window, a round of side
+## bets): each player asked gets a badge on their box, which turns into a
+## tick as they let it pass. All of them go when the question is settled.
+func _on_polled(p: PlayerState, state: StringName) -> void:
+	if p == null or state == &"closed":
+		for seat: SeatView in _seats.values():
+			seat.set_answer(0)
+		_table_clock = {}
+		return
+	var seat: SeatView = _seats.get(p.id)
+	if seat != null:
+		seat.set_answer(1 if state == &"asked" else 2)
+
+
+## Whether `d` is the kind of decision the clock of a timed turn runs on: one
+## that keeps the turn of its own player waiting.
+func _on_the_clock(d: Decision) -> bool:
+	return engine.config.turn_seconds > 0 and d.player == engine.current and not d.player.is_bot \
+			and d.kind in [Decision.Kind.TURN, Decision.Kind.TARGET, Decision.Kind.PICK] and not d.context.has("seconds")
+
+
+func _on_asking(d: Decision) -> void:
+	if _on_the_clock(d):
+		_clock_open.append(d)
+	# Somebody is taking their time over a choice the table knows they have
+	# (what to seize, what to bury, whether to react): their box says so. Not
+	# for what is chosen before a play is announced (context.private), which
+	# would give a bluff away; a doubt or a round of bets has its own badges.
+	if _shows_thinking(d):
+		var seat: SeatView = _seats.get(d.player.id)
+		if seat != null:
+			_thinking[d] = seat
+			seat.set_answer(1)
+	# A person has so long to answer: the whole table watches that time run.
+	if d.context.has("seconds") and not d.player.is_bot and _table_clock.is_empty():
+		_table_clock = {"left": float(d.context.seconds), "total": float(d.context.seconds)}
+
+
+func _on_settled(d: Decision) -> void:
+	_clock_open.erase(d)
+	if _thinking.has(d):
+		var seat: SeatView = _thinking[d]
+		_thinking.erase(d)
+		# Unless something else of theirs is still open.
+		if is_instance_valid(seat) and not _thinking.values().has(seat):
+			seat.set_answer(0)
+
+
+## Whether the other players are shown that `d` is being thought over.
+func _shows_thinking(d: Decision) -> bool:
+	return not d.player.is_bot and d.player != viewer and not d.context.get("private", false) \
+			and not d.context.has("seconds") and d.kind in [Decision.Kind.PICK, Decision.Kind.TARGET, Decision.Kind.REACT]
+
+
+## The answer of someone who did nothing: end the turn, back out, pick none.
+func _nothing(d: Decision) -> Variant:
+	match d.kind:
+		Decision.Kind.TURN:
+			return {"kind": &"end"}
+		Decision.Kind.PICK:
+			return -1
+		Decision.Kind.DOUBT:
+			return false
+	return null
+
+
+## Runs the clock of the turn being played and draws it round the box of its
+## player. When it runs out on the viewer, their turn is ended for them.
+func _tick_clock(delta: float) -> void:
+	var total := float(engine.config.turn_seconds)
+	var p := engine.current
+	var box: Variant = null
+	if total > 0.0 and p != null and not p.is_bot and p.alive and not engine.over and _clock_turn == engine.turn_count:
+		box = _node_of(p)
+		if not _clock_open.is_empty():
+			_clock_left = maxf(_clock_left - delta, 0.0)
+	if _clock_shown != box and _clock_shown != null and is_instance_valid(_clock_shown):
+		_clock_shown.set_clock(-1.0)
+	_clock_shown = box
+	if box == null:
+		return
+	box.set_clock(_clock_left / total)
+	if _clock_left <= 0.0 and p == viewer and _clock_spent != engine.turn_count:
+		_clock_spent = engine.turn_count
+		_log_line(Loc.t("Time is up: your turn ends."), &"doubt_declared")
+		_float(Loc.t("TIME IS UP"), _anchor(viewer), UI.RED, 24)
+		_play_sfx("cancel")
+		if _pending != null and _on_the_clock(_pending):
+			_answer(_nothing(_pending))
+
+
+## Runs the time a choice of its own has (Decision.context.seconds) and
+## answers it with nothing when it is up. What shows it is the fuse of the
+## table's clock (_tick_table_clock).
+func _tick_countdown(delta: float) -> void:
+	_tick_table_clock(delta)
+	var d: Variant = _countdown.get("decision")
+	if d == null or d != _pending:
+		_countdown = {}
+		return
+	_countdown.left = maxf(_countdown.left - delta, 0.0)
+	if _countdown.left <= 0.0:
+		_answer(_nothing(d))
+
+
+## The clock everyone sees while the table waits on a timed question (the
+## round of side bets): the outline of the prompt itself burns away like a
+## fuse, sparks at its end. Whoever was not asked, or has answered already,
+## gets a prompt with nothing to press, only to see the fuse go.
+func _tick_table_clock(delta: float) -> void:
+	if _table_fuse == null:
+		_table_fuse = TurnClock.new()
+		_table_fuse.fuse = true
+		_table_fuse.set_anchors_preset(Control.PRESET_FULL_RECT)
+		add_child(_table_fuse)
+		move_child(_table_fuse, _prompt.get_index() + 1)
+	if _table_clock.is_empty() or engine.over:
+		_table_fuse.left = -1.0
+		if _table_notice and _prompt.visible:
+			_hide_prompt()
+		_table_notice = false
+		return
+	_table_clock.left = maxf(_table_clock.left - delta, 0.0)
+	if not _prompt.visible and (_pending == null or _pending.player != viewer):
+		_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [
+			Loc.t("The table is placing its side bets."), UI.hex(UI.MUTED),
+			Loc.t("Each bet is announced once everyone has answered, or the fuse burns out.")], [])
+		_table_notice = true
+	_table_fuse.box = _prompt.get_rect()
+	_table_fuse.left = _table_clock.left / maxf(_table_clock.total, 0.01) if _prompt.visible else -1.0
+
+
 # === presentation =============================================================
 
 func present(e: GameEvent) -> void:
@@ -2126,6 +2450,8 @@ func present(e: GameEvent) -> void:
 					bar.coin_bias = 0
 			_set_active(d.player)
 			_show_turn()
+			_clock_turn = engine.turn_count
+			_clock_left = float(engine.config.turn_seconds)
 			if d.player == viewer:
 				await _banner("YOUR TURN", "", UI.GOLD, 0.8)
 			else:
@@ -2145,7 +2471,12 @@ func present(e: GameEvent) -> void:
 		&"claim_cancelled":
 			_play_sfx("cancel")
 			await _stamp("SILENCED", UI.BLUE)
+		&"claim_resolving":
+			# Nobody called it a lie: what it cost is the bank's now.
+			await _release_reserve(d.play, false)
 		&"claim_resolved":
+			# Whatever is still set aside for it (the claim was cut short).
+			await _release_reserve(d.play, false)
 			# A claim answering another one (a Silver Tongue caught lying, a
 			# Swindle) ends in the middle of it: what the first left out on
 			# the table is still waiting.
@@ -2274,6 +2605,21 @@ func present(e: GameEvent) -> void:
 			# away (PlayFx.cards_binned).
 			if d.how != &"recall":
 				await _play_fx.hand_found(d.owner)
+		&"turn_ended":
+			_clock_turn = -1
+		&"items_missed":
+			# What an Untraceable took off the table: whatever came for it
+			# finds nothing, and only then are the items back.
+			if d.how == &"steal":
+				await _play_fx.rope_missed(d.by, _item_spot(d.owner, 0))
+			elif _play_fx.bombing():
+				# A Demolition: the bomb is thrown all the same, finds nothing
+				# to blow up and goes on bouncing off the table.
+				await _play_fx.bomb_missed(_item_spot(d.owner, 0))
+			else:
+				_float(Loc.t("NOTHING THERE"), _item_spot(d.owner, 0), UI.MUTED, 16)
+				await _wait(0.45)
+			await _play_fx.items_found(d.owner)
 		&"status_added":
 			# A status the Impostor copied keeps the look of the copy.
 			var marked: Variant = _node_of(d.player)
@@ -2319,9 +2665,12 @@ func _sync_shop() -> void:
 	var options: Variant = _turn_options()
 	var ink := _price_ink()
 	var queasy := ink != UI.GOLD
-	_shop_reroll_price.text = str(_price(engine.config.reroll_cost))
-	_shop_reroll_price.add_theme_color_override("font_color", ink)
-	_shop_reroll_price.material = _shop_reroll_queasy if queasy else null
+	# A Party: the reroll is on the house, and the tag counts what is left.
+	var free := _free_rerolls()
+	_shop_reroll_price.text = "x%d" % free if free > 0 else str(_price(engine.config.reroll_cost))
+	_shop_reroll_price.add_theme_color_override("font_color", UI.GREEN.lightened(0.2) if free > 0 else ink)
+	_shop_reroll_price.material = _shop_reroll_queasy if queasy and free <= 0 else null
+	_shop_reroll_coin.modulate.a = 0.0 if free > 0 else 1.0
 	for entry: Dictionary in _shop_entries:
 		var def := _entry_def(entry)
 		for node: Control in [entry.view, entry.price, entry.coin, entry.mini]:
@@ -2733,6 +3082,14 @@ func _anim_coins(d: Dictionary) -> void:
 			bar.coin_bias = 0
 		_float("%+d" % delta, here + Vector2(0, -18), UI.RED, 22)
 		return
+	# The price of a claim is set aside over the box until the claim is
+	# settled; a liar who was caught takes it back from there.
+	if d.reason == &"cost" and delta < 0 and d.get("play") != null:
+		await _reserve_coins(d)
+		return
+	if d.reason == &"refund" and delta > 0 and _reserves.has(d.get("play")):
+		await _release_reserve(d.play, true)
+		return
 	# The chains of an Entropy: what is left of them becomes the coins.
 	if d.reason == &"entropy" and delta > 0 and _play_fx.releasing(p):
 		await _play_fx.release_coins(d)
@@ -2798,6 +3155,106 @@ func _anim_coins(d: Dictionary) -> void:
 	if bar != null:
 		bar.coin_bias = 0
 	_float("%+d" % delta, here + Vector2(0, -18), UI.GOLD if delta > 0 else UI.RED, 22)
+
+
+## Where the coins `p` put down for a claim lie: on the table just under
+## their box, or just over the viewer's counter; `nth` moves each further
+## pile of the same player along. It is the foot of the first stack.
+func _reserve_spot(p: PlayerState, nth: int) -> Vector2:
+	var at := RESERVE_AT_HERO
+	var seat: SeatView = _seats.get(p.id)
+	if p != viewer:
+		if seat == null:
+			return _bank()
+		at = seat.position + Vector2(0, SeatView.SIZE.y) + RESERVE_AT_SEAT
+	at.x += nth * RESERVE_STEP
+	return at.clamp(Vector2(16, 24), size - Vector2(40, 8)).round()
+
+
+## The price of a claim (`d` is its "coins" event, reason &"cost") leaves the
+## purse as the claim is announced, but not for the bank yet: the coins are
+## put down on the table in front of whoever pays, stacked like a stake,
+## and lie there until the claim is settled (_release_reserve).
+func _reserve_coins(d: Dictionary) -> void:
+	var p: PlayerState = d.player
+	var total: int = -d.delta
+	var bar := _stat_bar(p)
+	if bar != null:
+		bar.hold_coins(p)
+	var nth := 0
+	for other: Dictionary in _reserves.values():
+		if other.player == p:
+			nth += 1
+	var at := _reserve_spot(p, nth)
+	var pile := CoinPile.new()
+	pile.position = at
+	# On the table itself: under the boxes, the prompt and whatever flies.
+	_arrows.add_child(pile)
+	# No number on the table: the mouse on the pile says how many they are.
+	TipLayer.attach(pile, func() -> String:
+		var line := "[color=%s]%d coin[/color] put on the table by %s for this claim" if total == 1 \
+				else "[color=%s]%d coins[/color] put on the table by %s for this claim"
+		return Loc.t(line) % [UI.hex(UI.GOLD), total, p.name])
+	var reserve := {"pile": pile, "player": p, "amount": total}
+	_reserves[d.play] = reserve
+	var here := _coin_anchor(p)
+	var coins := clampi(total, 1, MAX_COINS_SHOWN)
+	for i in coins:
+		var leaves := i * COIN_STAGGER
+		var lands := COIN_FLIGHT + leaves
+		@warning_ignore("integer_division")
+		var share := total * (i + 1) / coins - total * i / coins
+		# Each one lands on top of the stack as it stands by then.
+		@warning_ignore("integer_division")
+		var top := at + Vector2((i / CoinPile.STACK) * CoinPile.STEP, -CoinPile.THICK * (i % CoinPile.STACK + 1))
+		_fly(UI.tex(COIN_ICON), here, top, Vector2(16, 16), COIN_FLIGHT, leaves)
+		_play_sfx_later("coin_%d" % (i % COIN_SOUNDS + 1), lands)
+		_count_coins(bar, -share, leaves)
+		get_tree().create_timer(lands / _speed).timeout.connect(_reserve_landed.bind(pile, share))
+	await _wait(COIN_FLIGHT + coins * COIN_STAGGER)
+	if bar != null:
+		bar.coin_bias = 0
+
+
+func _reserve_landed(pile: CoinPile, share: int) -> void:
+	if is_instance_valid(pile):
+		pile.count += share
+
+
+## The coins put down for `play` leave the table: pulled back to the purse of
+## whoever paid them (`back`: the "coins" event of the refund is being
+## shown), or swept across it to the bank, the whole pile at once. Nothing
+## happens if none were put down.
+func _release_reserve(play: Play, back: bool) -> void:
+	if not _reserves.has(play):
+		return
+	var reserve: Dictionary = _reserves[play]
+	_reserves.erase(play)
+	var p: PlayerState = reserve.player
+	var pile: CoinPile = reserve.pile
+	if not is_instance_valid(pile):
+		return
+	var total: int = reserve.amount
+	pile.count = total
+	pile.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var to := _coin_anchor(p) if back else _bank()
+	var go := pile.create_tween()
+	go.tween_property(pile, "position", to, RESERVE_SWEEP / _speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN if back else Tween.EASE_IN_OUT)
+	go.parallel().tween_property(pile, "modulate:a", 0.0, 0.12 / _speed).set_delay((RESERVE_SWEEP - 0.12) / _speed)
+	go.tween_callback(pile.queue_free)
+	_play_sfx("coin_1")
+	_play_sfx_later("coin_%d" % (total % COIN_SOUNDS + 1), RESERVE_SWEEP)
+	if not back:
+		# Coins on their way to the bank hold nothing up.
+		return
+	var bar := _stat_bar(p)
+	if bar != null:
+		bar.hold_coins(p)
+	await _wait(RESERVE_SWEEP)
+	if bar != null:
+		bar.coin_bias = 0
+	_float("+%d" % total, _coin_anchor(p) + Vector2(0, -18), UI.GOLD, 22)
 
 
 ## True while a Materialize of `p` is the claim being played out.

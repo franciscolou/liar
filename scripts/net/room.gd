@@ -8,8 +8,8 @@ extends Node
 ## the end screen all find it in `current`.
 ##
 ## In the lobby the host owns everything: who sits where, the bots and the
-## rules. The others see each change as it is made and may only rename
-## themselves.
+## rules. The others see each change as it is made. Everyone, the host
+## included, may only rename themselves.
 ##
 ## A match is not played by the host and watched by the others: every machine
 ## runs the whole of it, from the same seed, and so they all reach the same
@@ -27,6 +27,8 @@ signal seat_left(seat: int)
 signal out_of_step(turn: int)
 ## The player at `seat` of the match sent an emote (see emotes.gd).
 signal emoted(seat: int, kind: int)
+## The player at `seat` of the match typed something to the table.
+signal said(seat: int, text: String)
 
 const Transition := preload("res://scripts/ui/transition.gd")
 const PATH := "res://scripts/net/room.gd"
@@ -38,8 +40,10 @@ const PORT := 24565
 const NODE_NAME := "NetRoom"
 const MAX_SEATS := 8
 const NAME_LENGTH := 12
+## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
+const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 19
+const PROTOCOL := 21
 const JOIN_TIMEOUT := 8.0
 const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent", "Dolores", "Ezekiel"]
 
@@ -239,14 +243,15 @@ func _seat_of(peer: int) -> int:
 	return -1
 
 
-## Renames a seat: one's own, or any of them for the host.
+## Renames a seat, which has to be one's own: not even the host writes the
+## name of somebody else.
 func rename(seat: int, text: String) -> void:
-	if seat < 0 or seat >= seats.size():
+	if seat < 0 or seat >= seats.size() or seats[seat].bot or seats[seat].peer != my_peer():
 		return
 	if hosting:
 		seats[seat].name = clean_name(text)
 		_push()
-	elif seats[seat].peer == my_peer():
+	else:
 		seats[seat].name = clean_name(text)
 		_rename.rpc_id(1, text)
 
@@ -536,6 +541,47 @@ func _emote_relay(seat: int, kind: int) -> void:
 func _emote_down(id: int, seat: int, kind: int) -> void:
 	if id == _match_id and in_match:
 		emoted.emit(seat, kind)
+
+
+# --- talk --------------------------------------------------------------------------
+
+## Shows everyone at the table a line typed by the player at this machine.
+## Like an emote, it is no part of the match and nothing of it is kept.
+func say(text: String) -> void:
+	var seat := my_match_seat()
+	var line := _clean_line(text)
+	if seat < 0 or line == "":
+		return
+	if hosting:
+		_say_relay(seat, line)
+	else:
+		_say_up.rpc_id(1, _match_id, line)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _say_up(id: int, text: String) -> void:
+	if not hosting or id != _match_id or not in_match:
+		return
+	var seat := match_peers.find(multiplayer.get_remote_sender_id())
+	var line := _clean_line(text)
+	if seat >= 0 and line != "":
+		_say_relay(seat, line)
+
+
+func _say_relay(seat: int, text: String) -> void:
+	_send(_say_down, [_match_id, seat, text])
+	_say_down(_match_id, seat, text)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _say_down(id: int, seat: int, text: String) -> void:
+	if id == _match_id and in_match:
+		said.emit(seat, _clean_line(text))
+
+
+## A typed line as it may go round: one line, no longer than SAY_LENGTH.
+func _clean_line(text: String) -> String:
+	return text.replace("\n", " ").replace("\r", " ").replace("\t", " ").strip_edges().left(SAY_LENGTH)
 
 
 # --- keeping in step ---------------------------------------------------------------

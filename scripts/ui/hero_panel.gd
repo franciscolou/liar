@@ -13,6 +13,9 @@ signal extra_pressed(option: Dictionary)
 
 const StatusFx := preload("res://scripts/ui/status_fx.gd")
 const Desk := preload("res://scripts/ui/hero_desk.gd")
+const TurnClock := preload("res://scripts/ui/turn_clock.gd")
+## What the clock of a timed turn goes round: the player's own block.
+const CLOCK_BOX := Rect2(8, 12, 216, 150)
 const SIZE := Vector2(1152, 170)
 const MAX_EXTRAS := 3
 const STRIP_SCALE := 1.22
@@ -45,6 +48,7 @@ var _extras: VBoxContainer
 var _options: Variant  # turn options while it is this player's move
 var _items_shown := ""
 var _active := false
+var _clock: TurnClock
 
 
 func _init() -> void:
@@ -119,6 +123,9 @@ func _init() -> void:
 	# The seal of an oath is set on the end of the name plate, over its top edge.
 	_status_fx.seal_at = Vector2(Desk.PLATE.end.x - 20, Desk.PLATE.position.y + 9)
 	add_child(_status_fx)
+	_clock = TurnClock.new()
+	_clock.box = CLOCK_BOX
+	add_child(_clock)
 	_restyle()
 
 
@@ -244,6 +251,18 @@ func _urgent_first(extras: Array) -> Array:
 	for level: int in levels:
 		out.append_array(extras.filter(func(extra: Dictionary) -> bool: return extra.get("priority", 0) == level))
 	return out
+
+
+## How much of the time of the turn is left, 1 to 0 (see turn_clock.gd);
+## below 0 there is no clock.
+func set_clock(left: float) -> void:
+	_clock.left = left
+
+
+## Shows or hides what the player holds (an Untraceable takes it off the
+## table for a moment: see PlayFx.vanish_items).
+func set_items_shown(shown: bool) -> void:
+	_inventory.modulate.a = 1.0 if shown else 0.0
 
 
 func hand_center() -> Vector2:

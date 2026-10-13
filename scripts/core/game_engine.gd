@@ -15,6 +15,15 @@ extends RefCounted
 ## doubted, costs coins, fires its own events and so on, recursively.
 
 signal finished(winner: PlayerState)
+## A decision was put to its player, and then it was answered (or dropped).
+## For a screen that shows who is being waited for; nothing in the rules.
+## One with context.private is nobody else's business.
+signal asking(decision: Decision)
+signal settled(decision: Decision)
+## Several players are being asked the same thing at once (a doubt window, a
+## round of side bets): `state` is &"asked" as it opens for `player`, &"passed"
+## once they let it go, and &"closed" (with no player) when it is over.
+signal polled(player: PlayerState, state: StringName)
 
 ## Reactions to reactions to reactions... stop being offered at this depth.
 const MAX_REACTION_DEPTH := 4
@@ -45,6 +54,9 @@ var last_action: Ability
 var tree: SceneTree
 
 var _reaction_depth := 0
+## How many plays are being made ready and not announced yet (their target,
+## whatever prepare() asks): what is asked meanwhile is the asker's secret.
+var _unannounced := 0
 ## The plays whose resolve() is running, innermost last.
 var _resolving: Array = []
 
@@ -57,11 +69,16 @@ func setup(game_config: GameConfig) -> void:
 	else:
 		rng.randomize()
 
+	# The cast: so many drawn out of every character there is, or out of the
+	# ones the host picked by hand (all of those, unless a number was set).
 	var ids := config.character_ids.duplicate()
+	var drawn := config.pool_draw
 	if ids.is_empty():
-		var all := Content.characters.keys()
-		_shuffle(all)
-		ids = all.slice(0, clampi(config.character_count, 1, all.size()))
+		ids = Content.characters.keys()
+		drawn = clampi(config.character_count, 1, ids.size())
+	if drawn > 0 and drawn < ids.size():
+		_shuffle(ids)
+		ids = ids.slice(0, drawn)
 	characters.clear()
 	for def in Content.character_list():
 		if ids.has(def.id):
@@ -103,7 +120,10 @@ func setup(game_config: GameConfig) -> void:
 
 func run() -> void:
 	await fire(&"game_started")
-	var index := 0
+	# Whoever opens the match is drawn, unless the config names a seat.
+	var index := rng.randi_range(0, players.size() - 1)
+	if config.first_seat >= 0:
+		index = config.first_seat % players.size()
 	while not over:
 		current = players[index]
 		if current.alive:
@@ -148,43 +168,53 @@ func _reaction_window(event: GameEvent) -> void:
 	# the table, each in their turn.
 	await _contested_window(event)
 	for p in seat_order(current):
-		if over or event.cancelled:
-			return
-		var options := reaction_options(p, event).filter(func(option: Dictionary) -> bool:
-			return not _contested(option))
-		if options.is_empty():
-			continue
-		var choice: Variant = null
-		var early: Dictionary = _early_reactions(event).get(p.id, {})
-		if event.data.get("auto") == p:
-			choice = options[0]
-		elif _same_option(options, early.get("answer")) != null:
-			# Already answered in the doubt window. Once: it is spent.
-			choice = _same_option(options, early.answer)
-			early.answer = null
-		else:
-			# What they saw there and let through is not offered again.
-			options = options.filter(func(option: Dictionary) -> bool:
-				return _same_option(early.get("offered", []), option) == null)
+		# Asked again for as long as they back out of what they picked (a
+		# target, a card to give up): that is a step back, not a pass.
+		var again := true
+		while again:
+			again = false
+			if over or event.cancelled:
+				return
+			var options := reaction_options(p, event).filter(func(option: Dictionary) -> bool:
+				return not _contested(option))
 			if options.is_empty():
-				continue
-			var d := Decision.new(Decision.Kind.REACT, p)
-			d.options = options
-			d.context = {"event": event}
-			choice = await ask(d)
-		if choice == null:
-			continue
-		await _react(p, choice, event)
+				break
+			var choice: Variant = null
+			var asked := false
+			var early: Dictionary = _early_reactions(event).get(p.id, {})
+			if event.data.get("auto") == p:
+				choice = options[0]
+			elif _same_option(options, early.get("answer")) != null:
+				# Already answered in the doubt window. Once: it is spent.
+				choice = _same_option(options, early.answer)
+				early.answer = null
+			else:
+				# What they saw there and let through is not offered again.
+				options = options.filter(func(option: Dictionary) -> bool:
+					return _same_option(early.get("offered", []), option) == null)
+				if options.is_empty():
+					break
+				var d := Decision.new(Decision.Kind.REACT, p)
+				d.options = options
+				d.context = {"event": event}
+				choice = await ask(d)
+				asked = true
+			if choice == null:
+				break
+			again = not await _react(p, choice, event) and asked and not p.is_bot
 
 
-## `player` answers `event` with reaction option `choice`.
-func _react(player: PlayerState, choice: Dictionary, event: GameEvent) -> void:
+## `player` answers `event` with reaction option `choice`. False if they
+## backed out of it before anything was announced.
+func _react(player: PlayerState, choice: Dictionary, event: GameEvent) -> bool:
 	_reaction_depth += 1
+	var play: Play
 	if choice.kind == &"ability":
-		await claim(player, choice.ability, event)
+		play = await claim(player, choice.ability, event)
 	else:
-		await use_item(player, choice.item, event)
+		play = await use_item(player, choice.item, event)
 	_reaction_depth -= 1
+	return play != null
 
 
 ## Whether reaction `option` plays something only one player can get (see
@@ -264,7 +294,10 @@ func _contested_window(event: GameEvent) -> void:
 		if taker == null:
 			return
 		heard[taker.id] = true
-		await _react(taker, choice, event)
+		if not await _react(taker, choice, event) and not taker.is_bot:
+			# They backed out before announcing it: a step back, not a pass.
+			# They are asked again, with whoever had not answered yet.
+			heard.erase(taker.id)
 
 
 ## Waits for one human's answer in a contested window that others are in too.
@@ -359,7 +392,43 @@ func ask(decision: Decision) -> Variant:
 			Decision.Kind.PICK:
 				return -1
 		return null
-	return await controllers[decision.player.id].decide(decision)
+	# Nobody else is to know that a choice is being made before its play is
+	# announced: that somebody is choosing a card to give up tells of a bluff.
+	if _unannounced > 0:
+		decision.context["private"] = true
+	asking.emit(decision)
+	var answer: Variant = await controllers[decision.player.id].decide(decision)
+	settled.emit(decision)
+	return answer
+
+
+## Puts each of `decisions` to its player, all at once, and waits until every
+## one of them has answered: {player id: answer}. Bots answer on the spot.
+func ask_all(decisions: Array) -> Dictionary:
+	var answers := {}
+	if decisions.is_empty():
+		return answers
+	var poll := DoubtPoll.new()
+	poll.open = decisions.size()
+	for d: Decision in decisions:
+		if not d.player.is_bot:
+			polled.emit(d.player, &"asked")
+	for d: Decision in decisions:
+		_poll_answer(d, poll, answers)
+	if not poll.done:
+		await poll.settled
+	polled.emit(null, &"closed")
+	return answers
+
+
+func _poll_answer(d: Decision, poll: DoubtPoll, answers: Dictionary) -> void:
+	answers[d.player.id] = await ask(d)
+	if not d.player.is_bot:
+		polled.emit(d.player, &"passed")
+	poll.open -= 1
+	if poll.open <= 0:
+		poll.done = true
+		poll.settled.emit()
 
 
 ## Stops the match where it stands (the table was closed). Whatever is still
@@ -392,11 +461,12 @@ func turn_options(player: PlayerState) -> Dictionary:
 		if shop[slot] != null:
 			out.buy.append(_buy_option(player, shop[slot], slot))
 	if not item_pool.is_empty():
-		var cost := price(player, config.reroll_cost)
+		var cost := reroll_cost(player)
 		var reason := "" if can_pay(player, cost) else Loc.t("Not enough coins")
 		out.reroll = {
 			"kind": &"reroll", "cost": cost, "enabled": reason == "",
 			"reason": reason, "credit": cost > player.coins,
+			"free": free_rerolls(player),
 		}
 	for instance: ItemInstance in player.items:
 		var def := instance.def
@@ -439,6 +509,7 @@ func ability_option(player: PlayerState, ability: Ability) -> Dictionary:
 		"kind": &"ability", "ability": ability, "enabled": reason == "", "reason": reason,
 		"legit": player.has_character(ability.character_id), "credit": cost > player.coins,
 		"cost": cost, "detail": ability.detail(player, self),
+		"caution": ability.caution(player, self),
 	}
 
 
@@ -457,6 +528,17 @@ func surcharge(player: PlayerState) -> int:
 ## LIAR! is not a purchase and does not go through here.
 func price(player: PlayerState, amount: int) -> int:
 	return amount + surcharge(player) if amount > 0 else amount
+
+
+## The rerolls of the shop `player` has for nothing in the turn being played
+## (heir.gd puts them in `turn.free_rerolls`).
+func free_rerolls(player: PlayerState) -> int:
+	return int(player.turn.get("free_rerolls", 0))
+
+
+## What replacing the shop slots costs `player` right now.
+func reroll_cost(player: PlayerState) -> int:
+	return 0 if free_rerolls(player) > 0 else price(player, config.reroll_cost)
 
 
 ## What claiming `ability` costs `player` right now.
@@ -534,27 +616,41 @@ func _play_turn(p: PlayerState) -> void:
 # --- claims and items --------------------------------------------------------
 
 ## `actor` declares `ability`. Returns null if they backed out before
-## announcing it; otherwise the Play, whatever its outcome.
-func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> Play:
+## announcing it; otherwise the Play, whatever its outcome. `params` are
+## choices already made for it (see gambler.gd).
+##
+## The price is put down as the claim is announced, before anyone answers it:
+## what a player has is always what they have left to spend, and nothing is
+## bought on the hope that an earlier claim comes to nothing. A liar who is
+## caught gets it back (challenge): a lie costs Morale, not coins.
+func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null, params: Dictionary = {}) -> Play:
 	var play := Play.new()
 	play.engine = self
 	play.actor = actor
 	play.source = ability
 	play.event = trigger
+	play.params = params.duplicate()
 	play.cost = claim_cost(actor, ability)
 	play.truthful = actor.has_character(ability.character_id)
-	if not await _choose_target(play):
-		return null
-	if not await ability.prepare(play):
+	if not await _make_ready(play):
 		return null
 	actor.turn["busy"] = true
 
 	await fire(&"claim_declared", {"play": play})
-	var doubt := await _doubt_window(play)
-	var doubter: PlayerState = doubt.get("player")
+	if not over and actor.alive:
+		if await pay(actor, play.cost, &"cost", play):
+			play.paid = play.cost
+		else:
+			play.failed = true
+	var doubter: PlayerState = null
+	var stake := STAKE_COINS
 	var proven := false
+	if not play.failed and not over and actor.alive:
+		var doubt := await _doubt_window(play)
+		doubter = doubt.get("player")
+		stake = doubt.get("stake", STAKE_COINS)
 	if doubter != null:
-		if await challenge(doubter, play, doubt.stake):
+		if await challenge(doubter, play, stake):
 			await fire(&"claim_resolved", {"play": play})
 			return play
 		proven = true
@@ -566,24 +662,39 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null) -> P
 	# The ability itself may send the card away (Sold Out...).
 	var copies := actor.cards.count(ability.character_id)
 
-	if not over and actor.alive:
-		if not await pay(actor, play.cost):
-			play.failed = true
+	if not play.failed and not over and actor.alive:
+		var resolving := await fire(&"claim_resolving", {"play": play})
+		if resolving.cancelled:
+			play.cancelled = true
+			await fire(&"claim_cancelled", {"play": play})
 		else:
-			var resolving := await fire(&"claim_resolving", {"play": play})
-			if resolving.cancelled:
-				play.cancelled = true
-				await fire(&"claim_cancelled", {"play": play})
-			else:
-				await _resolve(play)
-				if trigger == null and ability.on_turn and ability.repeatable:
-					last_action = ability
-	if proven and not play.stand_in and actor.cards.count(ability.character_id) >= copies:
+			await _resolve(play)
+			if trigger == null and ability.on_turn and ability.repeatable:
+				last_action = ability
+	# A proven card is traded so that nobody keeps knowing it. One the ability
+	# itself already traded is known to nobody: it is not traded twice (not
+	# even when what was drawn in its place is the same character again).
+	if proven and not play.stand_in and not play.shed and actor.cards.count(ability.character_id) >= copies:
 		await renew_proven_card(actor, ability.character_id)
 	await fire(&"claim_resolved", {"play": play})
 	if not play.truthful and doubter == null and not play.failed and not over and actor.alive:
 		await fire(&"lie_succeeded", {"play": play, "player": actor})
 	return play
+
+
+## A claim made in answer to `event` outside its reaction window (a hook that
+## gathers the answers its own way: gambler.gd). It is one more level of
+## reactions, like any other.
+func claim_reaction(player: PlayerState, ability: Ability, event: GameEvent, params: Dictionary = {}) -> Play:
+	_reaction_depth += 1
+	var play := await claim(player, ability, event, params)
+	_reaction_depth -= 1
+	return play
+
+
+## False once reactions are nested as deep as they go.
+func can_react() -> bool:
+	return not over and _reaction_depth < MAX_REACTION_DEPTH
 
 
 ## The coins `player` would forfeit, on top of the Morale, if caught lying
@@ -610,12 +721,19 @@ func challenge(doubter: PlayerState, play: Play, stake: StringName = STAKE_COINS
 		await fire(&"doubt_failed", {"play": play, "doubter": doubter, "defender": actor})
 		return false
 	play.failed = true
+	# What the claim cost was put down as it was made: a lie costs Morale instead.
+	if play.paid > 0:
+		var back := play.paid
+		play.paid = 0
+		await change_coins(actor, back, &"refund", null, play)
 	# Sworn when the lie was told, whatever becomes of the oath meanwhile.
 	var sworn := actor.has_status(&"truth_bound")
 	await lose_morale(actor, 1, doubter, &"lie", play)
 	# Perjury: the purse goes to the bank, whether or not the Morale was saved.
 	if sworn and actor.alive and not over and actor.coins > 0:
 		await change_coins(actor, -actor.coins, &"oath")
+	if not over and doubter.alive:
+		await gain_coins(doubter, config.doubt_reward, &"doubt_reward")
 	if not over and doubter.alive:
 		await fire(&"doubt_succeeded", {"play": play, "doubter": doubter, "liar": actor})
 	return true
@@ -630,9 +748,7 @@ func use_item(player: PlayerState, instance: ItemInstance, trigger: GameEvent = 
 	play.source = instance.def
 	play.item = instance
 	play.event = trigger
-	if not await _choose_target(play):
-		return null
-	if not await instance.def.prepare(play):
+	if not await _make_ready(play):
 		return null
 	player.items.erase(instance)
 	player.turn["busy"] = true
@@ -640,6 +756,18 @@ func use_item(player: PlayerState, instance: ItemInstance, trigger: GameEvent = 
 	await fire(&"item_used", {"player": player, "item": instance, "play": play})
 	await _resolve(play)
 	return play
+
+
+## Everything `play` needs settled before it is announced: who it is aimed
+## at and whatever its source asks (prepare). False if the actor backed out.
+## What is asked meanwhile is marked private (see ask).
+func _make_ready(play: Play) -> bool:
+	_unannounced += 1
+	var ready := await _choose_target(play)
+	if ready:
+		ready = await play.source.prepare(play)
+	_unannounced -= 1
+	return ready
 
 
 ## Carries out a play that was never announced as a claim or an item use (a
@@ -680,7 +808,11 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
 
 ## Pays to replace everything in the slots. Items always on sale stay.
 func reroll_shop(player: PlayerState) -> void:
-	if item_pool.is_empty() or not await pay(player, price(player, config.reroll_cost), &"shop"):
+	if item_pool.is_empty():
+		return
+	if free_rerolls(player) > 0:
+		player.turn["free_rerolls"] = free_rerolls(player) - 1
+	elif not await pay(player, price(player, config.reroll_cost), &"shop"):
 		return
 	player.turn["busy"] = true
 	for slot in shop.size():
@@ -808,12 +940,15 @@ func _doubt_window(play: Play) -> Dictionary:
 		var poll := DoubtPoll.new()
 		poll.open = asked.size()
 		for d: Decision in asked:
+			polled.emit(d.player, &"asked")
+		for d: Decision in asked:
 			_poll_doubt(d, poll)
 		if not poll.done:
 			await poll.settled
 		for d: Decision in asked:
 			if not d.context.get("answered", false):
 				controllers[d.player.id].withdraw(d)
+		polled.emit(null, &"closed")
 		if over or not poll.result.is_empty():
 			return {} if over else poll.result
 	var willing := []
@@ -845,6 +980,8 @@ func _poll_doubt(d: Decision, poll: DoubtPoll) -> void:
 	poll.open -= 1
 	if answer is StringName and d.options.has(answer):
 		poll.result = {"player": d.player, "stake": answer}
+	else:
+		polled.emit(d.player, &"passed")
 	if poll.open <= 0 or not poll.result.is_empty():
 		poll.done = true
 		poll.settled.emit()
@@ -929,7 +1066,8 @@ func can_pay(player: PlayerState, amount: int) -> bool:
 	return not reaction_options(player, probe).is_empty()
 
 
-func pay(player: PlayerState, amount: int, reason: StringName = &"cost") -> bool:
+## `play`: the claim the coins are the price of, for the `coins` event.
+func pay(player: PlayerState, amount: int, reason: StringName = &"cost", play: Play = null) -> bool:
 	if amount <= 0:
 		return true
 	if player.coins < amount:
@@ -942,15 +1080,15 @@ func pay(player: PlayerState, amount: int, reason: StringName = &"cost") -> bool
 		# was being argued over (a reaction with a price) may have used it up.
 		if not can_pay(player, amount):
 			return false
-	await change_coins(player, -amount, reason)
+	await change_coins(player, -amount, reason, null, play)
 	return true
 
 
-func change_coins(player: PlayerState, delta: int, reason: StringName, other: PlayerState = null) -> void:
+func change_coins(player: PlayerState, delta: int, reason: StringName, other: PlayerState = null, play: Play = null) -> void:
 	if delta == 0:
 		return
 	player.coins += delta
-	await fire(&"coins", {"player": player, "delta": delta, "reason": reason, "other": other})
+	await fire(&"coins", {"player": player, "delta": delta, "reason": reason, "other": other, "play": play})
 
 
 func gain_coins(player: PlayerState, amount: int, reason: StringName, other: PlayerState = null) -> void:
@@ -1147,18 +1285,15 @@ func renew_proven_card(player: PlayerState, character_id: StringName) -> void:
 	await replace_card(player, player.cards.find(character_id), &"proven")
 
 
-## Every copy of the card at `index` of the hand of `by`, in whatever hand it
-## is, goes back to the deck, and each of those places gets a new card.
-func recall_cards(by: PlayerState, index: int) -> void:
-	if index < 0 or index >= by.cards.size():
-		return
-	var card: StringName = by.cards[index]
+## `by` calls `card` in: every copy of it, in whatever hand it is (their own
+## too), goes back to the deck, and each of those places gets a new card.
+func recall_cards(by: PlayerState, card: StringName) -> void:
 	# Somebody else's hand: they may keep it out of this (see reach_hand).
 	var kept: Array = []
 	for p: PlayerState in seat_order(by):
 		if p != by and p.cards.has(card) and not await reach_hand(by, p, &"recall"):
 			kept.append(p)
-	if over or index >= by.cards.size() or by.cards[index] != card:
+	if over:
 		return
 	var hands: Array = []
 	for p: PlayerState in seat_order(by):
@@ -1179,7 +1314,7 @@ func recall_cards(by: PlayerState, index: int) -> void:
 		drawn.append(deck.pop_back())
 	for i: int in hands.size():
 		hands[i].player.cards[hands[i].index] = drawn[i]
-	await fire(&"cards_recalled", {"player": by, "index": index, "card": card, "hands": hands})
+	await fire(&"cards_recalled", {"player": by, "card": card, "hands": hands})
 
 
 ## Before `by` sees, takes or replaces cards in the hand of `owner` (`how`:
@@ -1197,13 +1332,29 @@ func reach_hand(by: PlayerState, owner: PlayerState, how: StringName) -> bool:
 	return false
 
 
-## `a` is who trades: `b` may keep their hand out of it (see reach_hand).
-func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int) -> void:
+## Before `by` takes or destroys an item `owner` holds (`how`: &"steal",
+## &"break"): false when the items were kept out of reach (before_item_reach
+## cancelled, see spy.gd), and then items_missed says so.
+func reach_items(by: PlayerState, owner: PlayerState, how: StringName) -> bool:
+	if by == owner or not owner.alive:
+		return true
+	var data := {"owner": owner, "by": by, "how": how}
+	var reach := await fire(&"before_item_reach", data)
+	if not reach.cancelled:
+		return true
+	if not over:
+		await fire(&"items_missed", data.duplicate())
+	return false
+
+
+## `a` is who trades: `b` may keep their hand out of it (see reach_hand),
+## unless the caller has been through that already (`reached`).
+func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int, reached := false) -> void:
 	if a_index < 0 or a_index >= a.cards.size() or b_index < 0 or b_index >= b.cards.size():
 		return
-	if not await reach_hand(a, b, &"swap") or over:
+	if not reached and not await reach_hand(a, b, &"swap"):
 		return
-	if a_index >= a.cards.size() or b_index >= b.cards.size():
+	if over or a_index >= a.cards.size() or b_index >= b.cards.size():
 		return
 	var card: StringName = a.cards[a_index]
 	a.cards[a_index] = b.cards[b_index]
@@ -1211,15 +1362,74 @@ func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int) -> v
 	await fire(&"cards_swapped", {"a": a, "a_index": a_index, "b": b, "b_index": b_index})
 
 
+## `viewer` looks at one card of `owner`, of their choosing: the cards are
+## face down to them, so what they choose is a place in the hand.
 func peek_card(viewer: PlayerState, owner: PlayerState) -> void:
 	if owner.cards.is_empty():
 		return
 	if not await reach_hand(viewer, owner, &"peek") or over or owner.cards.is_empty():
 		return
-	var index := rng.randi_range(0, owner.cards.size() - 1)
+	var index := await pick_hidden_card(viewer, owner, Loc.t("Which of %s's cards do you look at?") % owner.name)
+	if over or index < 0 or index >= owner.cards.size():
+		return
 	await fire(&"card_peeked", {
 		"viewer": viewer, "owner": owner, "index": index, "card": owner.cards[index],
 	})
+
+
+## Lets `player` choose one of the cards `owner` holds without seeing them,
+## by where it lies in the hand: its index, a random one if they don't
+## answer, -1 with an empty hand.
+func pick_hidden_card(player: PlayerState, owner: PlayerState, prompt: String) -> int:
+	if owner.cards.size() <= 1:
+		return owner.cards.size() - 1
+	var d := Decision.new(Decision.Kind.PICK, player)
+	d.prompt = prompt
+	d.options = []
+	for i: int in owner.cards.size():
+		d.options.append({"label": Loc.t("Card %d") % (i + 1), "description": ""})
+	# Picked where they lie, in the hand of whoever holds them (see table._open_pick).
+	d.context = {"hand_of": owner}
+	var index: int = await ask(d)
+	if index < 0 or index >= owner.cards.size():
+		index = random_card_index(owner)
+	return index
+
+
+## For an ability that sends "this card" away (heir.gd, bard.gd): whoever
+## claims it without holding the card says, before the claim is announced,
+## which one goes in its place. Asked only then, the table can't tell a bluff
+## from the truth by a choice made afterwards. False if they backed out.
+func choose_card_to_shed(play: Play) -> bool:
+	var actor := play.actor
+	var character_id := play.ability().character_id
+	if actor.has_character(character_id) or actor.cards.size() <= 1:
+		return true
+	var d := Decision.new(Decision.Kind.PICK, actor)
+	d.prompt = Loc.t("Choose the card to swap")
+	d.cancellable = true
+	d.context = {"play": play, "quiet": true}
+	d.options = actor.cards.map(func(card): return {
+		"label": Content.character(card).display_name, "card": card,
+	})
+	var index: int = await ask(d)
+	if index < 0 or index >= actor.cards.size():
+		return false
+	play.params["shed"] = actor.cards[index]
+	return true
+
+
+## Sends "this card" of `play` back to the deck for a new one: the claimed
+## character if the actor holds it, otherwise what choose_card_to_shed() kept.
+func shed_card(play: Play, reason: StringName) -> void:
+	var actor := play.actor
+	var index := actor.cards.find(play.ability().character_id)
+	if index == -1:
+		index = actor.cards.find(play.params.get("shed", &""))
+	if index == -1:
+		index = random_card_index(actor)
+	play.shed = true
+	await replace_card(actor, index, reason)
 
 
 ## Lets `player` choose one of the cards in their hand: its index, a random

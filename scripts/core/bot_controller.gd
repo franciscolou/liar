@@ -81,8 +81,11 @@ func _turn(options: Dictionary) -> Dictionary:
 		if buy != null:
 			return buy
 	var reroll: Variant = options.reroll
-	if reroll != null and reroll.enabled and player.coins >= reroll.cost + 4 and dice.randf() < 0.08:
-		return reroll
+	if reroll != null and reroll.enabled:
+		# On the house (a Party): worth a look, now and then.
+		var free: bool = reroll.get("free", 0) > 0
+		if (free and dice.randf() < 0.4) or (not free and player.coins >= reroll.cost + 4 and dice.randf() < 0.08):
+			return reroll
 
 	var plays := {}
 	for option: Dictionary in options.abilities:
@@ -194,6 +197,9 @@ func _pick(d: Decision) -> int:
 	var weights := {}
 	for i: int in d.options.size():
 		weights[i] = float(hints[i]) if i < hints.size() else 1.0
+	# What choosing none of them is worth (context.pass), where that is allowed.
+	if d.cancellable and d.context.has("pass"):
+		weights[-1] = float(d.context["pass"])
 	var choice: Variant = _weighted(weights)
 	return choice if choice != null else _dice().randi_range(0, d.options.size() - 1)
 

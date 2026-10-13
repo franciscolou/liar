@@ -13,6 +13,9 @@ static var last_winner_cards: Array = []
 var seats: Array = []  # [{name: String, bot: bool}]
 var character_ids: Array = []  # empty = pick `character_count` at random
 var character_count := 5
+## With `character_ids` set: how many of them are drawn for the match, at
+## random. 0 = all of them.
+var pool_draw := 0
 var copies_per_character := 3
 var item_ids: Array = []  # empty = every registered item
 var hand_size := 2
@@ -20,6 +23,13 @@ var start_morale := 3
 var start_coins := 2
 var income := 1
 var doubt_cost := 4
+## Coins for whoever calls LIAR! on a lie.
+var doubt_reward := 3
+## Seconds a player has for their turn, 0 for as long as they like. It only
+## runs while the table is waiting for them (see table.gd).
+var turn_seconds := 0
+## The seat that plays first, -1 to draw it.
+var first_seat := -1
 var shop_slots := 3
 var reroll_cost := 2
 var inventory_limit := 3
@@ -52,6 +62,7 @@ const WIRE_FIELDS := [
 	"seats", "character_count", "copies_per_character", "hand_size", "start_morale",
 	"start_coins", "income", "doubt_cost", "shop_slots", "reroll_cost",
 	"inventory_limit", "anim_speed", "max_turns", "rng_seed", "suspect_book",
+	"pool_draw", "doubt_reward", "turn_seconds",
 ]
 
 

@@ -58,7 +58,25 @@ static func run() -> int:
 		"nobody is untraceable from themselves": _untraceable_own,
 		"an item thrown away costs nothing and takes no turn": _discard,
 		"two swindles: the human is heard before the bot": _swindle_race.bind(false),
-		"two swindles: only one of them takes the coins": _swindle_race.bind(true),	}
+		"two swindles: only one of them takes the coins": _swindle_race.bind(true),
+		"a claim is paid for as it is announced; a liar caught gets it back": _paid_up_front.bind(false),
+		"a claim paid for up front stays paid when it is true": _paid_up_front.bind(true),
+		"soul swap: the user says which card they hand over": _soul_swap.bind(false),
+		"soul swap off a mirror: the holder says which card they hand over": _soul_swap.bind(true),
+		"untraceable items can't be seized": _untraceable_items.bind(&"sheriff.confiscate"),
+		"untraceable items can't be blown up": _untraceable_items.bind(&"bomber.demolition"),
+		"side bets are placed at once and claimed after": _side_bets.bind(true),
+		"nobody bets on the doubt of a side bet": _side_bets.bind(false),
+		"a party: ten free rerolls, and the turn goes on": _party,
+		"a spy looks at the card they choose": _peek_chosen,
+		"last call for a card the caller doesn't hold": _last_call_named,
+		"a bluffed sold out names its card before the claim": _shed_named_first,
+		"a number of the hand-picked characters is drawn": _cast_drawn,
+		"a bluffed street bargain warns of the two Morale": _bargain_caution,
+		"backing out of a bluffed swindle goes back to the question": _swindle_backed_out,
+		"a proven card the ability already traded is not traded twice": _proven_shed_once,
+		"a choice made before the announcement is private, one made after is not": _private_choices,
+	}
 	var failed := 0
 	for title: String in scenes:
 		var problem: String = await scenes[title].call()
@@ -229,8 +247,9 @@ static func _entropy_wasted(call: bool) -> String:
 	if call and engine.players[1].morale != engine.config.start_morale - 1:
 		return "the liar was not caught"
 	await engine.fire(&"turn_started", {"player": p})
+	# Either way 3 coins: what a right call pays, or what the chains do.
 	var paid := "%d Morale, %d coins" % [p.morale - 2, p.coins - 20]
-	return "" if paid == ("0 Morale, 0 coins" if call else "1 Morale, 3 coins") else "paid " + paid
+	return "" if paid == ("0 Morale, 3 coins" if call else "1 Morale, 3 coins") else "paid " + paid
 
 
 ## Player 0 turns a Morale into `item`: `coins` is what that does to their
@@ -420,7 +439,12 @@ static func _groggy_pays_more() -> String:
 		return "the sober pay more too"
 	groggy.morale = 1
 	await engine.claim(groggy, patch_up)
-	return "" if groggy.coins == 20 - patch_up.cost - 2 else "a paid ability left %d coins" % groggy.coins
+	if groggy.coins != 20 - patch_up.cost - 2:
+		return "a paid ability left %d coins" % groggy.coins
+	# Paid for once, the drink is slept off: the next price is the plain one.
+	if groggy.has_status(GROGGY):
+		return "still groggy after paying"
+	return "" if engine.price(groggy, 3) == 3 else "still paying more"
 
 
 static func _disguise_repeats() -> String:
@@ -456,7 +480,7 @@ static func _last_call() -> String:
 	var seen := Witness.new()
 	engine.observers.append(seen)
 	var total := engine.deck.size()
-	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"judge")
 	await engine.claim(engine.players[0], table.ability(LAST_CALL))
 	var recalled: Array = seen.of(&"cards_recalled")
 	if recalled.size() != 1:
@@ -483,9 +507,16 @@ static func _swindle() -> String:
 	await engine.gain_coins(engine.players[1], 1, &"income")
 	if not table.asked(0, Decision.Kind.REACT).is_empty():
 		return "offered against the income of a turn"
+	var seen := Witness.new()
+	engine.observers.append(seen)
 	await engine.gain_coins(engine.players[1], 4, &"bounty")
 	if bard.coins != 24 or engine.players[1].coins != 21:
 		return "coins: %d / %d" % [bard.coins, engine.players[1].coins]
+	# The trick is good once: the card went back for another.
+	var traded: Array = seen.of(&"cards_changed")
+	if traded.size() != 1 or traded[0].data.old != &"bard" or bard.cards[1] != &"judge":
+		return "the Bard was not traded away"
+	bard.cards = [&"bard", &"judge"]
 	for d: Decision in table.asked(1, Decision.Kind.REACT) + table.asked(2, Decision.Kind.REACT):
 		if d.context.event.data.get("reason") == &"swindle":
 			return "the haul was offered to %s" % d.player.name
@@ -508,24 +539,32 @@ static func _swindle_talked_down() -> String:
 			if option.kind == &"ability" and option.ability.id == &"bard.silver_tongue":
 				return option
 		return null
+	var seen := Witness.new()
+	engine.observers.append(seen)
 	await engine.gain_coins(target, 4, &"bounty")
 	if bard.coins != 20 or target.coins != 24:
 		return "coins: %d / %d" % [bard.coins, target.coins]
-	return ""
+	# It came to nothing: the Bard stays in the hand.
+	return "" if seen.of(&"cards_changed").is_empty() and bard.cards == [&"bard", &"judge"] else "the Bard was traded away"
 
 
 static func _swindle_caught() -> String:
 	var table := Table.new(true, [&"bard"])
 	var engine := table.engine
-	table.puppets[2].answers[Decision.Kind.REACT] = _swindles
+	# Once: not again for the coins the right call pays.
+	table.puppets[2].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		return _swindles(d) if d.context.event.data.get("reason") == &"bounty" else null
+	# A bluffer names the card that would go before announcing anything.
+	table.puppets[2].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0
 	table.puppets[1].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
 		return d.options[0] if not d.options.is_empty() else false
 	await engine.gain_coins(engine.players[1], 4, &"bounty")
 	if engine.players[2].morale != engine.config.start_morale - 1:
 		return "the liar kept their Morale"
-	if engine.players[1].coins != 24 or engine.players[2].coins != 20:
+	# The bounty, and the 3 coins of the right call.
+	if engine.players[1].coins != 27 or engine.players[2].coins != 20:
 		return "coins: %d / %d" % [engine.players[1].coins, engine.players[2].coins]
-	return ""
+	return "" if engine.players[2].cards == [&"judge", &"judge"] else "the liar's hand changed"
 
 
 ## Two left, 1 Morale each. One is hit and bargains it away; the attacker
@@ -584,7 +623,7 @@ static func _untraceable(how: StringName) -> String:
 			if not seen.of(&"cards_swapped").is_empty() or engine.players[0].cards[0] != &"bartender":
 				return "the cards changed hands"
 		&"recall":
-			table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+			table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"judge")
 			await engine.claim(engine.players[0], table.ability(LAST_CALL))
 			var recalled: Array = seen.of(&"cards_recalled")
 			if recalled.size() != 1 or recalled[0].data.hands.size() != 3:
@@ -648,6 +687,294 @@ static func _swindle_race(bots: bool) -> String:
 	if bots:
 		return "" if hauls == [4, 0] or hauls == [0, 4] else "hauls: %s" % [hauls]
 	return "" if hauls == [0, 4] else "hauls: %s" % [hauls]
+
+
+## The option of a card pick that shows `card`, -1 if there is none.
+static func _names(d: Decision, card: StringName) -> int:
+	for i: int in d.options.size():
+		if d.options[i].get("card") == card:
+			return i
+	return -1
+
+
+## Player 1 claims a Time Bomb on player 0, holding the Bomber or not, and
+## player 2 calls LIAR!. The 3 coins are gone by the time anyone is asked;
+## a liar gets them back with the Morale they lose, and the right call pays.
+static func _paid_up_front(truthful: bool) -> String:
+	var table := Table.new(true, [&"bomber"])
+	var engine := table.engine
+	var actor: PlayerState = engine.players[1]
+	if truthful:
+		actor.cards = [&"bomber", &"judge"]
+	var purse := [-1]
+	table.puppets[1].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[0]
+	table.puppets[2].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		purse[0] = actor.coins
+		return d.options[0] if not d.options.is_empty() else false
+	await engine.claim(actor, table.ability(&"bomber.time_bomb"))
+	if purse[0] != 17:
+		return "%d coins while the claim was open" % purse[0]
+	var doubter: PlayerState = engine.players[2]
+	if truthful:
+		if actor.coins != 17 or doubter.coins != 20 - engine.config.doubt_cost:
+			return "coins: %d / %d" % [actor.coins, doubter.coins]
+		return "" if engine.players[0].has_status(&"ticking") else "no bomb planted"
+	if actor.coins != 20 or actor.morale != engine.config.start_morale - 1:
+		return "the liar has %d coins and %d Morale" % [actor.coins, actor.morale]
+	return "" if doubter.coins == 20 + engine.config.doubt_reward else "the right call paid %d" % (doubter.coins - 20)
+
+
+## Player 0 uses a Soul Swap on player 1. Whoever ends up trading (player 1,
+## off a `mirror`) hands over the second card of their hand, by choice.
+static func _soul_swap(mirror: bool) -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var user: PlayerState = engine.players[0]
+	var target: PlayerState = engine.players[1]
+	user.cards = [&"bartender", &"impostor"]
+	target.cards = [&"doctor", &"voodooist"]
+	table.give(0, [&"soul_swap"])
+	if mirror:
+		table.give(1, [&"mirror"])
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return target
+	for i: int in 2:
+		table.puppets[i].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	await engine.use_item(user, user.items[0])
+	var chooser := 1 if mirror else 0
+	if table.asked(chooser, Decision.Kind.PICK).size() != 1 or not table.asked(1 - chooser, Decision.Kind.PICK).is_empty():
+		return "the wrong player chose"
+	var given: StringName = &"voodooist" if mirror else &"impostor"
+	var taker: PlayerState = user if mirror else target
+	if not taker.cards.has(given):
+		return "%s did not change hands: %s / %s" % [given, user.cards, target.cards]
+	return "" if user.cards.size() == 2 and target.cards.size() == 2 else "a hand lost a card"
+
+
+## Player 0 comes for the one item of player 1, who answers with an
+## Untraceable: it stays where it is.
+static func _untraceable_items(with: StringName) -> String:
+	var table := Table.new(true, [&"spy", &"sheriff", &"bomber"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var spy: PlayerState = engine.players[1]
+	spy.cards = [&"spy", &"judge"]
+	table.give(1, [&"potion"])
+	engine.players[0].cards = [&"sheriff", &"bomber"]
+	table.puppets[1].answers[Decision.Kind.REACT] = _vanishes
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return spy
+	await engine.claim(engine.players[0], table.ability(with))
+	if table.held(1) != [&"potion"] or table.held(0) != []:
+		return "items: %s / %s" % [table.held(0), table.held(1)]
+	var missed: Array = seen.of(&"items_missed")
+	return "" if missed.size() == 1 and missed[0].data.owner == spy else "missed %d times" % missed.size()
+
+
+## Player 0 spikes player 1, who calls LIAR! and is wrong. Player 2 is asked
+## for a side bet in the round of bets, with the side already in the answer.
+## `honest`: they hold the Gambler and collect. Otherwise player 0 calls
+## LIAR! on the bet itself, and nobody is asked to bet on that.
+static func _side_bets(honest: bool) -> String:
+	var table := Table.new(true, [&"gambler"])
+	var engine := table.engine
+	var bettor: PlayerState = engine.players[2]
+	if honest:
+		bettor.cards = [&"gambler", &"judge"]
+	var spiked := table.ability(MICKEY_FINN)
+	table.puppets[1].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if d.context.play.source == spiked and not d.options.is_empty() else false
+	if not honest:
+		table.puppets[0].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+			return d.options[0] if not d.options.is_empty() else false
+	# The truth: the second of the two sides.
+	table.puppets[2].answers[Decision.Kind.PICK] = func(d: Decision) -> int:
+		return 1 if d.context.get("look") == &"side_bet" else -1
+	await table.spike(0, 1)
+	var rounds := 0
+	for i: int in 3:
+		for d: Decision in table.asked(i, Decision.Kind.PICK):
+			if d.context.get("look") == &"side_bet":
+				rounds += 1
+				if i != 2 or not d.context.has("seconds"):
+					return "player %d was asked to bet" % i
+	if rounds != 1:
+		return "%d rounds of bets" % rounds
+	if honest:
+		return "" if bettor.coins == 20 - 2 + 6 else "the bet left %d coins" % bettor.coins
+	# Caught: the stake comes back, the Morale goes, and there was no bet.
+	if bettor.coins != 20 or bettor.morale != engine.config.start_morale - 1:
+		return "the liar has %d coins and %d Morale" % [bettor.coins, bettor.morale]
+	return table.expect_groggy(1, 0)
+
+
+static func _party() -> String:
+	var table := Table.new(true, [&"heir"])
+	var engine := table.engine
+	var heir: PlayerState = engine.players[0]
+	heir.cards = [&"heir", &"judge"]
+	var party := table.ability(&"heir.party")
+	if party.ends_turn:
+		return "it ends the turn"
+	if engine.turn_options(heir).reroll.cost != engine.config.reroll_cost:
+		return "the reroll was free before the party"
+	await engine.claim(heir, party)
+	var reroll: Dictionary = engine.turn_options(heir).reroll
+	if reroll.cost != 0 or reroll.free != 10:
+		return "reroll for %d, %d free" % [reroll.cost, reroll.free]
+	await engine.reroll_shop(heir)
+	if heir.coins != 20 or engine.free_rerolls(heir) != 9:
+		return "%d coins, %d rerolls left" % [heir.coins, engine.free_rerolls(heir)]
+	return "" if engine.claim_block_reason(heir, party) != "" else "offered twice in a turn"
+
+
+static func _peek_chosen() -> String:
+	var table := Table.new(true, [&"spy"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	engine.players[0].cards = [&"spy", &"judge"]
+	engine.players[1].cards = [&"doctor", &"voodooist"]
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[1]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	await engine.claim(engine.players[0], table.ability(&"spy.sneak_peek"))
+	var picks: Array = table.asked(0, Decision.Kind.PICK)
+	if picks.size() != 1 or picks[0].context.get("hand_of") != engine.players[1] or picks[0].options.size() != 2:
+		return "asked %d times" % picks.size()
+	var peeked: Array = seen.of(&"card_peeked")
+	return "" if peeked.size() == 1 and peeked[0].data.card == &"voodooist" else "the wrong card was seen"
+
+
+static func _last_call_named() -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	engine.players[1].cards = [&"doctor", &"judge"]
+	table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"doctor")
+	await engine.claim(engine.players[0], table.ability(LAST_CALL))
+	var recalled: Array = seen.of(&"cards_recalled")
+	if recalled.size() != 1 or recalled[0].data.card != &"doctor" or recalled[0].data.hands.size() != 1:
+		return "the wrong cards were recalled"
+	if engine.players[0].cards != [&"bartender", &"judge"]:
+		return "the caller's hand became %s" % [engine.players[0].cards]
+	return "" if engine.players[1].cards[1] == &"judge" and engine.players[1].cards.size() == 2 else "the wrong card went"
+
+
+## Player 1 bluffs a Sold Out: the card that goes is asked for before the
+## table hears of the claim, and it is the one that goes.
+static func _shed_named_first() -> String:
+	var table := Table.new(true, [&"heir"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var liar: PlayerState = engine.players[1]
+	liar.cards = [&"judge", &"voodooist"]
+	var early := [false]
+	table.puppets[1].answers[Decision.Kind.PICK] = func(_d: Decision) -> int:
+		early[0] = seen.of(&"claim_declared").is_empty()
+		return 1
+	await engine.claim(liar, table.ability(&"heir.sold_out"))
+	if not early[0] or table.asked(1, Decision.Kind.PICK).size() != 1:
+		return "the card was asked for after the claim"
+	var traded: Array = seen.of(&"cards_changed")
+	if traded.size() != 1 or traded[0].data.old != &"voodooist" or liar.cards[0] != &"judge":
+		return "the wrong card went"
+	return "" if liar.coins == 24 else "%d coins" % liar.coins
+
+
+static func _cast_drawn() -> String:
+	var config := GameConfig.new()
+	for i in 3:
+		config.seats.append({"name": "P%d" % i, "bot": true})
+	var pool: Array = [&"bartender", &"doctor", &"voodooist", &"judge", &"impostor", &"spy"]
+	config.character_ids = pool.duplicate()
+	config.pool_draw = 3
+	config.rng_seed = 11
+	var engine := GameEngine.new()
+	engine.setup(config)
+	if engine.characters.size() != 3:
+		return "%d characters in the match" % engine.characters.size()
+	for def: CharacterDef in engine.characters:
+		if not pool.has(def.id):
+			return "%s was not among the chosen" % def.id
+	config.pool_draw = 0
+	engine = GameEngine.new()
+	engine.setup(config)
+	return "" if engine.characters.size() == pool.size() else "not all of the chosen are in"
+
+
+## Player 1, a human, bluffs a Swindle and then cancels the choice of the
+## card that would go: nothing is announced and they are asked again, where
+## they may still swindle (or pass).
+static func _swindle_backed_out() -> String:
+	var table := Table.new(false, [&"bard"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var picks := [0]
+	table.puppets[1].answers[Decision.Kind.REACT] = _swindles
+	table.puppets[1].answers[Decision.Kind.PICK] = func(_d: Decision) -> int:
+		picks[0] += 1
+		return -1 if picks[0] == 1 else 0
+	await engine.gain_coins(engine.players[2], 4, &"bounty")
+	if table.asked(1, Decision.Kind.REACT).size() != 2:
+		return "asked to react %d times" % table.asked(1, Decision.Kind.REACT).size()
+	if seen.of(&"claim_declared").size() != 1:
+		return "%d claims announced" % seen.of(&"claim_declared").size()
+	return "" if engine.players[1].coins == 24 and engine.players[2].coins == 20 else "coins: %d / %d" % [engine.players[1].coins, engine.players[2].coins]
+
+
+## Player 0 really holds the Heir, sells it out and is called a liar. The
+## card drawn in its place is another Heir: it stays, nobody saw it.
+static func _proven_shed_once() -> String:
+	var table := Table.new(true, [&"heir"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var heir: PlayerState = engine.players[0]
+	heir.cards = [&"heir", &"judge"]
+	engine.deck.append(&"heir")
+	table.puppets[1].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if not d.options.is_empty() else false
+	await engine.claim(heir, table.ability(&"heir.sold_out"))
+	var traded: Array = seen.of(&"cards_changed")
+	if traded.size() != 1 or traded[0].data.reason != &"sold_out":
+		return "traded %d times" % traded.size()
+	return "" if heir.cards == [&"heir", &"judge"] and heir.coins == 24 else "hand %s, %d coins" % [heir.cards, heir.coins]
+
+
+## Player 1 bluffs a Sold Out (the card to give up is chosen before anyone
+## hears of it) and player 0 seizes one of two items (chosen once the claim
+## has gone through): only the first is marked private.
+static func _private_choices() -> String:
+	var table := Table.new(true, [&"heir", &"sheriff"])
+	var engine := table.engine
+	engine.players[1].cards = [&"judge", &"voodooist"]
+	table.puppets[1].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0
+	await engine.claim(engine.players[1], table.ability(&"heir.sold_out"))
+	var secret: Array = table.asked(1, Decision.Kind.PICK)
+	if secret.size() != 1 or not secret[0].context.get("private", false):
+		return "the card to give up was chosen in the open"
+	engine.players[0].cards = [&"sheriff", &"judge"]
+	table.give(1, [&"potion", &"soul_swap"])
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[1]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0
+	await engine.claim(engine.players[0], table.ability(&"sheriff.confiscate"))
+	var aimed: Array = table.asked(0, Decision.Kind.TARGET)
+	var seized: Array = table.asked(0, Decision.Kind.PICK)
+	if aimed.size() != 1 or not aimed[0].context.get("private", false):
+		return "the target was chosen in the open"
+	return "" if seized.size() == 1 and not seized[0].context.get("private", false) else "the item to seize was chosen in private"
+
+
+static func _bargain_caution() -> String:
+	var table := Table.new(true, [&"vagabond"])
+	var engine := table.engine
+	var bargain := table.ability(&"vagabond.street_bargain")
+	if engine.ability_option(engine.players[1], bargain).caution == "":
+		return "no warning for a bluff"
+	engine.players[1].cards = [&"vagabond", &"judge"]
+	return "" if engine.ability_option(engine.players[1], bargain).caution == "" else "a warning for the truth"
 
 
 static func _vanishes(d: Decision) -> Variant:

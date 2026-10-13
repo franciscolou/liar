@@ -9,7 +9,7 @@ func _init() -> void:
 	texture_path = "res://assets/cards/Heir.png"
 	order = 40
 	_add(SoldOut.new())
-	_add(PassiveIncome.new())
+	_add(Party.new())
 
 
 class SoldOut extends Ability:
@@ -21,31 +21,45 @@ class SoldOut extends Ability:
 		describe("Swap this card for a random one and gain %d coins.", [PAY])
 		on_turn = true
 
+	# Bluffed, there is no "this card": the liar says which one goes, and says
+	# it now, since asked later it would give them away.
+	func prepare(play: Play) -> bool:
+		return await play.engine.choose_card_to_shed(play)
+
 	func resolve(play: Play) -> void:
 		var engine := play.engine
-		var index := play.actor.cards.find(character_id)
-		if index == -1:
-			# Bluffed: there is no "this card", so the liar says which one goes.
-			index = await engine.pick_own_card(play.actor, Loc.t("%s, you don't hold the %s: choose the card to swap") % [play.actor.name, Content.character(character_id).display_name])
-		await engine.replace_card(play.actor, index, &"sold_out")
+		await engine.shed_card(play, &"sold_out")
 		await engine.gain_coins(play.actor, PAY, &"sold_out")
 
 	func ai_weight(player: PlayerState, _engine: GameEngine) -> float:
 		return 0.5 if player.has_character(character_id) else 1.0
 
 
-class PassiveIncome extends Ability:
-	const INCOME := 3
+## The shop is on the house for the rest of the turn (GameEngine.free_rerolls).
+## It is claimed once a turn and is no action of it: the turn goes on.
+class Party extends Ability:
+	const REROLLS := 10
 
 	func _init() -> void:
-		id = &"heir.passive_income"
-		display_name = "Passive Income"
-		describe("Spend your whole turn to gain %d coins.", [INCOME])
+		id = &"heir.party"
+		display_name = "Party"
+		describe("Reroll the shop for free up to %d times this turn. Does not consume the turn.", [REROLLS])
 		on_turn = true
-		fresh_turn = true
+		ends_turn = false
+		# Not the action of a turn: there is nothing in it for a disguise.
+		repeatable = false
+
+	func can_use(player: PlayerState, engine: GameEngine) -> String:
+		if player.turn.get("party", false):
+			return Loc.t("Once per turn")
+		return "" if not engine.item_pool.is_empty() else Loc.t("No items in this match")
+
+	func prepare(play: Play) -> bool:
+		play.actor.turn["party"] = true
+		return true
 
 	func resolve(play: Play) -> void:
-		await play.engine.gain_coins(play.actor, INCOME, &"passive_income")
+		play.actor.turn["free_rerolls"] = REROLLS
 
-	func ai_weight(_player: PlayerState, _engine: GameEngine) -> float:
-		return 1.4
+	func ai_weight(player: PlayerState, _engine: GameEngine) -> float:
+		return 0.5 if player.coins >= 4 else 0.15

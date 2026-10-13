@@ -18,7 +18,16 @@ extends RefCounted
 ##             context.foreign: the cards offered are not from the player's hand;
 ##             context.look: &"cosmos" hangs item options in the dark instead of
 ##             in a window, each with `coins` going round it: what picking it
-##             gives the purse, or takes from it)
+##             gives the purse, or takes from it;
+##             context.hand_of: the options are the cards that player holds, face
+##             down, picked where they lie; context.seconds: how long the player
+##             has, after which the screen answers -1 for them; context.pass: how
+##             much a bot likes choosing none, when it may; context.quiet: the
+##             card chosen is not shown being taken, it is only a choice so far)
+##
+## The engine sets context.private on whatever is asked before a play is
+## announced (its target, what prepare() asks): the other players are not to
+## be shown that the choice is being made.
 
 enum Kind { TURN, TARGET, DOUBT, REACT, PICK }
 

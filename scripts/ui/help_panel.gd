@@ -51,7 +51,7 @@ const LESSONS := [
 	{
 		"tab": "LIAR!",
 		"title": "Call the bluff",
-		"text": "When someone claims an ability, anyone else may call [color=#c8402f]LIAR![/color] Only the first call counts.\n\n[color=#c8402f]•[/color] [b]If it is a lie:[/b] the liar loses 1 Morale and the ability fails.\n[color=#78a846]•[/color] [b]If it is the truth:[/b] you pay a fine in coins, the ability goes through and the proven card is traded for a new one.\n\nNo coins for the fine? You put 1 Morale on the line instead.",
+		"text": "When someone claims an ability, anyone else may call [color=#c8402f]LIAR![/color] Only the first call counts.\n\n[color=#c8402f]•[/color] [b]If it is a lie:[/b] the liar loses 1 Morale, the ability fails and you collect a reward in coins.\n[color=#78a846]•[/color] [b]If it is the truth:[/b] you pay a fine in coins, the ability goes through and the proven card is traded for a new one.\n\nNo coins for the fine? You put 1 Morale on the line instead.",
 		"task": "Call LIAR! on one of the claims.",
 		"build": &"_lesson_liar",
 	},

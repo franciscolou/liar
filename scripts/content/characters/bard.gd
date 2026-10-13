@@ -19,7 +19,7 @@ class Swindle extends Ability:
 	func _init() -> void:
 		id = &"bard.swindle"
 		display_name = "Swindle"
-		description = "Those coins go to you instead."
+		description = "Those coins go to you instead, and you swap this card for a random one."
 		trigger_text = "When another player is about to gain coins, other than the income of their turn"
 		tags = [&"steal"]
 		contested = true
@@ -34,21 +34,30 @@ class Swindle extends Ability:
 		if play.event == null:
 			return false
 		play.mark = play.event.data.player
-		return true
+		# A bluffer says now which card will go: asked later, it would give them away.
+		return await play.engine.choose_card_to_shed(play)
 
 	func resolve(play: Play) -> void:
+		# The trick is only good once: the card goes back for another. Not if
+		# it came to nothing (coins talked out of it): then the Bard stays.
+		if await _divert(play) and not play.engine.over and play.actor.alive:
+			await play.engine.shed_card(play, HAUL)
+
+	## True if the coins changed course.
+	func _divert(play: Play) -> bool:
 		var gain := play.event
 		var amount: int = gain.data.amount
 		if amount <= 0:
-			return
+			return false
 		# Taking them on the way is stealing them: a Silver Tongue keeps them.
 		var steal := await play.engine.fire(&"before_steal", {
 			"thief": play.actor, "victim": gain.data.player, "amount": amount, "play": play,
 		})
 		if steal.cancelled or play.engine.over:
-			return
+			return false
 		gain.data.amount = 0
 		await play.engine.gain_coins(play.actor, amount, HAUL, gain.data.player)
+		return true
 
 	func ai_react_weight(event: GameEvent, _player: PlayerState, _engine: GameEngine) -> float:
 		return clampf((event.data.amount - 1) / 5.0, 0.0, 0.9)

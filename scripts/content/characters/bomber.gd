@@ -7,7 +7,7 @@ extends CharacterDef
 ## as a play of its own (GameEngine.carry_out).
 
 const TICKING := &"ticking"
-const DEFUSE_COST := 4
+const DEFUSE_COST := 3
 
 var _blast: Blast
 
@@ -135,6 +135,9 @@ class Demolition extends Ability:
 		var engine := play.engine
 		var target := play.target
 		if target.items.is_empty():
+			return
+		# They may keep what they hold out of reach (see GameEngine.reach_items).
+		if not await engine.reach_items(play.actor, target, &"break") or engine.over or target.items.is_empty():
 			return
 		var index := 0
 		if target.items.size() > 1:

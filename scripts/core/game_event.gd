@@ -13,7 +13,10 @@ extends RefCounted
 ##   income {player, amount}                    mutable amount
 ##   before_gain {player, amount, reason}       mutable amount (0: the coins
 ##     went somewhere else, see bard.gd)
-##   coins {player, delta, reason, other}       other = counterpart player or null (bank)
+##   coins {player, delta, reason, other, play} other = counterpart player or null (bank)
+##     (reason &"cost": the price of a claim, put down as it is announced;
+##     &"refund": that price back to a liar who was caught; both carry the
+##     claim in `play`. &"doubt_reward": the coins for calling LIAR! on a lie)
 ##   payment_short {player, amount, allowed}    set allowed to let the player go into debt
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
 ##     for coins still on their way to the victim: see bard.gd)
@@ -44,14 +47,16 @@ extends RefCounted
 ##   cards_changed {player, index, reason, old} / cards_swapped {a, a_index, b, b_index}
 ##     (old: the card that left, known to the table only when reason is
 ##     &"proven": it survived a doubt and was traded for a new one)
-##   cards_recalled {player, index, card, hands}  every copy of `card` went back to
-##     the deck for a new one, starting with the one `player` showed (at `index`
-##     of their hand); hands: [{player, index}], public
+##   cards_recalled {player, card, hands}       `player` named `card` and every copy
+##     of it went back to the deck for a new one; hands: [{player, index}], public
 ##   card_peeked {viewer, owner, index, card}   private to the viewer
 ##   before_hand_reach {owner, by, how}         cancellable: `by` is about to see,
 ##     take or replace cards of `owner` (how: &"peek", &"swap", &"recall";
 ##     see GameEngine.reach_hand)
 ##   hand_missed {owner, by, how}               it was cancelled: the hand stays as it is
+##   before_item_reach {owner, by, how}         cancellable: `by` is about to take or
+##     destroy an item of `owner` (how: &"steal", &"break"; see GameEngine.reach_items)
+##   items_missed {owner, by, how}              it was cancelled: the items stay as they are
 ##   card_lost {player, index, card}            the hand follows Morale; public
 ##   card_drawn {player, index}
 ##   hand_redrawn {player, count}               the whole hand went back for new cards

@@ -48,7 +48,7 @@ class Confiscate extends Ability:
 		display_name = "Confiscate"
 		description = "Seize an item from a player. This skill can be blocked by Shields and Mirrors."
 		on_turn = true
-		cost = 3
+		cost = 4
 		targeting = Targeting.OPPONENT
 
 	func can_use(player: PlayerState, engine: GameEngine) -> String:
@@ -64,6 +64,9 @@ class Confiscate extends Ability:
 		if target.items.is_empty():
 			# Only a rope that came back off a mirror is thrown at empty hands.
 			await engine.fire(&"item_missed", {"thief": play.actor, "victim": target})
+			return
+		# They may keep what they hold out of reach (see GameEngine.reach_items).
+		if not await engine.reach_items(play.actor, target, &"steal") or engine.over or target.items.is_empty():
 			return
 		var index := 0
 		if target.items.size() > 1:

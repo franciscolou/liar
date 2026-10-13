@@ -14,11 +14,16 @@ var item: ItemInstance  # set when the source is an item
 var event: GameEvent  # the event this play reacts to, if any
 var params: Dictionary = {}
 var cost := 0
+## What of `cost` the actor has put down already (see GameEngine.claim).
+var paid := 0
 
 var truthful := true  # the actor really holds the claimed character
 ## A doubted claim that stood without its card being shown: there is no
 ## proven card to send back to the deck.
 var stand_in := false
+## The ability sent its own card back to the deck already (see
+## GameEngine.shed_card): proven or not, there is nothing left to renew.
+var shed := false
 var doubter: PlayerState
 var failed := false  # caught lying, or could not pay
 var cancelled := false

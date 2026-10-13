@@ -96,7 +96,7 @@ const LESSONS := [
 const PARTS := [
 	["TURN", Rect2(8, 6, 250, 34), "Shows whose turn it is.", &""],
 	["MENU", Rect2(1074, 6, 70, 34), "Pause, settings, this guide and the way out.", &""],
-	["SUSPICION BOOK", Rect2(1038, 6, 34, 34), "Your notes on who holds each card: write them yourself, or let the book keep them for you (B). Only there if the host allows it.", &"book"],
+	["SUSPICION BOOK", Rect2(1038, 6, 34, 34), "(B) Your notes on who holds each card. The notebook fills in automatically, but there is also a manual version. It only becomes active if the owner allows it before the match begins.", &"book"],
 	["OPPONENT", Rect2(98, 138, 176, 126), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["OPPONENT", Rect2(488, 19, 176, 126), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["OPPONENT", Rect2(878, 138, 176, 126), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],

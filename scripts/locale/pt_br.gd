@@ -359,7 +359,7 @@ const MESSAGES := {
 	"Point at a part of the table to learn what it is.": "Aponte para uma parte da mesa para saber o que ela é.",
 	"Shows whose turn it is.": "Informa de quem é a vez.",
 	"Pause, settings, this guide and the way out.": "Pausa, configurações, este guia e a saída.",
-	"Your notes on who holds each card: write them yourself, or let the book keep them for you (B). Only there if the host allows it.": "Suas anotações sobre quem tem cada carta: escreva você mesmo ou deixe o livro anotar por você (B). Só existe se o host permitir.",
+	"(B) Your notes on who holds each card. The notebook fills in automatically, but there is also a manual version. It only becomes active if the owner allows it before the match begins.": "(B) Suas anotações sobre quem tem cada carta. O livro é preenchido automaticamente, mas também tem uma versão manual. Só fica ativo se o dono permitir antes da partida começar.",
 	"Show the table how you feel! Click to pick a face, or press 1 to 6.": "Mostre para a mesa como você se sente! Clique para escolher um rosto ou aperte de 1 a 6.",
 	"(T) Type a line for the whole table to see.": "(T) Digite uma frase para a mesa inteira ver.",
 	"An opponent: name, Morale, coins, statuses, items and the backs of their cards.": "Um oponente: nome, Moral, moedas, status, itens e o verso das cartas dele.",

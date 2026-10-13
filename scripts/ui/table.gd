@@ -68,6 +68,10 @@ const SIGHT_ICON := "res://assets/target.png"
 const COIN_ICON := "res://assets/ui/coin.png"
 const HEART_ICON := "res://assets/ui/heart.png"
 const PICK_SCALE := 1.9
+## The button that puts a choice aside to look at the table: the top left
+## corner, across from the MENU, where no pick puts anything.
+const ASIDE_AT := Vector2(10, 8)
+const ASIDE_SIZE := Vector2(168, 30)
 ## Up to this many cards are picked from in one row; more stand in two rows,
 ## at this scale.
 const PICK_ROW := 6
@@ -194,6 +198,7 @@ var _key_turn := -1
 var _key_cursor: Control
 var _key_in_shop := false
 var _card_pick: Dictionary = {}  # the card pick that is open: {veil, cards}
+var _aside: Dictionary = {}  # the button that puts a pick aside: {pick, button, on} (see _offer_aside)
 var _speech: Dictionary = {}  # player id -> the line they typed that is still up
 ## The price of each claim still being played out, lying on the table in
 ## front of whoever paid it: Play -> {pile, player, amount}. See _reserve_coins.
@@ -404,6 +409,10 @@ func _back_out() -> bool:
 	if _choosing_target():
 		_answer(null)
 		return true
+	# A choice put aside comes back before anything is cancelled.
+	if _looking_aside():
+		_toggle_aside()
+		return true
 	if _book != null and _book.is_open():
 		_toggle_book()
 		return true
@@ -443,6 +452,7 @@ func _build() -> void:
 	_hero.item_picked.connect(_use_now)
 	_hero.end_turn_pressed.connect(func(): _answer_turn({"kind": &"end"}))
 	_hero.extra_pressed.connect(_answer_turn)
+	_hero.refused.connect(_deny)
 	add_child(_hero)
 
 	_turn_label = UI.label("", 16, UI.GOLD, true)
@@ -560,7 +570,7 @@ func _build_shop() -> void:
 	_shop_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_shop.add_child(_shop_body)
 	if not fixed.is_empty():
-		var always := UI.label("ALWAYS", 11, UI.GOLD, true)
+		var always := UI.label("FIXED", 11, UI.GOLD, true)
 		always.position = Vector2(12, 3)
 		_shop_body.add_child(always)
 		var divider := ColorRect.new()
@@ -614,6 +624,9 @@ func _build_shop() -> void:
 	_shop_reroll.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_shop_reroll.draw.connect(_draw_reroll)
 	_shop_reroll.pressed.connect(_on_reroll_pressed)
+	_shop_reroll.gui_input.connect(func(event: InputEvent):
+		if _shop_reroll.disabled and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_deny(_shop_reroll))
 	TipLayer.attach(_shop_reroll, _reroll_tip)
 	_shop_body.add_child(_shop_reroll)
 	_shop_reroll_coin = _shop_icon("res://assets/ui/coin.png", Vector2(reroll_x + 16, 82), Vector2(16, 16))
@@ -1052,6 +1065,7 @@ func _on_shop_clicked(index: int) -> void:
 	var entry: Dictionary = _shop_entries[index]
 	var option: Variant = _buy_option(_turn_options(), entry)
 	if option == null:
+		_deny(entry.view)
 		return
 	var def: ItemDef = option.item
 	var tip := UI.item_tip(def)
@@ -1072,6 +1086,8 @@ func _buy_now(index: int) -> void:
 	var option: Variant = _buy_option(_turn_options(), _shop_entries[index])
 	if option != null and option.enabled:
 		_answer_turn(option)
+	elif option == null:
+		_deny(_shop_entries[index].view)
 
 
 func _on_reroll_pressed() -> void:
@@ -1131,6 +1147,7 @@ func _shop_point(slot: int, def: ItemDef) -> Vector2:
 func _on_item_clicked(instance: ItemInstance, view: ItemView) -> void:
 	var discard: Variant = _hero.discard_option(instance)
 	if discard == null:
+		_deny(view)
 		return
 	var def := instance.def
 	var rows := []
@@ -1496,6 +1513,7 @@ func _open_pick(d: Decision) -> void:
 		sky.setup(d)
 		sky.picked.connect(_answer)
 		_modal.add_child(sky)
+		_offer_aside(sky)
 		_play_sfx("fx_stardust")
 		return
 	if d.context.get("look") == &"wand":
@@ -1507,6 +1525,7 @@ func _open_pick(d: Decision) -> void:
 			show.setup(d, spots, _price_ink())
 			show.picked.connect(_answer)
 			_modal.add_child(show)
+			_offer_aside(show)
 			_play_sfx("fx_stardust")
 			return
 	var panel := _open_modal(d.prompt)
@@ -1665,9 +1684,104 @@ func _open_card_pick(d: Decision) -> void:
 		late.append(cancel)
 	veil.set_meta(&"late", late)
 	_card_pick = {"veil": veil, "cards": cards}
+	_offer_aside(veil)
 	var reveal := create_tween().bind_node(veil).set_parallel()
 	for node: Control in late:
 		reveal.tween_property(node, "modulate:a", 1.0, 0.3 / _speed).set_delay(0.3 / _speed)
+
+
+## Gives `pick`, a choice that covers the whole table (the card pick, the
+## Materialize, the Counterfeit), the button that puts it aside to look at
+## the table. It is the same button in the same place for all of them
+## (ASIDE_AT, the corner across from the MENU), and it lives in _modal beside
+## the pick, so whatever answers the decision takes it away too.
+func _offer_aside(pick: Control) -> void:
+	var b := UI.button("Look at the table", UI.BORDER, 14)
+	b.position = ASIDE_AT
+	b.size = ASIDE_SIZE
+	b.pivot_offset = ASIDE_SIZE / 2.0
+	Board.plank(b)
+	TipLayer.attach(b, func() -> String:
+		return Loc.t("Bring the choice back (Esc)." if _aside.get("on", false)
+				else "Put this aside to look at the table. The choice stays open."))
+	b.pressed.connect(_toggle_aside)
+	_modal.add_child(b)
+	_aside = {"pick": pick, "button": b, "on": false}
+
+
+## True while a choice is put aside and the table is in view.
+func _looking_aside() -> bool:
+	return _aside.get("on", false) and is_instance_valid(_aside.get("button")) \
+			and _aside.button.get_parent() == _modal and not _aside.button.is_queued_for_deletion()
+
+
+## Puts the pick aside (it fades out and the table under it answers the mouse
+## again: tooltips, the book) or brings it back. The decision stays open all
+## the while. Aside, the button is the only way back to a choice that may
+## have no other way out, so it turns to brass and throbs: it has to be seen
+## against the table.
+func _toggle_aside() -> void:
+	var pick: Variant = _aside.get("pick")
+	var b: Variant = _aside.get("button")
+	if not is_instance_valid(pick) or not is_instance_valid(b) or pick.has_meta(&"closing"):
+		return
+	var on: bool = not _aside.on
+	_aside.on = on
+	b.text = "Back to the choice" if on else "Look at the table"
+	Board.plank(b, UI.GOLD if on else UI.BORDER)
+	for key: String in ["fade", "throb"]:
+		var running: Variant = _aside.get(key)
+		if running is Tween:
+			running.kill()
+	var fade := create_tween().bind_node(pick)
+	_aside["fade"] = fade
+	if on:
+		fade.tween_property(pick, "modulate:a", 0.0, 0.2 / _speed)
+		fade.tween_callback(func(): pick.visible = false)
+		var throb := create_tween().bind_node(b).set_loops()
+		throb.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		throb.tween_property(b, "scale", Vector2.ONE * 1.07, 0.55)
+		throb.tween_property(b, "scale", Vector2.ONE, 0.55)
+		_aside["throb"] = throb
+	else:
+		pick.visible = true
+		fade.tween_property(pick, "modulate:a", 1.0, 0.2 / _speed)
+		b.scale = Vector2.ONE
+	if TipLayer.current != null:
+		TipLayer.current.hide_all()
+	_track_keys()
+
+
+## The player has put a choice aside to look at the table and clicked
+## something that has to wait for it (buying, using an item, ending the
+## turn): `c` shakes its head and flushes red. Outside that it stays as
+## quiet as it always was.
+func _deny(c: Control) -> void:
+	if not _looking_aside() or not is_instance_valid(c) or c.has_meta(&"denied"):
+		return
+	c.set_meta(&"denied", true)
+	_play_sfx("cancel")
+	var was := c.modulate
+	UI.shake(c, 5.0, 0.25)
+	var flush := c.create_tween()
+	flush.tween_property(c, "modulate", Color(1.0, 0.5, 0.45, was.a), 0.06)
+	flush.tween_property(c, "modulate", was, 0.32)
+	flush.tween_callback(func(): c.remove_meta(&"denied"))
+	# And the way out lights up: two bright blinks on the button that brings
+	# the choice back (its scale is the throb's, so only the light changes).
+	var b: Button = _aside.button
+	var blink := b.create_tween()
+	for i in 2:
+		blink.tween_property(b, "modulate", Color(1.7, 1.6, 1.15), 0.07)
+		blink.tween_property(b, "modulate", Color.WHITE, 0.16)
+
+
+## The pick is on its way out: the button goes first.
+func _drop_aside() -> void:
+	var b: Variant = _aside.get("button")
+	if is_instance_valid(b):
+		b.queue_free()
+	_aside = {}
 
 
 ## Closes a card pick. The cards left alone glide back to the hand; the chosen
@@ -1677,6 +1791,7 @@ func _close_card_pick(veil: ColorRect, cards: Array, choice: int) -> void:
 	if veil.has_meta(&"closing") or _pending == null:
 		return
 	veil.set_meta(&"closing", true)
+	_drop_aside()
 	var d := _pending
 	for card: CardView in cards:
 		card.settle()
@@ -1979,8 +2094,14 @@ func _key_stops() -> Dictionary:
 	if _popup.get_child_count() > 0:
 		return {"id": "popup", "rows": [_buttons_in(_popup)], "upright": true}
 	if _modal.get_child_count() > 0:
-		var top := _modal.get_child(_modal.get_child_count() - 1)
 		var buttons := _buttons_in(_modal)
+		# A choice put aside: only the button that brings it back.
+		if _looking_aside():
+			return {"id": "aside", "rows": [buttons]}
+		var top := _modal.get_child(_modal.get_child_count() - 1)
+		for child: Node in _modal.get_children():
+			if child.has_method(&"views"):
+				top = child
 		if top.has_method(&"views"):
 			var views: Array = top.call(&"views")
 			return {"id": "views", "rows": [views, buttons], "start": views.front() if not views.is_empty() else null}

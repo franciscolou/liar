@@ -178,7 +178,7 @@ func _init() -> void:
 	_say.position = Vector2(BUTTON.x + 4.0, 0)
 	_say.draw.connect(_draw_say)
 	_say.pressed.connect(func() -> void: open_line(not typing()))
-	TipLayer.attach(_say, "[b]Say something[/b]\nType a line for the whole table to see (T). Enter sends it.")
+	TipLayer.attach(_say, "[b]Say something[/b] (T)\nType a line for the whole table to see.")
 	add_child(_say)
 	_line = LineEdit.new()
 	_line.position = Vector2(BUTTON.x * 2.0 + 8.0, 0)

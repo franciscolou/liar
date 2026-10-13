@@ -79,7 +79,7 @@ class LastCall extends Ability:
 		# Any character of the match, held or not: it is named, not shown.
 		var cast: Array = engine.characters
 		var d := Decision.new(Decision.Kind.PICK, actor)
-		d.prompt = Loc.t("%s, last call: which character goes on the tray?") % actor.name
+		d.prompt = "Which character goes on the tray?"
 		d.options = cast.map(func(def: CharacterDef) -> Dictionary: return {"label": def.display_name, "card": def.id})
 		d.context = {
 			"play": play, "foreign": true,

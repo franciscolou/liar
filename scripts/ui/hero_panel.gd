@@ -9,6 +9,9 @@ signal item_clicked(instance: ItemInstance, view: ItemView)
 ## A right click or a double click on an item: use it, no menu.
 signal item_picked(instance: ItemInstance)
 signal end_turn_pressed
+## Something of the panel that cannot be used right now was clicked: a button
+## that is off, an item with nothing to do. The table decides what to make of it.
+signal refused(control: Control)
 signal extra_pressed(option: Dictionary)
 
 const StatusFx := preload("res://scripts/ui/status_fx.gd")
@@ -99,6 +102,7 @@ func _init() -> void:
 	_end_turn.size = Vector2(116, 44)
 	_brass(_end_turn)
 	_end_turn.pressed.connect(func(): end_turn_pressed.emit())
+	_end_turn.gui_input.connect(_on_off_button_input.bind(_end_turn))
 	TipLayer.attach(_end_turn, "Finish your turn without using a character ability.")
 	add_child(_end_turn)
 	_extras = VBoxContainer.new()
@@ -234,12 +238,19 @@ func sync() -> void:
 				b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			b.disabled = not extra.enabled
 			b.pressed.connect(func(): extra_pressed.emit(extra))
+			b.gui_input.connect(_on_off_button_input.bind(b))
 			TipLayer.attach(b, extra.get("description", "") + ("\n[color=%s]%s[/color]" % [UI.hex(UI.RED), extra.reason] if extra.get("reason", "") != "" else ""))
 			_extras.add_child(b)
 
 
 ## `extras` with the ones that can't wait in front (see CharacterDef.turn_extras),
 ## otherwise in the order they came.
+## A button that is off says nothing when pressed: the click is passed on.
+func _on_off_button_input(event: InputEvent, b: Button) -> void:
+	if b.disabled and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		refused.emit(b)
+
+
 func _urgent_first(extras: Array) -> Array:
 	var levels := []
 	for extra: Dictionary in extras:
@@ -467,7 +478,10 @@ func _sync_inventory() -> void:
 		elif usable:
 			view.note = "Double click or right click to use."
 		view.clicked.connect(func(): item_clicked.emit(instance, view))
-		view.picked.connect(func(): item_picked.emit(instance))
+		view.picked.connect(func():
+			item_picked.emit(instance)
+			if use_option(instance) == null:
+				refused.emit(view))
 		frame.add_child(view)
 
 

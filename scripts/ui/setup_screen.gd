@@ -89,6 +89,9 @@ const CASE_RIDGE := 468.0
 ## How far the line about the deck is lifted off the ridge below it.
 const SUMMARY_RISE := 3.0
 const CASE_ITEMS := 502.0
+## The gap between the items that are always on sale and the others, in
+## item places.
+const ITEMS_PARTING := 0.5
 ## The switch of the book of suspicions: its size, and its knob in blocks.
 const SWITCH := Vector2(42, 22)
 const KNOB: Array[String] = [
@@ -110,6 +113,8 @@ const FILE_TOP := 352.0
 ## the mouse has to go before a press on its title is a drag and not a click.
 const FILE_REACH := Vector2(60, 540)
 const FILE_GRIP := 4.0
+## How much of the top of the sheet it is held by: the strip and the title.
+const FILE_BAND := 38.0
 ## From the top of the clipboard to the first line of its list, and from one
 ## line to the next.
 const SEAT_LINES := 70.0
@@ -168,6 +173,8 @@ var _file_rest := Vector2(-1, -1)  # where its top was last put, and how tall
 ## itself. Only this screen knows: the room never hears of it.
 var _file_pull := 0.0
 var _file_grip: Control  # the strip above the title, to hold it by
+var _file_hint := 0.0  # how much of the grip marks shows: 0 = none, 1 = all
+var _file_hint_tween: Tween
 var _file_held := false
 var _file_dragged := false
 var _file_grab := 0.0  # where the mouse took hold of it, less the pull it had
@@ -410,6 +417,9 @@ func _build_rules() -> void:
 	_file_grip.size = Vector2(_file.size.x, 10)
 	_file_grip.mouse_default_cursor_shape = Control.CURSOR_VSIZE
 	_file_grip.gui_input.connect(_on_file_held.bind(false))
+	_file_grip.draw.connect(_draw_file_grip)
+	_file_grip.mouse_entered.connect(_hint_file.bind(true))
+	_file_grip.mouse_exited.connect(_hint_file.bind(false))
 	_file.add_child(_file_grip)
 	box.add_child(_rules_header())
 	_rules = VBoxContainer.new()
@@ -498,6 +508,31 @@ func _file_home() -> float:
 	return minf(FILE_TOP, CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * SEAT_STEP + 8.0)
 
 
+## The mouse is on the top of the open sheet, or has left it: a few grip
+## marks fade in at the edge, to say that it can be taken from there.
+func _hint_file(on: bool) -> void:
+	if _file_hint_tween != null:
+		_file_hint_tween.kill()
+	_file_hint_tween = create_tween()
+	_file_hint_tween.tween_method(func(amount: float):
+		_file_hint = amount
+		_file_grip.queue_redraw(), _file_hint, 1.0 if on or _file_held else 0.0, 0.15)
+
+
+## The whole top band of the sheet, title and all, takes a light wash of
+## ink, with two short rows of dots in the middle of the top edge. (The dots
+## alone were too faint to notice.)
+func _draw_file_grip() -> void:
+	if _file_hint <= 0.0:
+		return
+	_file_grip.draw_rect(Rect2(2, 2, _file_grip.size.x - 4.0, FILE_BAND - 2.0), Color(Desk.INK, 0.12 * _file_hint))
+	var ink := Color(Desk.INK, 0.55 * _file_hint)
+	var left := roundf(_file_grip.size.x / 2.0) - 13.0
+	for row in 2:
+		for dot in 7:
+			_file_grip.draw_rect(Rect2(left + dot * 4.0, 3.0 + row * 4.0, 2, 2), ink)
+
+
 ## The mouse on the top of the sheet: the open sheet is dragged up and down
 ## by it. A press that goes nowhere is a click, which `folds` says whether to
 ## answer by folding the rules (the title) or not (the strip above it).
@@ -509,6 +544,8 @@ func _on_file_held(event: InputEvent, folds: bool) -> void:
 			_file_grab = event.global_position.y - _file_pull
 		elif _file_held:
 			_file_held = false
+			var at: Vector2 = _file.get_local_mouse_position()
+			_hint_file(_rules_open and Rect2(0, 0, _file.size.x, FILE_BAND).has_point(at))
 			if folds and not _file_dragged:
 				_set_rules_open(not _rules_open)
 	elif event is InputEventMouseMotion and _file_held and _rules_open:
@@ -555,12 +592,15 @@ func _rules_header() -> Control:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(title)
 	row.add_child(_reset_button(_reset_rules, _rules_default))
-	row.mouse_entered.connect(func(): title.add_theme_color_override("font_color", Desk.INK_RED))
-	row.mouse_exited.connect(func(): title.add_theme_color_override("font_color", Desk.INK))
+	row.mouse_entered.connect(func():
+		title.add_theme_color_override("font_color", Desk.INK_RED)
+		_hint_file(true))
+	row.mouse_exited.connect(func():
+		title.add_theme_color_override("font_color", Desk.INK)
+		_hint_file(false))
 	row.gui_input.connect(_on_file_held.bind(true))
 	TipLayer.attach(row, func() -> String:
-		return Loc.t("Click to fold the rules away, or drag the sheet up and down. While they are open, right-click a character to read its abilities here."
-				if _rules_open else "Click to show the rules."))
+		return "" if _rules_open else Loc.t("Click to show the rules."))
 	return row
 
 
@@ -752,6 +792,21 @@ func _build_case() -> void:
 
 ## The items lie in the lower compartment of the case.
 func _build_items() -> void:
+	# What is on sale in every match comes first, parted from what the host
+	# can ban, as in the shop of the table.
+	var defs := Content.item_list()
+	var fixed := defs.filter(func(def: ItemDef) -> bool: return def.fixed)
+	defs = fixed + defs.filter(func(def: ItemDef) -> bool: return not def.fixed)
+	var parted := not fixed.is_empty() and fixed.size() < defs.size()
+	var step := (CASE.size.x - 60.0) / maxf(defs.size() + (ITEMS_PARTING if parted else 0.0), 1.0)
+	var lead := roundf((fixed.size() + ITEMS_PARTING) * step) if parted else 0.0
+	if parted:
+		var divider := ColorRect.new()
+		divider.color = Color(UI.GOLD.darkened(0.35), 0.7)
+		divider.position = Vector2(roundf(30.0 + lead - ITEMS_PARTING * step / 2.0) - 1.0, CASE_ITEMS - 3.0)
+		divider.size = Vector2(2, roundf(ItemView.BASE.y * 0.88) + 6.0)
+		divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_case.add_child(divider)
 	var title := UI.label("ITEMS IN THE SHOP", 18, UI.GOLD, true)
 	title.position = Vector2(30, CASE_RIDGE + 7.0)
 	title.size = Vector2(400, 24)
@@ -761,12 +816,11 @@ func _build_items() -> void:
 	reset.position = Vector2(CASE.size.x - 60.0, CASE_RIDGE + 7.0)
 	reset.size = Vector2(30, 26)
 	_case.add_child(reset)
-	var defs := Content.item_list()
-	var step := (CASE.size.x - 60.0) / maxi(defs.size(), 1)
 	for i in defs.size():
 		var def: ItemDef = defs[i]
 		var view := ItemView.new(0.88)
-		view.position = Vector2(roundf(30.0 + i * step + (step - view.size.x) / 2.0), CASE_ITEMS)
+		var slot := i + (ITEMS_PARTING if parted and not def.fixed else 0.0)
+		view.position = Vector2(roundf(30.0 + slot * step + (step - view.size.x) / 2.0), CASE_ITEMS)
 		view.set_item(def)
 		_case.add_child(view)
 		_item_places.append(Rect2(view.position, view.size).grow(3.0))

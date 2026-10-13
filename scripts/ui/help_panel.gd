@@ -11,6 +11,7 @@ signal closed
 
 const Stall := preload("res://scripts/ui/shop_stall.gd")
 const Board := preload("res://scripts/ui/saloon_board.gd")
+const Emotes := preload("res://scripts/ui/emotes.gd")
 
 const SIZE := Vector2(1040, 584)
 const STAGE := Rect2(24, 92, 600, 412)
@@ -30,6 +31,16 @@ const INVENTORY := 3
 const SHELF: Array[StringName] = [&"shield", &"potion", &"silencer"]
 ## How much smaller than the screen the table of the last lesson is drawn.
 const MAP_SCALE := 0.5
+## The open book on the button of the suspicion book (table._draw_book_toggle).
+const BOOK := [
+	".###.###.",
+	"#...#...#",
+	"#.#.#.#.#",
+	"#...#...#",
+	"#.#.#.#.#",
+	"#...#...#",
+	".###.###.",
+]
 
 ## tab, title, text and task are translation keys (text and task as BBCode);
 ## build is the method that sets the stage.
@@ -80,14 +91,18 @@ const LESSONS := [
 
 ## The parts of the table, for the last lesson: [label, where on the real
 ## screen, what it is, what is drawn in it]. Parts with the same text count as
-## one.
+## one. The three small buttons (book, emotes, chat) are drawn a little larger
+## than they are, to be pointed at, and carry their icon instead of the label.
 const PARTS := [
 	["TURN", Rect2(8, 6, 250, 34), "Shows whose turn it is.", &""],
-	["MENU", Rect2(1060, 6, 84, 34), "Pause, settings, this guide and the way out.", &""],
+	["MENU", Rect2(1074, 6, 70, 34), "Pause, settings, this guide and the way out.", &""],
+	["SUSPICION BOOK", Rect2(1038, 6, 34, 34), "Your notes on who holds each card: write them yourself, or let the book keep them for you (B). Only there if the host allows it.", &"book"],
 	["OPPONENT", Rect2(98, 138, 176, 126), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["OPPONENT", Rect2(488, 19, 176, 126), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["OPPONENT", Rect2(878, 138, 176, 126), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["THE MIDDLE", Rect2(380, 196, 392, 150), "Every claim is shown here, with a mark that also shows where it comes from and its target. The questions the game asks you show up here too.", &""],
+	["EMOTES", Rect2(8, 298, 34, 34), "Show the table how you feel! Click to pick a face, or press 1 to 6.", &"emotes"],
+	["CHAT", Rect2(44, 298, 34, 34), "(T) Type a line for the whole table to see.", &"chat"],
 	["LOG", Rect2(8, 334, 232, 136), "Everything that happened in the match, in case you really need to look it up.", &"log"],
 	["SHOP", Rect2(984, 364, 84, 106), "The shop, folded: hover it to see the items and their prices.", &"shop"],
 	["DECK", Rect2(1070, 364, 74, 106), "The characters nobody holds. A card that proved a claim goes back here.", &"deck"],
@@ -897,7 +912,7 @@ func _lesson_table() -> void:
 		spot.pressed.connect(_table_point.bind(spot))
 		board.add_child(spot)
 		_table_prop(spot, part[3])
-		var plate := UI.label(part[0], 9, UI.CREAM, true)
+		var plate := UI.label(part[0] if _table_icon(part[3]).is_empty() else "", 9, UI.CREAM, true)
 		plate.position = Vector2(4, 1)
 		spot.add_child(plate)
 		_s.spots.append({"spot": spot, "name": part[0], "about": part[2], "plate": plate})
@@ -905,9 +920,37 @@ func _lesson_table() -> void:
 	_say(Loc.t("Point at a part of the table to learn what it is."))
 
 
+## The bitmap of a part that is a small button with an icon in it; empty for
+## the others.
+func _table_icon(kind: StringName) -> Array:
+	match kind:
+		&"book":
+			return BOOK
+		&"emotes":
+			return Emotes.FACE
+		&"chat":
+			return Emotes.GLYPH
+	return []
+
+
+## The icon of a small button, in the middle of `spot`, in the ink of its
+## label (see _table_paint).
+func _draw_table_icon(spot: Button, rows: Array) -> void:
+	var ink: Color = spot.get_meta(&"ink", UI.CREAM)
+	var at := ((spot.size - Vector2(rows[0].length(), rows.size())) / 2.0).floor()
+	for y: int in rows.size():
+		for x: int in rows[y].length():
+			if rows[y][x] == "#":
+				spot.draw_rect(Rect2(at + Vector2(x, y), Vector2.ONE), ink)
+
+
 ## What stands in a part of the little table: the real thing, only smaller.
 func _table_prop(spot: Button, kind: StringName) -> void:
 	var foot := spot.size.y - 5.0
+	var icon := _table_icon(kind)
+	if not icon.is_empty():
+		spot.draw.connect(_draw_table_icon.bind(spot, icon))
+		return
 	match kind:
 		&"seat":
 			_table_cards(spot, [&"", &""], false, 0.36, foot)
@@ -980,4 +1023,7 @@ func _table_paint(current: Button) -> void:
 		var fill := Color(UI.GOLD.darkened(0.5), 0.45) if spot == current else Color(UI.INK, 0.45)
 		for state: String in ["normal", "hover", "pressed", "focus"]:
 			spot.add_theme_stylebox_override(state, UI.box(fill, ink, 2 if spot == current else 1, 2, 0))
-		entry.plate.add_theme_color_override("font_color", UI.GOLD if spot == current else (UI.GREEN if seen else UI.CREAM))
+		var label_ink := UI.GOLD if spot == current else (UI.GREEN if seen else UI.CREAM)
+		entry.plate.add_theme_color_override("font_color", label_ink)
+		spot.set_meta(&"ink", label_ink)
+		spot.queue_redraw()

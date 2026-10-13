@@ -334,8 +334,10 @@ static func is_fullscreen(window: Window) -> bool:
 	return window.mode == Window.MODE_FULLSCREEN or window.mode == Window.MODE_EXCLUSIVE_FULLSCREEN
 
 
+## The choice is kept in the settings, whichever way it was made.
 static func toggle_fullscreen(window: Window) -> void:
-	window.mode = Window.MODE_WINDOWED if is_fullscreen(window) else Window.MODE_FULLSCREEN
+	Settings.set_fullscreen(not is_fullscreen(window))
+	Settings.save()
 
 
 static func hex(c: Color) -> String:

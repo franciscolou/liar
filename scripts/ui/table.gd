@@ -2022,7 +2022,6 @@ func _toggle_pause() -> void:
 	box.add_child(resume)
 	var settings := UI.button("Settings", UI.BORDER, 18)
 	Board.plank(settings)
-	settings.pressed.connect(func(): _pause.add_child(SettingsPanel.new()))
 	box.add_child(settings)
 	var help := UI.button("How to play", UI.BORDER, 18)
 	Board.plank(help)
@@ -2035,6 +2034,11 @@ func _toggle_pause() -> void:
 	Board.plank(fullscreen)
 	TipLayer.attach(fullscreen, "Also F11 or Alt+Enter, on any screen.")
 	box.add_child(fullscreen)
+	settings.pressed.connect(func():
+		var options := SettingsPanel.new()
+		# Fullscreen can be switched in there too.
+		options.closed.connect(func(): fullscreen.text = "Fullscreen: on" if UI.is_fullscreen(get_window()) else "Fullscreen: off")
+		_pause.add_child(options))
 	if _room != null and _room.hosting:
 		var lobby := UI.button("End the match", UI.RED, 18)
 		Board.plank(lobby, UI.RED)

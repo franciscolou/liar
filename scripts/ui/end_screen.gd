@@ -26,6 +26,8 @@ const MENU_SCENE := "res://scenes/menu.tscn"
 ## The third plate, above the two painted ones. It is not on the artwork, so
 ## it is always drawn.
 var lobby_button: Button
+## Opens the settings; it keeps its corner when the plates line up.
+var settings_button: Button
 ## The backdrop after a win, or null.
 var _mirror: Control
 var _plates: Array = []  # what waits for the mirror to show the hand
@@ -72,6 +74,17 @@ func _ready() -> void:
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		add_child(waiting)
 		_plates.append(waiting)
+	var settings := UI.button("SETTINGS", PLATE_BORDER, 15)
+	settings_button = settings
+	settings.position = Vector2(1006, 12)
+	settings.size = Vector2(130, 34)
+	settings.add_theme_color_override("font_color", PLATE_INK)
+	settings.add_theme_stylebox_override("normal", UI.box(PLATE, PLATE_BORDER, 4, 4, 0))
+	settings.add_theme_stylebox_override("hover", UI.box(PLATE.lightened(0.08), UI.GOLD, 4, 4, 0))
+	settings.add_theme_stylebox_override("pressed", UI.box(PLATE.darkened(0.25), UI.GOLD, 4, 4, 0))
+	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
+	add_child(settings)
+	_plates.append(settings)
 	if _mirror != null:
 		_line_up()
 
@@ -80,7 +93,7 @@ func _ready() -> void:
 func _line_up() -> void:
 	for i in _plates.size():
 		var plate: Control = _plates[i]
-		if plate is Button:
+		if plate is Button and plate != settings_button:
 			plate.position = ROW + Vector2((ROW_PLATE.x + ROW_GAP) * i, 0)
 			plate.size = ROW_PLATE
 		plate.modulate.a = 0.0

@@ -1,7 +1,7 @@
 class_name SettingsPanel
 extends ColorRect
-## The settings overlay: music and sound volume, and the language. Shared by
-## the title screen and the pause menu; add it as a child and it covers the
+## The settings overlay: music and sound volume, the language and fullscreen.
+## Shared by every screen that has a menu; add it as a child and it covers the
 ## screen until closed. Its look is saloon_board.gd.
 
 signal closed
@@ -11,6 +11,8 @@ const Board := preload("res://scripts/ui/saloon_board.gd")
 const PREVIEW_SOUND := "res://assets/sounds/spend.mp3"
 
 var _language_buttons: Dictionary = {}  # language code -> Button
+var _fullscreen_buttons: Dictionary = {}  # on (bool) -> Button
+var _fullscreen_shown := false
 var _preview: AudioStreamPlayer
 
 
@@ -49,6 +51,16 @@ func _init() -> void:
 	box.add_child(language_row)
 	_restyle_languages()
 
+	var fullscreen_row := _row("Fullscreen")
+	for on: bool in [true, false]:
+		var b := UI.button("On" if on else "Off", UI.BORDER, 15)
+		Board.plank(b)
+		b.custom_minimum_size = Vector2(124, 32)
+		b.pressed.connect(_on_fullscreen_pressed.bind(on))
+		fullscreen_row.add_child(b)
+		_fullscreen_buttons[on] = b
+	box.add_child(fullscreen_row)
+
 	var back := UI.button("Back", UI.GOLD, 18)
 	Board.plank(back, UI.GOLD)
 	back.custom_minimum_size = Vector2(200, 42)
@@ -66,6 +78,16 @@ func close() -> void:
 	Settings.save()
 	closed.emit()
 	queue_free()
+
+
+func _ready() -> void:
+	_restyle_fullscreen()
+
+
+## F11 and Alt+Enter still work with the panel open.
+func _process(_delta: float) -> void:
+	if UI.is_fullscreen(get_window()) != _fullscreen_shown:
+		_restyle_fullscreen()
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -88,7 +110,7 @@ func _volume_row(text: String, value: float, setter: Callable) -> HBoxContainer:
 	var slider := HSlider.new()
 	slider.name = "Slider"
 	slider.max_value = 1.0
-	slider.step = 0.05
+	slider.step = 0.01
 	slider.value = value
 	slider.custom_minimum_size = Vector2(210, 24)
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -118,3 +140,15 @@ func _restyle_languages() -> void:
 	for code: String in _language_buttons:
 		var b: Button = _language_buttons[code]
 		Board.plank(b, UI.BORDER, code == Settings.language)
+
+
+func _on_fullscreen_pressed(on: bool) -> void:
+	if on != UI.is_fullscreen(get_window()):
+		UI.toggle_fullscreen(get_window())
+	_restyle_fullscreen()
+
+
+func _restyle_fullscreen() -> void:
+	_fullscreen_shown = UI.is_fullscreen(get_window())
+	for on: bool in _fullscreen_buttons:
+		Board.plank(_fullscreen_buttons[on], UI.BORDER, on == _fullscreen_shown)

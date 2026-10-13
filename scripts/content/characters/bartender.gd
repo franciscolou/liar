@@ -44,7 +44,7 @@ class MickeyFinn extends Ability:
 	func _init() -> void:
 		id = &"bartender.mickey_finn"
 		display_name = "Mickey Finn"
-		describe("Spike a player's drink. The next thing they pay coins for costs them %d more.", [SURCHARGE])
+		describe("Spike a player's drink. Their next expense will costs them %d more.", [SURCHARGE])
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		inflicts = true

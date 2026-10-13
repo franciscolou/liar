@@ -101,7 +101,7 @@ const MESSAGES := {
 	"When another player is eliminated": "Quando outro jogador é eliminado",
 	"Groggy": "Grogue",
 	"Whatever costs coins costs %d more: abilities, items, rerolls. Wears off once this player has paid for something.": "Tudo o que custa moedas custa %d a mais: habilidades, itens, re-rolagens. Passa assim que este jogador pagar por alguma coisa.",
-	"Spike a player's drink. The next thing they pay coins for costs them %d more.": "Batize a bebida de um jogador. A próxima coisa que ele pagar com moedas custa %d a mais.",
+	"Spike a player's drink. Their next expense will costs them %d more.": "Batize a bebida de um jogador. O próximo gasto dele com moedas vai custar %d a mais.",
 	"Name any character of the match. You and everyone else holding it discards it and draws a new card.": "Escolha qualquer personagem da partida. Você e todos que o tiverem descartam a carta e compram uma nova.",
 	"Steal %d coins from a player.": "Roube %d moedas de um jogador.",
 	"Nobody has coins to take": "Ninguém tem moedas para tomar",

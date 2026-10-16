@@ -324,8 +324,8 @@ func _build_address() -> void:
 	TipLayer.attach(line, func() -> String:
 		var tip := Loc.t("What your friends type to join. With Radmin VPN it is the address that starts with 26.")
 		if addresses.size() > 1:
-			tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1))
-		return tip + "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % Room.PORT)
+			tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1).map(func(ip: String) -> String: return _room.address_at(ip)))
+		return tip + "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % _room.port)
 
 
 ## The host's line is formatted here, so it does not translate itself.
@@ -336,7 +336,7 @@ func _write_address() -> void:
 	if addresses.is_empty():
 		_address_line.text = Loc.t("This computer has no network address to share.")
 	else:
-		_address_line.text = Loc.t("ROOM ADDRESS:  %s") % addresses[0]
+		_address_line.text = Loc.t("ROOM ADDRESS:  %s") % _room.address_at(addresses[0])
 
 
 ## The players sign in on the sheet of a clipboard, one to a line.

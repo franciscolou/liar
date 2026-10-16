@@ -419,7 +419,7 @@ const MESSAGES := {
 	"Ask whoever created the room for the address shown in their lobby and type it here.": "Peça a quem criou a sala o endereço que aparece no lobby dele e digite aqui.",
 	"JOIN ROOM": "ENTRAR NA SALA",
 	"Knocking on the door...": "Batendo na porta...",
-	"Could not open a room: port %d is in use. Is the game already hosting one on this computer?": "Não foi possível abrir a sala: a porta %d está em uso. O jogo já está hospedando uma neste computador?",
+	"Could not open a room: ports %d to %d are all in use on this computer.": "Não foi possível abrir a sala: as portas %d a %d estão todas em uso neste computador.",
 	"Type the address of the room.": "Digite o endereço da sala.",
 	"Could not reach the room at %s.": "Não foi possível alcançar a sala em %s.",
 	"Could not reach the room.": "Não foi possível alcançar a sala.",

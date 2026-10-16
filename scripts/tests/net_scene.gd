@@ -16,7 +16,8 @@ extends Node
 ## back.
 
 const Room := preload("res://scripts/net/room.gd")
-const PORT := Room.PORT + 1
+# Past the ports real rooms take, so a game open on this computer is no bother.
+const PORT := Room.PORT + Room.PORT_RANGE
 const MATCHES := 6
 const TIME_LIMIT := 90.0
 

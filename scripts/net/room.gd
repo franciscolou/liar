@@ -54,6 +54,9 @@ const SCREEN := "res://scenes/room.tscn"
 const LOBBY := "res://scenes/setup.tscn"
 const GAME := "res://scenes/main.tscn"
 const PORT := 24565
+## A second room on the same computer takes the next free port, up to this
+## many of them: PORT, PORT + 1, ...
+const PORT_RANGE := 8
 ## The room's name under the root. No scene may call its own root this.
 const NODE_NAME := "NetRoom"
 const MAX_SEATS := 8
@@ -81,6 +84,9 @@ static var _keys_loaded := false
 static var notice := ""
 
 var hosting := false
+## Host: the UDP port the room listens on (PORT, unless another room on this
+## computer has it).
+var port := PORT
 ## [{name: String, bot: bool, peer: int}]; peer is 0 for a bot.
 var seats: Array = []
 ## The rules as the host has them set. They stay between matches.
@@ -141,12 +147,19 @@ class Ticket extends RefCounted:
 
 ## Opens a room on this machine. Returns "" or what went wrong.
 static func host(player_name: String) -> String:
-	var peer := ENetMultiplayerPeer.new()
-	# More than the table seats: whoever doesn't fit is told why and leaves.
-	if peer.create_server(PORT, MAX_SEATS * 2) != OK:
-		return Loc.t("Could not open a room: port %d is in use. Is the game already hosting one on this computer?") % PORT
+	var peer: ENetMultiplayerPeer
+	var at := PORT
+	while true:
+		peer = ENetMultiplayerPeer.new()
+		# More than the table seats: whoever doesn't fit is told why and leaves.
+		if peer.create_server(at, MAX_SEATS * 2) == OK:
+			break
+		at += 1
+		if at >= PORT + PORT_RANGE:
+			return Loc.t("Could not open a room: ports %d to %d are all in use on this computer.") % [PORT, PORT + PORT_RANGE - 1]
 	var room := _enter(peer)
 	room.hosting = true
+	room.port = at
 	room.config = GameConfig.new()
 	room.seats = [{"name": clean_name(player_name), "bot": false, "peer": 1}]
 	for i in 3:
@@ -205,6 +218,12 @@ static func addresses() -> Array:
 		else:
 			out.append(address)
 	return out
+
+
+## What the others type to reach this room at `ip`: the port only shows when
+## it is not the usual one.
+func address_at(ip: String) -> String:
+	return ip if port == PORT else "%s:%d" % [ip, port]
 
 
 static func clean_name(text: String) -> String:

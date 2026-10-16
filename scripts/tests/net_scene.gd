@@ -6,8 +6,14 @@ extends Node
 ## answers cross on the way. The match must still be the same one everywhere.
 ##
 ## Play it from the editor and read the output: `ok`/`FAILED` per match and
-## "NET DONE: n failed". In the odd matches one machine walks away halfway and
-## the host has to play its seat.
+## "NET DONE: n failed". In the odd matches one machine walks away halfway.
+## In the first of them the host has a bot play the seat, in the second it
+## leaves it waiting, and in both the same player comes back later on another
+## machine (by the key of the seat, under another name), which has to replay
+## the match up to where the others are. A waiting seat stops the match on
+## the next thing it is asked: then they come back to answer it. In the last
+## one the host kicks them out, and they are turned away when they try to come
+## back.
 
 const Room := preload("res://scripts/net/room.gd")
 const PORT := Room.PORT + 1
@@ -21,6 +27,9 @@ var _split := false
 
 func _ready() -> void:
 	Content.ensure_loaded()
+	# The keys of the seats stay in this process: none of them is written down.
+	Room._keys_loaded = true
+	Room._known_keys = []
 	_rng.seed = 99
 	var problem := await _open()
 	var failed := 1 if problem != "" else 0
@@ -28,7 +37,9 @@ func _ready() -> void:
 		print("FAILED  opening the room: ", problem)
 	else:
 		for m in MATCHES:
-			problem = await _play(m)
+			var outcome: Variant = await _play(m)
+			# A script error cuts the match short with nothing to say: that is a failure too.
+			problem = outcome if outcome is String else "it stopped on a script error"
 			print("%s  match %d%s" % ["ok    " if problem == "" else "FAILED", m, "" if problem == "" else ": " + problem])
 			if problem != "":
 				push_error("net: match %d: %s" % [m, problem])
@@ -69,14 +80,16 @@ func _open() -> String:
 	return await _until(func() -> bool: return host.seats.size() == 4 and _rooms.all(func(room: Node) -> bool: return room.seats.size() == 4), "the machines never got in")
 
 
-func _join(index: int) -> void:
+func _join(index: int, player_name := "") -> Node:
 	var room := _machine(index)
 	var client := ENetMultiplayerPeer.new()
 	client.create_client("127.0.0.1", PORT)
 	room.multiplayer.multiplayer_peer = client
-	room._player_name = "Guest%d" % index
+	room._player_name = player_name if player_name != "" else "Guest%d" % index
 	room._joined = true  # no lobby scene to open here
+	room.scenes = false
 	_rooms.append(room)
+	return room
 
 
 func _until(condition: Callable, problem: String) -> String:
@@ -101,9 +114,14 @@ func _play(m: int) -> String:
 	var tables := []
 	_split = false
 	for room: Node in _rooms:
-		room._begin(m + 1, peers.duplicate())
+		room._begin(m + 1, peers.duplicate(), dealt.to_wire())
 		if not room.out_of_step.is_connected(_note):
 			room.out_of_step.connect(_note)
+	# A key to each seat of the others, as Room.start deals them.
+	host._keys = peers.map(func(peer: int) -> String: return "key-%d-%d" % [m, peer] if peer > 1 else "")
+	for key: String in host._keys:
+		if key != "":
+			Room._known_keys.append(key)
 	for room: Node in _rooms:
 		tables.append(_sit(room, GameConfig.from_wire(dealt.to_wire())))
 	for table: Machine in tables:
@@ -111,16 +129,64 @@ func _play(m: int) -> String:
 
 	# In the odd matches the last machine leaves once the match is under way.
 	var leaver: Machine = tables.back() if m % 2 == 1 and tables.size() > 2 else null
-	if leaver != null:
+	var someone_left := leaver != null
+	if someone_left:
 		var gone := await _until(func() -> bool: return leaver.engine.turn_count >= 6 or leaver.engine.over, "never got to turn 6")
 		if gone != "":
 			return gone
+		var left_seat: int = leaver.room.my_match_seat()
 		leaver.engine.abort()
 		leaver.room.release()
 		leaver.room.multiplayer.multiplayer_peer.close()
 		tables.erase(leaver)
 		leaver.queue_free()
 		_rooms.erase(leaver.room)
+		var waiting := await _until(func() -> bool: return host.away_mode(left_seat) == &"idle", "the seat of the one who left is not waiting")
+		if waiting != "":
+			return waiting
+		var kick := m == MATCHES - 1
+		if kick:
+			# Out at once: as the answer to what the seat is being asked, or to
+			# the next thing, not on the turn it gets to some time later.
+			var kicked_at: int = host_table(tables).engine.turn_count
+			host.set_away(left_seat, &"kick")
+			var out := await _until(func() -> bool: return not host_table(tables).engine.players[left_seat].alive or host_table(tables).engine.over, "the kick never came")
+			if out != "":
+				return out
+			if host_table(tables).engine.turn_count > kicked_at + 1:
+				return "the kick waited for turn %d (asked on turn %d)" % [host_table(tables).engine.turn_count, kicked_at]
+			print("        kicked on turn %d, asked on turn %d" % [host_table(tables).engine.turn_count, kicked_at])
+		elif m == 1:
+			host.set_away(left_seat, &"bot")
+		# A waiting seat stops the match on the next thing it is asked: then
+		# they come back to answer it.
+		var held := func() -> bool: return host._tickets.values().any(func(ticket: RefCounted) -> bool:
+			return ticket.decision.player.id == left_seat and not ticket.asked)
+		var later := await _until(func() -> bool: return host_table(tables).engine.turn_count >= 12 or host_table(tables).engine.over or held.call(), "never got to turn 12")
+		if later != "":
+			return later
+		if held.call():
+			print("        the match waits for the one who left")
+		# The same player comes back from another machine, under another name:
+		# the key is what counts.
+		Room.notice = ""
+		var comer := _join(10 + m, "Somebody")
+		if kick:
+			# Only the room this machine is in tells why it was turned away.
+			Room.current = comer
+			var turned := await _until(func() -> bool: return Room.notice != "", "the one who was kicked was let back in")
+			_rooms.erase(comer)
+			if turned != "":
+				return turned
+		else:
+			var back := await _until(func() -> bool: return comer.in_match, "the one who came back never got the match")
+			if back != "":
+				return back
+			var again := _sit(comer, GameConfig.from_wire(comer._dealt))
+			if comer.my_match_seat() != left_seat:
+				return "came back to another seat"
+			tables.append(again)
+			again.engine.run()
 	var late := await _until(func() -> bool: return tables.all(func(table: Machine) -> bool: return table.engine.over or table.done), "did not finish: turns %s, %d decisions open on the host" % [
 		tables.map(func(table: Machine) -> int: return table.engine.turn_count), host._tickets.size()])
 	for table: Machine in tables:
@@ -136,10 +202,18 @@ func _play(m: int) -> String:
 	for table: Machine in tables:
 		if table.summary() != first.summary():
 			return "the machines ended in different matches:\n%s\n%s" % [first.summary(), table.summary()]
-	if leaver != null and host.seats.size() != _rooms.size() + 1:
+	if someone_left and host.seats.size() != _rooms.size() + 1:
 		return "the one who left still has a seat"
 	print("        %d machines, %d decisions, %s" % [tables.size(), host._next_ticket, first.summary().get_slice("\n", 0)])
+	if someone_left:
+		var gone: PlayerState = first.engine.players[first.engine.players.size() - 1]
+		var fate := "still in" if gone.alive else ("kicked" if gone.left.is_empty() else "eliminated")
+		print("        the one who left: %s" % fate)
 	return ""
+
+
+func host_table(tables: Array) -> Machine:
+	return tables[0]
 
 
 func _note(_turn: int) -> void:

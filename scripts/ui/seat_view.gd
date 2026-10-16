@@ -12,9 +12,19 @@ signal item_clicked(index: int)
 ## One of the cards of the hand was clicked while they were up for picking
 ## (see set_card_pick).
 signal card_clicked(index: int)
+## The host chose what becomes of the seat of a player who left (see
+## set_away): &"idle", &"bot" or &"kick".
+signal away_chosen(mode: StringName)
 
 const StatusFx := preload("res://scripts/ui/status_fx.gd")
 const TurnClock := preload("res://scripts/ui/turn_clock.gd")
+const Board := preload("res://scripts/ui/saloon_board.gd")
+## What the box says about a player who left the room, by what is done about
+## their seat (Room.away). A seat a bot plays is not covered at all.
+const AWAY_TEXT := {
+	&"idle": "DISCONNECTED",
+	&"kick": "KICKED",
+}
 ## The badge that says how the player stands in a question put to the whole
 ## table (see set_answer): its size, where it sits on the case, and a tick.
 const BADGE := Vector2(22, 18)
@@ -87,6 +97,10 @@ var _revealed := false
 var _peekable := false
 var _active := false
 var _pulse: Tween
+## The veil over the box of a player who left the room (see set_away).
+var _away: Control
+var _away_mode := &""
+var _away_shown := []  # what the veil was last drawn for: [mode, choose]
 
 
 func _init() -> void:
@@ -167,6 +181,13 @@ func _init() -> void:
 	_badge.draw.connect(_draw_badge)
 	add_child(_badge)
 
+	_away = Control.new()
+	_away.position = Vector2(PX * 2.0, PLATE + PX * 2.0)
+	_away.size = Vector2(SIZE.x - PX * 4.0, SIZE.y - PLATE - PX * 4.0)
+	_away.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_away.visible = false
+	add_child(_away)
+
 	TipLayer.attach(self, _tip)
 
 	mouse_entered.connect(_hover.bind(true))
@@ -246,6 +267,7 @@ func leave(face_up := true, pace := 1.0) -> void:
 	set_answer(0)
 	# Nothing stays floating over a box that is no longer there.
 	_status_fx.die()
+	set_away(&"", false)
 	_set_cursor()
 	_restyle()
 	var parts: Array[Control] = [_bg, _stats, _items, _marks, _chips]
@@ -377,6 +399,53 @@ func _on_card_clicked(card: CardView) -> void:
 
 ## Shows or hides what the player holds (an Untraceable takes it off the
 ## table for a moment: see PlayFx.vanish_items).
+## The player left the room: the box says so and what is done about their
+## seat (`mode`, see Room.away; &"" when they are here). Played by a bot, the
+## box is left as it is. `choose` gives the host the buttons to have a bot
+## play the seat until they come back, or to kick them out of the match.
+func set_away(mode: StringName, choose: bool) -> void:
+	if _gone or mode == &"bot":
+		mode = &""
+	if _away_shown == [mode, choose]:
+		return
+	_away_shown = [mode, choose]
+	_away_mode = mode
+	UI.clear(_away)
+	_away.visible = mode != &""
+	if mode == &"":
+		return
+	var veil := ColorRect.new()
+	veil.color = Color(UI.INK, 0.84)
+	veil.size = _away.size
+	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_away.add_child(veil)
+	var title := UI.label(AWAY_TEXT.get(mode, AWAY_TEXT[&"idle"]), 15, UI.RED if mode == &"kick" else UI.GOLD, true)
+	title.position = Vector2(0, 16)
+	title.size = Vector2(_away.size.x, 18)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_away.add_child(title)
+	if not choose or mode == &"kick":
+		return
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+	row.position = Vector2(0, _away.size.y - 30)
+	row.size = Vector2(_away.size.x, 26)
+	_away.add_child(row)
+	var bot := UI.button("Bot", UI.GOLD, 12)
+	Board.plank(bot, UI.GOLD)
+	bot.custom_minimum_size = Vector2(66, 24)
+	bot.pressed.connect(away_chosen.emit.bind(&"bot"))
+	TipLayer.attach(bot, "A bot plays the seat until they come back.")
+	row.add_child(bot)
+	var kick := UI.button("Kick", UI.RED, 12)
+	Board.plank(kick, UI.RED)
+	kick.custom_minimum_size = Vector2(66, 24)
+	kick.pressed.connect(away_chosen.emit.bind(&"kick"))
+	TipLayer.attach(kick, "Takes them out of the match: their cards go back into the deck, and they cannot come back.")
+	row.add_child(kick)
+
+
 func set_items_shown(shown: bool) -> void:
 	_items.modulate.a = 1.0 if shown else 0.0
 

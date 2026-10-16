@@ -19,10 +19,28 @@ extends Node
 ## only acts on an answer once it comes back. Decisions are numbered as they
 ## are asked (a Ticket each), which is how an answer finds its decision on a
 ## machine that has not got that far yet.
+##
+## Someone who drops out of a match leaves their seat empty (`away`): it does
+## nothing until the host has a bot play it or kicks them out of the match.
+## Unless kicked, they may come back to it. Each person in a match gets a key
+## of their own as it is dealt (`_keys`), which their machine keeps on disk
+## (`_known_keys`) and shows when it joins again: that, and not the name, is
+## how the host knows the seat is theirs (see _hello). The host keeps every
+## answer it has handed out this match (`_history`), and the one coming back
+## gets them all with the deal: their machine plays the whole match again from
+## the start, without stopping for anything (`catching_up`), until it reaches
+## a decision that is still open.
 
 signal changed
 ## A player left in the middle of a match; the host answers for that seat.
 signal seat_left(seat: int)
+## The player of `seat` of the match came back; they answer for it again.
+signal seat_back(seat: int)
+## What becomes of the empty seat `seat` changed (see `away`).
+signal away_changed(seat: int)
+## This machine came back to a match and has played it up to where the others
+## are: from here on it goes at the pace of the table (see `catching_up`).
+signal caught_up
 ## The machines stopped agreeing about the match they are playing.
 signal out_of_step(turn: int)
 ## The player at `seat` of the match sent an emote (see emotes.gd).
@@ -43,12 +61,22 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 21
+const PROTOCOL := 22
 const JOIN_TIMEOUT := 8.0
+## Where a machine keeps the keys of the seats it was dealt (see _known_keys).
+const KEYS_PATH := "user://rejoin.cfg"
+## How many of those it keeps, the latest ones.
+const KEYS_KEPT := 8
 const BOT_NAMES := ["Bones", "Pablo", "Miah", "Valentino", "Judson", "Vincent", "Dolores", "Ezekiel"]
 
 ## The room this machine is in, or null.
 static var current: Node
+## The keys of the seats this machine was dealt lately, latest last. They are
+## kept on disk, so the game may even be closed and opened again before
+## coming back. Several games open on one computer share them, which is what
+## lets one of them take back the seat of another to try it out.
+static var _known_keys: Array = []
+static var _keys_loaded := false
 ## Why the last room ended, for the room screen to show once.
 static var notice := ""
 
@@ -60,6 +88,21 @@ var config: GameConfig
 var in_match := false
 ## Seat -> peer of the match being played; 0 for a bot or for someone who left.
 var match_peers: Array = []
+## True while this machine, back in a match it had dropped out of, is playing
+## again what the others have already played: the table shows none of it.
+## It ends (`caught_up`) once every answer of the past has been used and the
+## match waits for one that has not been given yet.
+var catching_up := false
+## The seats of the match whose player left, and what is done about each:
+## &"idle" (nobody answers for it: the match waits on what it is asked),
+## &"bot" (a bot plays it until they come back) or &"kick" (it is taken out of
+## the match as the answer to what it is being asked, or to the next thing,
+## and its player may not come back). Kept on every machine, for the table to
+## show; only the host acts on it.
+var away: Dictionary = {}
+## Whether the room changes scenes on its own when the network says so. The
+## tests, which have no scenes, turn it off.
+var scenes := true
 
 var _match_id := 0
 var _joined := false
@@ -72,6 +115,14 @@ var _inbox: Array = []  # [number, seat, wire], in the order the host gave them
 var _sums: Dictionary = {}  # turn -> this machine's fingerprint of the match
 var _reported: Dictionary = {}  # turn -> {peer: fingerprint}
 var _split := false
+## What the match was dealt (GameConfig.to_wire), for whoever comes back to it.
+var _dealt: Dictionary = {}
+## Host: every answer handed out this match, in order: [number, seat, wire].
+var _history: Array = []
+## Host: the key of each seat of the match, "" for its own seat and the bots'.
+var _keys: Array = []
+## How many of the answers in `_inbox` are from the past (see catching_up).
+var _replay_left := 0
 
 
 ## One decision waiting for a person's answer.
@@ -82,6 +133,8 @@ class Ticket extends RefCounted:
 	var controller: Controller
 	var done := false
 	var wire: Variant
+	## Whether this machine has put it to whoever answers it here.
+	var asked := false
 
 
 # --- opening and leaving -----------------------------------------------------------
@@ -191,7 +244,7 @@ func _on_join_timeout() -> void:
 
 
 func _on_connected() -> void:
-	_hello.rpc_id(1, _player_name, _build())
+	_hello.rpc_id(1, _player_name, _build(), known_keys())
 
 
 func _on_peer_disconnected(peer: int) -> void:
@@ -205,16 +258,16 @@ func _on_peer_disconnected(peer: int) -> void:
 	if played >= 0:
 		_send(_seat_left, [_match_id, played])
 		_seat_left(_match_id, played)
-		# What they were being asked is now the host's to answer.
-		for ticket: Ticket in _tickets.values():
-			if ticket.decision.player.id == played:
-				ticket.controller.cover(ticket)
+		# The seat waits for them, doing nothing, until the host says otherwise.
+		_set_away(played, &"idle")
 	_push()
 
 
 ## Takes this machine to another screen. A match still being played is cut
 ## at once: it must not go on running behind the transition.
 func _show(scene: String, style: StringName) -> void:
+	if not scenes:
+		return
 	var on := get_tree().current_scene
 	Transition.go(scene, style, on != null and on.scene_file_path == GAME)
 
@@ -294,18 +347,26 @@ func _send(method: Callable, arguments: Array) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func _hello(player_name: String, build: int) -> void:
+func _hello(player_name: String, build: int, keys: Array) -> void:
 	if not hosting:
 		return
 	var peer := multiplayer.get_remote_sender_id()
 	if _seat_of(peer) >= 0:
 		return
 	var bots := seats.filter(func(seat: Dictionary) -> bool: return seat.bot)
+	var seat_name := clean_name(player_name)
 	var why := ""
 	if build != _build():
 		why = "That room is running another version of the game."
 	elif in_match:
-		why = "A match is being played in that room. Try again when it ends."
+		var back := _seat_with_key(keys)
+		if back >= 0 and away.get(back) == &"kick":
+			why = "You were removed from the match being played in that room. Try again when it ends."
+		elif back >= 0:
+			_take_back(peer, back)
+			return
+		else:
+			why = "A match is being played in that room. Try again when it ends."
 	elif seats.size() >= MAX_SEATS and bots.is_empty():
 		why = "That room is full."
 	if why != "":
@@ -313,9 +374,52 @@ func _hello(player_name: String, build: int) -> void:
 		return
 	if seats.size() >= MAX_SEATS:
 		seats.erase(bots.back())
-	var seat_name := clean_name(player_name)
 	seats.append({"name": seat_name if seat_name != "" else "Player", "bot": false, "peer": peer})
 	_push()
+
+
+## Host: the empty seat of the match whose key is among `keys`, or -1.
+func _seat_with_key(keys: Array) -> int:
+	for i in mini(match_peers.size(), _keys.size()):
+		if match_peers[i] == 0 and _keys[i] != "" and keys.has(_keys[i]):
+			return i
+	return -1
+
+
+## Host: `peer` comes back to the seat they left. They get the deal and every
+## answer given so far, before anything else of the match can reach them; from
+## then on the answers go to them as to everyone else.
+func _take_back(peer: int, seat: int) -> void:
+	match_peers[seat] = peer
+	away.erase(seat)
+	_back.rpc_id(peer, _match_id, _dealt, match_peers, _history, away, {"seats": seats, "config": config.to_wire()})
+	_send(_seat_back, [_match_id, seat, peer])
+	_seat_back(_match_id, seat, peer)
+	seats.append({"name": _dealt.seats[seat].name, "bot": false, "peer": peer})
+	_push()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _back(id: int, dealt: Dictionary, peers: Array, history: Array, empty: Dictionary, state: Dictionary) -> void:
+	_joined = true
+	seats = state.seats
+	config = GameConfig.from_wire(state.config)
+	_start_dealt(id, dealt, peers)
+	away = empty.duplicate()
+	_inbox = history.duplicate()
+	_replay_left = _inbox.size()
+	catching_up = true
+	changed.emit()
+	_show(GAME, Transition.DEAL)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _seat_back(id: int, seat: int, peer: int) -> void:
+	if id == _match_id and in_match and seat >= 0 and seat < match_peers.size():
+		match_peers[seat] = peer
+		away.erase(seat)
+		seat_back.emit(seat)
+		away_changed.emit(seat)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -355,8 +459,16 @@ func start() -> void:
 	# The seed is what makes every machine deal the same match.
 	dealt.rng_seed = randi_range(1, 0x7fffffff)
 	var peers := seats.map(func(seat: Dictionary) -> int: return seat.peer)
-	_send(_start, [_match_id + 1, dealt.to_wire(), peers])
+	# Each of the others gets a key to their seat, and nobody else sees it.
+	var keys := []
+	var crypto := Crypto.new()
+	for peer: int in peers:
+		keys.append(crypto.generate_random_bytes(16).hex_encode() if peer > 1 else "")
+	for i in peers.size():
+		if peers[i] > 1:
+			_start.rpc_id(peers[i], _match_id + 1, dealt.to_wire(), peers, keys[i])
 	_start(_match_id + 1, dealt.to_wire(), peers)
+	_keys = keys
 
 
 ## Host: everyone leaves the match (played out or not) and goes back to the
@@ -370,18 +482,30 @@ func to_lobby() -> void:
 
 
 @rpc("authority", "call_remote", "reliable")
-func _start(id: int, dealt: Dictionary, peers: Array) -> void:
-	_begin(id, peers)
-	GameConfig.current = GameConfig.from_wire(dealt)
+func _start(id: int, dealt: Dictionary, peers: Array, key := "") -> void:
+	_start_dealt(id, dealt, peers)
+	if key != "":
+		remember_key(key)
 	_show(GAME, Transition.DEAL)
 
 
+func _start_dealt(id: int, dealt: Dictionary, peers: Array) -> void:
+	_begin(id, peers, dealt)
+	GameConfig.current = GameConfig.from_wire(dealt)
+
+
 ## A new match: nothing of the last one may leak into it.
-func _begin(id: int, peers: Array) -> void:
+func _begin(id: int, peers: Array, dealt: Dictionary = {}) -> void:
 	release()
 	_match_id = id
 	in_match = true
 	match_peers = peers
+	_dealt = dealt
+	_history.clear()
+	_keys = []
+	away = {}
+	_replay_left = 0
+	catching_up = false
 	_tickets.clear()
 	_settled.clear()
 	_inbox.clear()
@@ -402,6 +526,56 @@ func _seat_left(id: int, seat: int) -> void:
 	if id == _match_id and in_match and seat >= 0 and seat < match_peers.size():
 		match_peers[seat] = 0
 		seat_left.emit(seat)
+
+
+## Host: what becomes of the waiting seat `seat` (see `away`): &"bot" or
+## &"kick". Neither can be taken back while they are away.
+func set_away(seat: int, mode: StringName) -> void:
+	if not hosting or not absent(seat) or away.get(seat) != &"idle" or not mode in [&"bot", &"kick"]:
+		return
+	_set_away(seat, mode)
+
+
+func _set_away(seat: int, mode: StringName) -> void:
+	_send(_away_down, [_match_id, seat, String(mode)])
+	_away_down(_match_id, seat, String(mode))
+	# Whatever it is being asked is answered the new way.
+	for ticket: Ticket in _tickets.values():
+		if ticket.decision.player.id == seat:
+			ticket.controller.cover(ticket)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _away_down(id: int, seat: int, mode: String) -> void:
+	if id == _match_id and in_match and seat >= 0 and seat < match_peers.size():
+		away[seat] = StringName(mode)
+		away_changed.emit(seat)
+
+
+## What is done about the empty seat `seat` (see `away`); &"" if it is not empty.
+func away_mode(seat: int) -> StringName:
+	return away.get(seat, &"") if absent(seat) else &""
+
+
+## The keys of the seats this machine was dealt lately (see _known_keys).
+static func known_keys() -> Array:
+	if not _keys_loaded:
+		_keys_loaded = true
+		var file := ConfigFile.new()
+		if file.load(KEYS_PATH) == OK:
+			_known_keys = file.get_value("rejoin", "keys", [])
+	return _known_keys
+
+
+static func remember_key(key: String) -> void:
+	var keys := known_keys()
+	keys.erase(key)
+	keys.append(key)
+	while keys.size() > KEYS_KEPT:
+		keys.pop_front()
+	var file := ConfigFile.new()
+	file.set_value("rejoin", "keys", keys)
+	file.save(KEYS_PATH)
 
 
 ## The seat of the match that is played on this machine, or -1.
@@ -427,6 +601,7 @@ func open(decision: Decision, controller: Controller) -> Ticket:
 	_tickets[ticket.number] = ticket
 	# The answer may have got here before the question.
 	_deliver()
+	_check_caught_up()
 	return ticket
 
 
@@ -455,6 +630,8 @@ func drop(decision: Decision) -> void:
 ## unwind.
 func release() -> void:
 	_inbox.clear()
+	_replay_left = 0
+	catching_up = false
 	for ticket: Ticket in _tickets.values():
 		_settle(ticket, null)
 
@@ -480,6 +657,7 @@ func _answer_up(id: int, number: int, seat: int, wire: Variant) -> void:
 
 ## Host: this answer is the next one, for every machine.
 func _relay(number: int, seat: int, wire: Variant) -> void:
+	_history.append([number, seat, wire])
 	_send(_answer_down, [_match_id, number, seat, wire])
 	_answer_down(_match_id, number, seat, wire)
 
@@ -500,13 +678,27 @@ func _deliver() -> void:
 		if _settled.has(number):
 			# Too late: someone else's LIAR! closed it first, on every machine.
 			_inbox.pop_front()
+			_replay_left = maxi(_replay_left - 1, 0)
 			continue
 		var ticket: Ticket = _tickets.get(number)
 		if ticket == null:
-			return
+			break
 		var answer: Array = _inbox.pop_front()
+		_replay_left = maxi(_replay_left - 1, 0)
 		if ticket.decision.player.id == answer[1]:
 			_settle(ticket, answer[2])
+	_check_caught_up()
+
+
+## Back in a match, this machine has used up the answers of the past and the
+## match is waiting for one that has not been given: it is where the others are.
+func _check_caught_up() -> void:
+	if catching_up and _replay_left == 0 and not _tickets.is_empty():
+		catching_up = false
+		caught_up.emit()
+		# What is open was held back while replaying: now it is asked.
+		for ticket: Ticket in _tickets.values():
+			ticket.controller.cover(ticket)
 
 
 # --- emotes ------------------------------------------------------------------------

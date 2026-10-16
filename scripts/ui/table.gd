@@ -14,6 +14,9 @@ const CROWDED_SEATS := {
 	6: [Vector2(141, 262), Vector2(291, 92), Vector2(481, 82), Vector2(671, 82), Vector2(861, 92), Vector2(1011, 262)],
 	7: [Vector2(141, 262), Vector2(196, 96), Vector2(386, 84), Vector2(576, 82), Vector2(766, 84), Vector2(956, 96), Vector2(1011, 262)],
 }
+## Events written down per frame while replaying a match this machine came
+## back to (see _replaying).
+const REPLAY_BATCH := 40
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const Board := preload("res://scripts/ui/saloon_board.gd")
@@ -224,6 +227,12 @@ var _table_notice := false
 ## The choices other players are taking their time over, in the open: the
 ## Decision -> the seat that shows it (see _on_asking).
 var _thinking: Dictionary = {}
+## Back in a match this machine had dropped out of (Room.catching_up): the
+## match is played again from the start and the table only writes it down,
+## with no animation, until it gets to where the others are (_end_replay).
+var _replaying := false
+var _skimmed := 0  # events written down while replaying
+var _skimmed_plays: Array = []  # the claims still open while replaying, in order
 
 
 func _ready() -> void:
@@ -258,7 +267,13 @@ func _ready() -> void:
 		engine.controllers[p.id] = controller
 	if _room != null:
 		_room.seat_left.connect(_on_seat_left)
+		_room.seat_back.connect(_on_seat_back)
+		_room.away_changed.connect(_on_away_changed)
 		_room.out_of_step.connect(_on_out_of_step)
+		if _room.catching_up:
+			_replaying = true
+			engine.hurry = true
+			_room.caught_up.connect(_end_replay)
 	engine.polled.connect(_on_polled)
 	engine.asking.connect(_on_asking)
 	engine.settled.connect(_on_settled)
@@ -268,6 +283,8 @@ func _ready() -> void:
 	_hero.bind(viewer)
 	_layout_seats()
 	_sync()
+	if _replaying:
+		_log_line(Loc.t("You are back. Catching up with the match..."), &"turn_started")
 	engine.run.call_deferred()
 
 
@@ -283,7 +300,30 @@ func _stand_in(p: PlayerState) -> BotController:
 
 
 func _on_seat_left(seat: int) -> void:
-	_log_line(Loc.t("%s left the room. A bot plays in their place.") % engine.players[seat].name, &"doubt_declared")
+	_log_line(Loc.t("%s left the room. Their seat waits for them, doing nothing.") % engine.players[seat].name, &"doubt_declared")
+
+
+## Shows on the box of `seat` what is done about it while its player is away.
+func _on_away_changed(seat: int) -> void:
+	var box: SeatView = _seats.get(seat)
+	if box != null and is_instance_valid(box):
+		box.set_away(_room.away_mode(seat), _room.hosting)
+
+
+## The host chose what becomes of the seat of `p`, who left. Kicking them out
+## cannot be taken back: it is asked again first.
+func _on_away_chosen(mode: StringName, p: PlayerState) -> void:
+	if _room == null or not _room.hosting:
+		return
+	if mode != &"kick":
+		_room.set_away(p.id, mode)
+		return
+	_confirm(Loc.t("Kick %s out of the match? Their cards go back into the deck, and they cannot come back to it.") % p.name,
+			"Kick", _room.set_away.bind(p.id, &"kick"))
+
+
+func _on_seat_back(seat: int) -> void:
+	_log_line(Loc.t("%s reconnected.") % engine.players[seat].name, &"coins")
 
 
 func _on_out_of_step(turn: int) -> void:
@@ -323,8 +363,10 @@ func _retranslate() -> void:
 func _process(delta: float) -> void:
 	_lift_hovered()
 	_track_keys()
-	_tick_clock(delta)
-	_tick_countdown(delta)
+	# Every clock stops while the match may be waiting on someone who left.
+	var running := 0.0 if _someone_away() else delta
+	_tick_clock(running)
+	_tick_countdown(running)
 	# A shop opened by hovering folds again once the mouse leaves it, unless
 	# it was pinned, one of its menus is still up or the keyboard is in it.
 	if not _shop_open or _shop_pinned or _popup.get_child_count() > 0 or _key_in_shop:
@@ -933,6 +975,7 @@ func _layout_seats() -> void:
 			seat.clicked.connect(_on_seat_clicked)
 			seat.item_clicked.connect(_on_seat_item_clicked)
 			seat.card_clicked.connect(_on_seat_card_clicked.bind(p))
+			seat.away_chosen.connect(_on_away_chosen.bind(p))
 			_table.add_child(seat)
 			_seats[p.id] = seat
 		var degrees := 270.0
@@ -2367,20 +2410,23 @@ func _toggle_pause() -> void:
 		asks = "Leave the match and go back to the menu? The room closes for everyone."
 	quit.pressed.connect(_confirm.bind(asks, "Quit to menu", leave))
 	if _room != null:
-		TipLayer.attach(quit, "Closes the room for everyone." if _room.hosting else "Leaves the room. A bot plays the rest of the match for you.")
+		TipLayer.attach(quit, "Closes the room for everyone." if _room.hosting else "Leaves the room. Your seat waits for you, unless the host gives it to a bot or kicks you out.")
 	box.add_child(quit)
 
 
 ## Asks again before something that cannot be taken back: `question`, and
 ## two buttons, the one that goes ahead (`yes`, which runs `action`) and the
-## one that does not. Shown over the pause menu.
+## one that does not. Shown over the pause menu, or over the table.
 func _confirm(question: String, yes: String, action: Callable) -> void:
-	if _pause == null or not is_instance_valid(_pause):
-		return
 	var veil := ColorRect.new()
 	veil.color = Color(0, 0, 0, 0.7)
 	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_pause.add_child(veil)
+	if _pause != null and is_instance_valid(_pause):
+		_pause.add_child(veil)
+	else:
+		# Asked from the table itself (kicking someone out).
+		veil.z_index = 20
+		add_child(veil)
 	var panel := PanelContainer.new()
 	Board.frame(panel, UI.RED, 24)
 	panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -2407,7 +2453,9 @@ func _confirm(question: String, yes: String, action: Callable) -> void:
 	var go := UI.button(yes, UI.RED, 18)
 	Board.plank(go, UI.RED)
 	go.custom_minimum_size = Vector2(170, 44)
-	go.pressed.connect(action)
+	go.pressed.connect(func() -> void:
+		veil.queue_free()
+		action.call())
 	row.add_child(go)
 	UI.pop(panel, 1.06, 0.15)
 
@@ -2480,6 +2528,18 @@ func _nothing(d: Decision) -> Variant:
 	return null
 
 
+## Whether a player still in the match left the room and their seat is waiting
+## for them (Room.away): until they come back, or the host has a bot play it
+## or kicks them, the clocks of the table stand still.
+func _someone_away() -> bool:
+	if _room == null:
+		return false
+	for seat: int in _room.away:
+		if _room.away[seat] == &"idle" and engine.players[seat].alive:
+			return true
+	return false
+
+
 ## Runs the clock of the turn being played and draws it round the box of its
 ## player. When it runs out on the viewer, their turn is ended for them.
 func _tick_clock(delta: float) -> void:
@@ -2549,6 +2609,11 @@ func _tick_table_clock(delta: float) -> void:
 # === presentation =============================================================
 
 func present(e: GameEvent) -> void:
+	if _replaying:
+		if e.type != &"game_over":
+			await _skim(e)
+			return
+		_end_replay()
 	var line := EventText.describe(e)
 	var d := e.data
 	# The roulette names its victim only once the cylinder has stopped.
@@ -2686,6 +2751,13 @@ func present(e: GameEvent) -> void:
 			if d.player == viewer:
 				_log_line(Loc.t("You are out. Click a player to see their hand."), &"coins")
 				_clear_hud()
+		&"player_kicked":
+			_float("KICKED", _anchor(d.player), UI.RED, 28)
+			var kicked: Variant = _node_of(d.player)
+			if kicked != null and not kicked.statuses_lost().is_empty():
+				_play_sfx("status_break")
+			_sync()
+			await _wait(0.9)
 		&"cards_changed":
 			await _anim_card_traded(d)
 		&"card_lost":
@@ -2772,6 +2844,53 @@ func present(e: GameEvent) -> void:
 	if _book != null:
 		_book.record(e)
 	_sync()
+
+
+## An event of the part of the match this machine is replaying: written
+## down, no more. A frame goes by now and then, for the window to breathe.
+func _skim(e: GameEvent) -> void:
+	var line := EventText.describe(e)
+	if line != "":
+		_log_line(line, e.type)
+	var d := e.data
+	match e.type:
+		&"claim_declared":
+			_claims_open += 1
+			_skimmed_plays.append(d.play)
+		&"claim_resolved":
+			_claims_open = maxi(_claims_open - 1, 0)
+			_skimmed_plays.erase(d.play)
+		&"card_peeked":
+			if d.viewer == viewer:
+				_log_line(Loc.t("You saw %s's %s.") % [d.owner.name, Content.character(d.card).display_name], &"coins")
+	if _book != null:
+		_book.record(e)
+	_skimmed += 1
+	if _skimmed % REPLAY_BATCH == 0:
+		await get_tree().process_frame
+
+
+## The replay got to where the others are: the table is drawn as the match
+## stands, and from here on everything is shown as it happens.
+func _end_replay() -> void:
+	if not _replaying:
+		return
+	_replaying = false
+	engine.hurry = false
+	_show_turn()
+	_set_active(engine.current)
+	_clock_turn = engine.turn_count
+	_clock_left = float(engine.config.turn_seconds)
+	_sync()
+	# What is still being played goes back on the stage.
+	for play: Play in _skimmed_plays:
+		_push_stage({"play": play, "arrow": null, "transient": false})
+	_skimmed_plays.clear()
+	for seat: int in _seats:
+		_on_away_changed(seat)
+	_log_line(Loc.t("You are back at the table."), &"turn_started")
+	if viewer != null and not viewer.alive:
+		_clear_hud()
 
 
 func _sync() -> void:

@@ -44,6 +44,9 @@ extends RefCounted
 ##     (see GameEngine.spend_morale): not a blow, so nothing gets to stop it
 ##   damage_dealt {source, target, play}
 ##   player_eliminated {player, killer, play}
+##   player_kicked {player}                     taken out of the match by the host
+##     of the room after leaving it (GameEngine.kick): cards back into the deck.
+##     Only shown and observed: no hooks, no reaction window
 ##   cards_changed {player, index, reason, old} / cards_swapped {a, a_index, b, b_index}
 ##     (old: the card that left, known to the table only when reason is
 ##     &"proven": it survived a doubt and was traded for a new one)

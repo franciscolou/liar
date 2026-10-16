@@ -53,6 +53,8 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s recovers %d Morale.") % [d.player.name, d.amount]
 		&"player_eliminated":
 			return Loc.t("%s is eliminated.") % d.player.name
+		&"player_kicked":
+			return Loc.t("%s was removed from the match. Their cards go back into the deck.") % d.player.name
 		&"cards_changed":
 			return Loc.t("%s draws a new card.") % d.player.name
 		&"card_lost":

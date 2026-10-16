@@ -7,7 +7,9 @@ func _initialize() -> void:
 	var failed := 0
 	for path in _walk("res://scripts") + _walk("res://scenes"):
 		if path.ends_with(".gd") or path.ends_with(".tscn"):
-			if load(path) == null:
+			var loaded: Resource = load(path)
+			# A script that does not parse still loads: it just cannot be used.
+			if loaded == null or (loaded is GDScript and not loaded.can_instantiate()):
 				failed += 1
 				print("FAILED ", path)
 	print("check done, %d failed" % failed)

@@ -11,13 +11,18 @@ extends Controller
 
 ## The lists of a TURN decision's options an answer may come from.
 const TURN_LISTS := ["abilities", "buy", "use", "discard", "extras"]
+## The answer, to whatever its player is being asked, that takes them out of
+## the match: the host gives it for a seat it was told to kick (Room.away).
+## Riding on an answer, it happens at the same point on every machine.
+const KICK := "kick"
 
 ## The screen of this machine, for the seat played on it. Null for a seat
 ## played somewhere else.
 var table: Node
 ## The room the match is played in (room.gd). Null offline.
 var room: Node
-## Host only: answers for the seat once its player has left the room.
+## Host only: answers for the seat once its player has left the room, if the
+## host has a bot play it (Room.away), and for what an empty seat cannot pass on.
 var stand_in: BotController
 
 var _turns := 0
@@ -27,10 +32,15 @@ func decide(decision: Decision) -> Variant:
 	if room == null:
 		return await table.request(decision)
 	var ticket: RefCounted = room.open(decision, self)
-	if not ticket.done:
+	# Replaying a match it came back to, this machine asks nobody: the answer
+	# is in what the host sent. If it is not, the room asks once it has caught up.
+	if not ticket.done and not room.catching_up:
 		_answer(ticket)
 	if not ticket.done:
 		await ticket.settled
+	if ticket.wire is String and ticket.wire == KICK:
+		await engine.kick(player)
+		return nothing(decision)
 	return from_wire(decision, ticket.wire)
 
 
@@ -50,7 +60,8 @@ func observe(event: GameEvent) -> void:
 		room.report(_turns, _fingerprint())
 
 
-## The host calls this for a decision left open by a player who walked away.
+## The host calls this for a decision left open by a player who walked away;
+## a machine that came back to a match, for what it held back while replaying.
 func cover(ticket: RefCounted) -> void:
 	if not ticket.done:
 		_answer(ticket)
@@ -58,16 +69,43 @@ func cover(ticket: RefCounted) -> void:
 
 ## Finds the answer to `ticket` where this machine is the one to give it.
 func _answer(ticket: RefCounted) -> void:
+	if ticket.asked:
+		return
 	var decision: Decision = ticket.decision
 	var answer: Variant
 	if table != null:
+		ticket.asked = true
 		answer = await table.request(decision)
 	elif stand_in != null and room.absent(player.id):
+		var mode: StringName = room.away_mode(player.id)
+		if mode == &"idle":
+			# Nobody answers for someone who may still come back: the match
+			# waits for them, or for the host to have a bot play the seat or to
+			# kick them (then what is open is covered again).
+			return
+		ticket.asked = true
+		if mode == &"kick":
+			# Out of the match as the answer to what it is being asked.
+			if not ticket.done and not engine.aborted:
+				room.submit(ticket, KICK)
+			return
 		answer = await stand_in.decide(decision)
 	else:
 		return
 	if not ticket.done and not engine.aborted:
 		room.submit(ticket, to_wire(decision, answer))
+
+
+## The answer of someone who does nothing: end the turn, pass, cancel.
+static func nothing(d: Decision) -> Variant:
+	match d.kind:
+		Decision.Kind.TURN:
+			return {"kind": &"end"}
+		Decision.Kind.DOUBT:
+			return false
+		Decision.Kind.PICK:
+			return -1
+	return null
 
 
 func _fingerprint() -> int:

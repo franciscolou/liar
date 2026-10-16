@@ -52,11 +52,16 @@ var aborted := false
 var last_action: Ability
 ## Set by the table so bots can take a breath; null in headless runs.
 var tree: SceneTree
+## Bots don't take a breath either while the table is replaying a match it
+## came back to (Room.catching_up).
+var hurry := false
 
 var _reaction_depth := 0
 ## How many plays are being made ready and not announced yet (their target,
 ## whatever prepare() asks): what is asked meanwhile is the asker's secret.
 var _unannounced := 0
+## How many decisions have been asked so far (see _reaction_window).
+var _asks := 0
 ## The plays whose resolve() is running, innermost last.
 var _resolving: Array = []
 
@@ -201,7 +206,10 @@ func _reaction_window(event: GameEvent) -> void:
 				asked = true
 			if choice == null:
 				break
-			again = not await _react(p, choice, event) and asked and not p.is_bot
+			# Only if they did back out of something: a reaction that came to
+			# nothing without asking them anything would be offered forever.
+			var asks := _asks
+			again = not await _react(p, choice, event) and asked and not p.is_bot and _asks != asks
 
 
 ## `player` answers `event` with reaction option `choice`. False if they
@@ -372,7 +380,7 @@ func reaction_options(player: PlayerState, event: GameEvent) -> Array:
 			if cause != null and cause.source == ability and cause.actor == player and not ability.self_chain:
 				continue
 			var option := ability_option(player, ability)
-			if option.enabled:
+			if option.enabled and _has_targets(player, ability, event):
 				out.append(option)
 	for instance: ItemInstance in player.items:
 		var def := instance.def
@@ -380,6 +388,12 @@ func reaction_options(player: PlayerState, event: GameEvent) -> Array:
 			if item_lock_reason(instance) == "" and blocked_reason(player, def.tags) == "" and def.can_use(player, self) == "":
 				out.append({"kind": &"item", "item": instance, "enabled": true, "reason": ""})
 	return out
+
+
+## Whether `ability`, claimed by `player` in answer to `event`, would have
+## anyone to aim at. One with nobody would be offered only to come to nothing.
+func _has_targets(player: PlayerState, ability: Ability, event: GameEvent) -> bool:
+	return ability.targeting == Playable.Targeting.NONE or not _candidates_for(player, ability, event).is_empty()
 
 
 # --- decisions ---------------------------------------------------------------
@@ -396,6 +410,7 @@ func ask(decision: Decision) -> Variant:
 	# announced: that somebody is choosing a card to give up tells of a bluff.
 	if _unannounced > 0:
 		decision.context["private"] = true
+	_asks += 1
 	asking.emit(decision)
 	var answer: Variant = await controllers[decision.player.id].decide(decision)
 	settled.emit(decision)
@@ -441,7 +456,7 @@ func abort() -> void:
 
 ## Lets bots hesitate when there is a table to watch.
 func think(seconds: float) -> void:
-	if tree != null and seconds > 0.0 and not aborted:
+	if tree != null and seconds > 0.0 and not aborted and not hurry:
 		await tree.create_timer(seconds / maxf(config.anim_speed, 0.1)).timeout
 
 
@@ -1198,6 +1213,35 @@ func heal(player: PlayerState, amount: int) -> bool:
 	await fire(&"morale_gained", {"player": player, "amount": healed})
 	await _fit_hand(player)
 	return true
+
+
+## `player` is taken out of the match by the host of the room, having left it
+## (Room.away). Nothing of theirs stays on the table: the cards go back into
+## the deck, which is shuffled, and the coins to the bank. It is nobody's
+## doing, so nobody gets anything out of it. It comes as the answer to
+## whatever they were being asked, in the middle of anything, so the table is
+## told and nothing else: no hooks, no window to react to it.
+func kick(player: PlayerState) -> void:
+	if not player.alive or over:
+		return
+	player.alive = false
+	player.morale = 0
+	player.coins = 0
+	deck.append_array(player.cards)
+	player.cards.clear()
+	_shuffle(deck)
+	player.items.clear()
+	player.statuses.clear()
+	var alive := alive_players()
+	if alive.size() <= 1:
+		over = true
+		winner = alive[0] if alive.size() == 1 else null
+	var event := GameEvent.new(&"player_kicked", {"player": player})
+	for controller in controllers:
+		if controller != null:
+			controller.observe(event)
+	for observer in observers:
+		await observer.present(event)
 
 
 func _eliminate(player: PlayerState, killer: PlayerState, play: Play) -> void:

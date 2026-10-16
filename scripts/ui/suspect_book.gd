@@ -119,6 +119,11 @@ const HINTS := {
 	AUTO: "Kept by the book itself, from what happens at the table. Hover a card to see why.",
 	MANUAL: "Yours to fill in: click a card to change its mark, right click to clear it.",
 }
+## The same, for a finger.
+const TOUCH_HINTS := {
+	AUTO: "Kept by the book itself, from what happens at the table. Hold a finger on a card to see why.",
+	MANUAL: "Yours to fill in: tap a card to change its mark.",
+}
 
 ## The page the book is on. It outlives the match: whoever likes one page
 ## finds the book on it in the next.
@@ -396,7 +401,7 @@ func _rebuild() -> void:
 	var right := COVER + PAGE_WIDTH
 	var page_top := TAB_RISE + COVER
 	var foot := page_top + _page_height - FOOTER
-	_hint.text = HINTS[mode]
+	_hint.text = TOUCH_HINTS[mode] if UI.touch else HINTS[mode]
 	_hint.position = Vector2(COVER + MARGIN, foot)
 	_legend.position = Vector2(right + GUTTER, foot + FOOTER - 26.0)
 	_wipe.visible = mode == MANUAL

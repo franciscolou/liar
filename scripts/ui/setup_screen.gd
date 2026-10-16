@@ -17,6 +17,7 @@ const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
 const Desk := preload("res://scripts/ui/noir_desk.gd")
+const TouchMode := preload("res://scripts/ui/touch_mode.gd")
 const ROOM_SCENE := "res://scenes/room.tscn"
 ## Width of the character grid, and the most cards it shows in a single row.
 const GRID_WIDTH := 664.0
@@ -186,6 +187,9 @@ func _ready() -> void:
 	Settings.ensure_loaded()
 	theme = UI.theme()
 	Jukebox.play(Jukebox.LOBBY)
+	var touch := TouchMode.node()
+	if touch != null:
+		touch.held.connect(_on_held)
 	Content.ensure_loaded()
 	_room = Room.current
 	if _room == null:
@@ -624,6 +628,14 @@ func _read_character(character_id: StringName, asked: bool) -> void:
 		_redraw_reader()
 
 
+## A finger held on a card does what a right click does.
+func _on_held(control: Control) -> void:
+	for id: StringName in _cards:
+		if _cards[id] == control:
+			_read_character(id, true)
+			return
+
+
 func _on_card_input(event: InputEvent, character_id: StringName) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		_read_character(character_id, true)
@@ -637,7 +649,7 @@ func _redraw_reader() -> void:
 	_ghosts.visible = not _rules_open
 	_place_file()
 	var def := Content.character(_read) if _read != &"" else null
-	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Hover a character to read its abilities here.")]
+	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Tap a character to read its abilities here." if UI.touch else "Hover a character to read its abilities here.")]
 	if def != null:
 		text = UI.character_tip(def, _cards[_read].note)
 	text = Desk.in_ink(text)
@@ -762,6 +774,9 @@ func _build_case() -> void:
 		card.tips = false
 		card.mouse_entered.connect(_read_character.bind(def.id, false))
 		card.gui_input.connect(_on_card_input.bind(def.id))
+		if UI.touch:
+			# No hover: a tap reads the character too.
+			card.clicked.connect(_read_character.bind(def.id, false))
 		if _host:
 			card.clicked.connect(_toggle_character.bind(def.id))
 		grid.add_child(card)

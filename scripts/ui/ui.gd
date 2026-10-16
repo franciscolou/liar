@@ -46,6 +46,11 @@ const REROLL_ICON := [
 ## corners of the card back.
 const CARD_CORNER := [3, 2, 1]
 
+## Played by touch rather than mouse and keyboard: a phone, or a computer told
+## to act like one. Decided and switched by `TouchMode` (`touch_mode.gd`);
+## widgets only read it, at the moment they handle an event or lay themselves out.
+static var touch := false
+
 static var _theme: Theme
 static var _queasy: Shader
 static var _font: Font

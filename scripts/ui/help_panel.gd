@@ -42,7 +42,8 @@ const BOOK := [
 	".###.###.",
 ]
 
-## tab, title, text and task are translation keys (text and task as BBCode);
+## tab, title, text and task are translation keys (text and task as BBCode;
+## touch and touch_task, when there are, are the ones for a finger);
 ## build is the method that sets the stage.
 const LESSONS := [
 	{
@@ -50,6 +51,7 @@ const LESSONS := [
 		"title": "Everyone lies in Carcaj",
 		"text": "Each player holds [b]character cards[/b] that nobody else sees.\n\nOn your turn you may [color=#e6bc4c]claim[/color] the ability of [b]any[/b] character in the match. The cards in your hand only decide which abilities are legitimate.\n\nWhoever hears a claim may answer it with [color=#c8402f]LIAR![/color]\n\nThe last player with Morale left becomes the new owner of Carcaj.",
 		"task": "Click your two cards to look at them.",
+		"touch_task": "Tap your two cards to look at them.",
 		"build": &"_lesson_cards",
 	},
 	{
@@ -77,6 +79,7 @@ const LESSONS := [
 		"tab": "SHOP",
 		"title": "One shop for the whole table",
 		"text": "The shop sits in the corner next to the deck. Hover it to open, click it to keep it open. A double click or a right click on an item buys it right away.\n\n[color=#e6bc4c]•[/color] [b]Active[/b] items are used on your turn, from your inventory.\n[color=#e6bc4c]•[/color] [b]Passive[/b] items work by themselves while you hold them.\n[color=#e6bc4c]•[/color] [b]Reaction[/b] items are offered the moment they can be used.\n\nA reroll replaces every slot; what is marked ALWAYS never leaves the shelf.",
+		"touch": "The shop sits in the corner next to the deck. Tap it to open or close it. A double tap on an item buys it right away.\n\n[color=#e6bc4c]•[/color] [b]Active[/b] items are used on your turn, from your inventory.\n[color=#e6bc4c]•[/color] [b]Passive[/b] items work by themselves while you hold them.\n[color=#e6bc4c]•[/color] [b]Reaction[/b] items are offered the moment they can be used.\n\nA reroll replaces every slot; what is marked ALWAYS never leaves the shelf.",
 		"task": "Buy an item.",
 		"build": &"_lesson_shop",
 	},
@@ -84,6 +87,7 @@ const LESSONS := [
 		"tab": "THE TABLE",
 		"title": "Know your way around",
 		"text": "This is the table as you will see it in a match.\n\nHover anything in the game for details: cards, items, statuses, buttons.\n\nEsc or a right click cancels a target. F11 toggles fullscreen.",
+		"touch": "This is the table as you will see it in a match.\n\nHold a finger on anything in the game for details: cards, items, statuses, buttons.\n\nThe back button cancels a target.",
 		"task": "Point at every part of the table.",
 		"build": &"_lesson_table",
 	},
@@ -273,7 +277,8 @@ func _show(index: int) -> void:
 	_s = {}
 	_note.text = ""
 	_title.text = Loc.t(lesson.title)
-	_text.text = Loc.t(lesson.text)
+	# A lesson whose text speaks of the mouse has one for a finger.
+	_text.text = Loc.t(lesson.touch if UI.touch and lesson.has("touch") else lesson.text)
 	_count.text = "%d / %d" % [index + 1, LESSONS.size()]
 	call(lesson.build)
 	_refresh()
@@ -293,7 +298,7 @@ func _refresh() -> void:
 	var lesson: Dictionary = LESSONS[_index]
 	var done: bool = _done[_index]
 	var ink := UI.GREEN if done else UI.GOLD
-	_task.text = "[b][color=%s]%s[/color][/b]\n%s" % [UI.hex(ink), Loc.t("DONE" if done else "TRY IT"), Loc.t(lesson.task)]
+	_task.text = "[b][color=%s]%s[/color][/b]\n%s" % [UI.hex(ink), Loc.t("DONE" if done else "TRY IT"), Loc.t(lesson.touch_task if UI.touch and lesson.has("touch_task") else lesson.task)]
 	_task_box.set_meta(&"board_fill", ink.darkened(0.8))
 	_task_box.set_meta(&"board_edge", ink.darkened(0.3))
 	_task_box.queue_redraw()
@@ -375,7 +380,7 @@ func _lesson_cards() -> void:
 			if seen.has(false):
 				_say(Loc.t("One more."))
 				return
-			_say(Loc.t("You hold the [b]%s[/b] and the [b]%s[/b]: those you can claim at no risk at all. Any other character, only by bluffing. Hover a card to read its abilities.") % [_named(HAND[0]), _named(HAND[1])])
+			_say(Loc.t("You hold the [b]%s[/b] and the [b]%s[/b]: those you can claim at no risk at all. Any other character, only by bluffing. Hold a finger on a card to read its abilities." if UI.touch else "You hold the [b]%s[/b] and the [b]%s[/b]: those you can claim at no risk at all. Any other character, only by bluffing. Hover a card to read its abilities.") % [_named(HAND[0]), _named(HAND[1])])
 			_complete())
 	_tag("ALSO IN THIS MATCH", Vector2(292, 16))
 	for i: int in OTHERS.size():
@@ -408,7 +413,7 @@ func _lesson_turn() -> void:
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		card.clicked.connect(_turn_open.bind(card, held))
 		_s.cards.append(card)
-	_say(Loc.t("It is your turn. Click a card, yours or not, to see what you can claim with it."))
+	_say(Loc.t("It is your turn. Tap a card, yours or not, to see what you can claim with it." if UI.touch else "It is your turn. Click a card, yours or not, to see what you can claim with it."))
 
 
 ## The menu of a character, as on the table: its abilities, each with what it
@@ -781,7 +786,7 @@ func _lesson_shop() -> void:
 		socket.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_stage.add_child(socket)
 	_shop_stock()
-	_say(Loc.t("The shelf is the same for everybody: what you buy, nobody else can. Click an item to buy it, or hover it to read what it does."))
+	_say(Loc.t("The shelf is the same for everybody: what you buy, nobody else can. Tap an item to buy it, or hold a finger on it to read what it does." if UI.touch else "The shelf is the same for everybody: what you buy, nobody else can. Click an item to buy it, or hover it to read what it does."))
 
 
 func _coin(at: Vector2) -> TextureRect:
@@ -860,7 +865,7 @@ func _shop_buy(slot: int) -> void:
 		ItemDef.Kind.REACTION:
 			_say(Loc.t("You buy the [b]%s[/b], a [b]reaction[/b] item: the game offers it the moment it can be used. A new item takes its place on the shelf.") % def.display_name)
 		_:
-			_say(Loc.t("You buy the [b]%s[/b], an [b]active[/b] item: on your turn, click it in your inventory to use it. A new item takes its place on the shelf.") % def.display_name)
+			_say(Loc.t("You buy the [b]%s[/b], an [b]active[/b] item: on your turn, tap it in your inventory to use it. A new item takes its place on the shelf." if UI.touch else "You buy the [b]%s[/b], an [b]active[/b] item: on your turn, click it in your inventory to use it. A new item takes its place on the shelf.") % def.display_name)
 	_complete()
 
 

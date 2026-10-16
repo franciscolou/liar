@@ -178,7 +178,7 @@ func setup(d: Decision) -> void:
 		var back := UI.button("Back to the table", UI.BORDER, 15)
 		back.size = Vector2(210, 34)
 		back.position = Vector2(CENTRE.x - 105.0, SIZE.y - 46.0)
-		TipLayer.attach(back, "Leave without claiming anything (Esc or right click). You can come back as often as you like.")
+		TipLayer.attach(back, "Leave without claiming anything. You can come back as often as you like." if UI.touch else "Leave without claiming anything (Esc or right click). You can come back as often as you like.")
 		# A word in the dark, with a thin line under it: no plate.
 		for state: String in ["normal", "hover", "pressed", "focus"]:
 			var line := StyleBoxFlat.new()

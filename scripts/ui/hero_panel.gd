@@ -215,7 +215,7 @@ func sync() -> void:
 	var my_turn := _options != null
 	_end_turn.disabled = not my_turn
 	_strip_hint.text = ("YOUR MOVE: play a card from your hand, or bluff with one of these."
-			if my_turn else "OTHER CHARACTERS IN THIS MATCH (click for details)")
+			if my_turn else "OTHER CHARACTERS IN THIS MATCH (tap for details)" if UI.touch else "OTHER CHARACTERS IN THIS MATCH (click for details)")
 	_strip_hint.add_theme_color_override("font_color", UI.GOLD if my_turn else UI.MUTED)
 	for character_id: StringName in _strip_cards:
 		var card: CardView = _strip_cards[character_id]
@@ -476,7 +476,7 @@ func _sync_inventory() -> void:
 		elif option != null and not option.enabled and instance.def.kind == ItemDef.Kind.ACTIVE:
 			view.note = option.reason
 		elif usable:
-			view.note = "Double click or right click to use."
+			view.note = "Double tap to use." if UI.touch else "Double click or right click to use."
 		view.clicked.connect(func(): item_clicked.emit(instance, view))
 		view.picked.connect(func():
 			item_picked.emit(instance)

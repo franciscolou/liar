@@ -44,18 +44,40 @@ func _exit_tree() -> void:
 
 
 ## `text` is a BBCode String (translated on hover if it is a Loc key), or a
-## Callable returning one, evaluated on hover.
+## Callable returning one, evaluated on hover. In touch mode a hover shows
+## nothing (a tapped control would keep its tooltip up): a held finger does,
+## through `explain`.
 static func attach(control: Control, text: Variant) -> void:
+	control.set_meta(&"tip", text)
 	control.mouse_entered.connect(func():
-		if current != null:
-			var content: String = text.call() if text is Callable else Loc.t(text)
-			current.show_tip(control, content))
+		if current != null and not UI.touch:
+			current.show_tip(control, _content(text)))
 	control.mouse_exited.connect(func():
 		if current != null:
 			current.hide_tip(control))
 	control.tree_exiting.connect(func():
 		if current != null:
 			current.hide_tip(control))
+
+
+## Shows the tooltip of `control`, or of the nearest control holding it that
+## has one. Whether there was one to show.
+static func explain(control: Control) -> bool:
+	if current == null:
+		return false
+	var node: Node = control
+	while node is Control:
+		if node.has_meta(&"tip"):
+			var content := _content(node.get_meta(&"tip"))
+			if content != "":
+				current.show_tip(node, content)
+				return true
+		node = node.get_parent()
+	return false
+
+
+static func _content(text: Variant) -> String:
+	return text.call() if text is Callable else Loc.t(text)
 
 
 func show_tip(control: Control, bbcode: String) -> void:

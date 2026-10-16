@@ -578,7 +578,7 @@ func _build_shop() -> void:
 	_shop_bg = ShopStall.new()
 	_shop_bg.tray = SHOP_DECK_WIDTH
 	_shop_bg.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_shop_bg.mouse_entered.connect(_set_shop_open.bind(true))
+	_shop_bg.mouse_entered.connect(_hover_shop)
 	_shop_bg.gui_input.connect(_on_shop_bg_input)
 	_shop.add_child(_shop_bg)
 
@@ -587,7 +587,7 @@ func _build_shop() -> void:
 	var deck := CardView.new(0.52)
 	deck.position = Vector2(deck_x + 16, 24)
 	deck.interactive = false
-	deck.mouse_entered.connect(_set_shop_open.bind(true))
+	deck.mouse_entered.connect(_hover_shop)
 	_shop.add_child(deck)
 	TipLayer.attach(deck, "[b]Deck[/b]\nCharacters nobody holds. The cards of eliminated players stay on the table.")
 	var deck_title := UI.label("DECK", 11, UI.MUTED, true)
@@ -734,13 +734,28 @@ func _set_shop_open(open: bool, instant := false) -> void:
 
 func _restyle_shop() -> void:
 	_shop_bg.pinned = _shop_pinned
-	_shop_hint.text = "pinned · click to unpin" if _shop_pinned else "click to keep open"
+	if UI.touch:
+		_shop_hint.text = "tap to close"
+	else:
+		_shop_hint.text = "pinned · click to unpin" if _shop_pinned else "click to keep open"
+
+
+## The shop opens under the mouse. Not under a finger: a tap opens and
+## closes it (`_on_shop_bg_input`).
+func _hover_shop() -> void:
+	if not UI.touch:
+		_set_shop_open(true)
 
 
 func _on_shop_bg_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_shop_pinned = not _shop_pinned
-		_set_shop_open(true)
+		if UI.touch:
+			# Open is pinned: a finger cannot leave the shop to fold it.
+			_shop_pinned = not _shop_open
+			_set_shop_open(_shop_pinned)
+		else:
+			_shop_pinned = not _shop_pinned
+			_set_shop_open(true)
 		_restyle_shop()
 
 
@@ -1282,7 +1297,7 @@ func _clear_hud() -> void:
 		step = minf(step, (ONLOOKER_WIDTH - card_size.x) / (cast.size() - 1))
 	var row_width := card_size.x + step * maxi(cast.size() - 1, 0)
 	# Never narrower than what is written across the top of it.
-	var heading_text := Loc.t("CHARACTERS IN THIS MATCH (click for details)")
+	var heading_text := Loc.t("CHARACTERS IN THIS MATCH (tap for details)" if UI.touch else "CHARACTERS IN THIS MATCH (click for details)")
 	var heading_width := UI.bold().get_string_size(heading_text, HORIZONTAL_ALIGNMENT_LEFT, -1, roundi(11 * UI.FONT_SCALE)).x
 	var width := maxf(row_width, ceilf(heading_width)) + 24.0
 	var shelf := Panel.new()
@@ -1368,6 +1383,12 @@ func _sync_peek() -> void:
 		seat.set_peekable(on and seat.player.alive)
 
 
+func _target_hint(d: Decision) -> String:
+	if UI.touch:
+		return "Tap a highlighted player."
+	return "Click a highlighted player. Esc or right click cancels." if d.cancellable else "Click a highlighted player."
+
+
 func _prompt_target(d: Decision) -> void:
 	for p: PlayerState in d.options:
 		if _seats.has(p.id):
@@ -1375,7 +1396,7 @@ func _prompt_target(d: Decision) -> void:
 	var buttons := []
 	if d.cancellable:
 		buttons.append({"text": "Cancel", "action": _answer.bind(null)})
-	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click a highlighted player. Esc or right click cancels." if d.cancellable else "Click a highlighted player.")], buttons)
+	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t(_target_hint(d))], buttons)
 
 
 func _prompt_doubt(d: Decision) -> void:
@@ -1939,7 +1960,11 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 		b.pressed.connect(spec.action)
 		if spec.has("tip"):
 			TipLayer.attach(b, spec.tip)
-		if spec.has("dooms"):
+		if spec.has("dooms") and UI.touch:
+			# No hover to warn on: the warning stands while the button does.
+			_threaten.call_deferred(spec.dooms.player, spec.dooms.statuses, true)
+			b.tree_exiting.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, false))
+		elif spec.has("dooms"):
 			b.mouse_entered.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, true))
 			b.mouse_exited.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, false))
 		row.add_child(b)
@@ -2934,7 +2959,7 @@ func _sync_shop() -> void:
 		if entry.slot < 0:
 			notes.append(Loc.t("Always on sale."))
 		if option != null:
-			notes.append(Loc.t("Double click or right click to buy.") if option.enabled else option.reason)
+			notes.append(Loc.t("Double tap to buy." if UI.touch else "Double click or right click to buy.") if option.enabled else option.reason)
 		entry.view.note = " ".join(notes)
 	var reroll: Variant = options.reroll if options != null else null
 	for node: Control in [_shop_reroll, _shop_reroll_coin, _shop_reroll_price]:

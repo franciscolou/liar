@@ -45,7 +45,10 @@ func _ready() -> void:
 	add_child(Desk.quill(Vector2(1010, 478), -1.2))
 	add_child(TipLayer.new())
 
-	var plaque: Desk = Desk.make(Desk.Kind.PLAQUE, Rect2(20, 12, 310, 46))
+	# On a phone (touch mode) the plates and papers are bigger, for the bigger
+	# text, and what the papers explain is said shorter.
+	var touch := UI.touch
+	var plaque: Desk = Desk.make(Desk.Kind.PLAQUE, Rect2(20, 12, 430, 58) if touch else Rect2(20, 12, 310, 46))
 	add_child(plaque)
 	var title := Desk.written("FIND A TABLE", 30, UI.INK, true)
 	title.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -66,7 +69,7 @@ func _ready() -> void:
 	_name = _field(Settings.player_name, "Player", Room.NAME_LENGTH)
 	_name.position = who.plate.position
 	_name.size = who.plate.size
-	_name.add_theme_font_size_override("font_size", 36)
+	_name.add_theme_font_size_override("font_size", UI.grow(36))
 	_name.add_theme_font_override("font", UI.bold())
 	Desk.line(_name, UI.INK, false)
 	_name.add_theme_color_override("font_uneditable_color", Color(UI.INK, 0.6))
@@ -79,7 +82,7 @@ func _ready() -> void:
 	TipLayer.attach(_name, "Click to change your name.")
 
 	# The two things to do here are two papers on the desk.
-	var deed: Desk = Desk.make(Desk.Kind.SHEET, Rect2(204, 190, 352, 320))
+	var deed: Desk = Desk.make(Desk.Kind.SHEET, Rect2(192, 182, 392, 384) if touch else Rect2(204, 190, 352, 320))
 	deed.rotation = -0.03
 	deed.aged = true
 	deed.torn = true
@@ -90,31 +93,34 @@ func _ready() -> void:
 	# What the pen left on it: all of it out by the edges, clear of the writing.
 	deed.inked = [Vector3(330, 164, 3), Vector3(22, 258, 4), Vector3(334, 232, 2), Vector3(96, 302, -84), Vector3(170, 14, -46)]
 	var hosting := _write_on(deed, "CREATE A ROOM")
-	hosting.add_child(_text("The match runs on this computer. Your friends join by your address: the same network, or a VPN such as Radmin VPN.\n\nEmpty seats can be filled with bots."))
+	if touch:
+		hosting.add_child(_text("The match runs on this device. Friends on the same Wi-Fi join by your address.\n\nEmpty seats can be filled with bots."))
+	else:
+		hosting.add_child(_text("The match runs on this computer. Your friends join by your address: the same network, or a VPN such as Radmin VPN.\n\nEmpty seats can be filled with bots."))
 	_create = UI.button("CREATE ROOM", UI.BORDER, 22)
-	_create.custom_minimum_size = Vector2(0, 52)
+	_create.custom_minimum_size = Vector2(0, 64 if touch else 52)
 	Desk.stamp(_create)
 	_create.pressed.connect(_on_create)
 	hosting.add_child(_create)
 	_create_note = _note()
 	hosting.add_child(_create_note)
 
-	var wire: Desk = Desk.make(Desk.Kind.SHEET, Rect2(596, 196, 352, 320))
+	var wire: Desk = Desk.make(Desk.Kind.SHEET, Rect2(606, 188, 392, 384) if touch else Rect2(596, 196, 352, 320))
 	wire.rotation = 0.025
 	wire.tone = Desk.OLD_TELEGRAM
 	wire.aged = true
 	wire.bordered = true
 	wire.inked = [Vector3(328, 44, 4), Vector3(24, 284, 3), Vector3(22, 120, 2), Vector3(188, 296, -96), Vector3(240, 18, -52)]
 	var joining := _write_on(wire, "JOIN A ROOM")
-	joining.add_child(_text("Ask whoever created the room for the address shown in their lobby and type it here."))
+	joining.add_child(_text("Type the address shown in the lobby of whoever created the room." if touch else "Ask whoever created the room for the address shown in their lobby and type it here."))
 	_address = _field(Settings.last_address, "26.0.0.0", 64)
-	_address.custom_minimum_size = Vector2(0, 40)
-	_address.add_theme_font_size_override("font_size", 24)
+	_address.custom_minimum_size = Vector2(0, 54 if touch else 40)
+	_address.add_theme_font_size_override("font_size", UI.grow(24))
 	Desk.line(_address)
 	_address.text_submitted.connect(func(_text: String): _on_join())
 	joining.add_child(_address)
 	_join = UI.button("JOIN ROOM", UI.BORDER, 22)
-	_join.custom_minimum_size = Vector2(0, 52)
+	_join.custom_minimum_size = Vector2(0, 64 if touch else 52)
 	Desk.stamp(_join)
 	_join.pressed.connect(_on_join)
 	joining.add_child(_join)
@@ -126,14 +132,14 @@ func _ready() -> void:
 	Room.notice = ""
 
 	var back := UI.button("BACK", UI.BORDER, 20)
-	back.position = Vector2(24, 586)
-	back.size = Vector2(150, 46)
+	back.size = UI.grown(Vector2(150, 46))
+	back.position = Vector2(24, 632 - back.size.y)
 	Desk.brass(back)
 	back.pressed.connect(_on_back)
 	add_child(back)
 	var settings := UI.button("SETTINGS", UI.BORDER, 20)
-	settings.position = Vector2(958, 12)
-	settings.size = Vector2(170, 46)
+	settings.size = UI.grown(Vector2(170, 46))
+	settings.position = Vector2(1128 - settings.size.x, 12)
 	Desk.brass(settings)
 	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
 	add_child(settings)
@@ -176,7 +182,7 @@ func _field(text: String, hint: String, length: int) -> LineEdit:
 	edit.text = text
 	edit.placeholder_text = hint
 	edit.max_length = length
-	edit.add_theme_font_size_override("font_size", 20)
+	edit.add_theme_font_size_override("font_size", UI.grow(20))
 	return edit
 
 

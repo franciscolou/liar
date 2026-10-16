@@ -176,8 +176,8 @@ func setup(d: Decision) -> void:
 
 	if d.cancellable:
 		var back := UI.button("Back to the table", UI.BORDER, 15)
-		back.size = Vector2(210, 34)
-		back.position = Vector2(CENTRE.x - 105.0, SIZE.y - 46.0)
+		back.size = UI.grown(Vector2(210, 34))
+		back.position = Vector2(CENTRE.x - back.size.x / 2.0, SIZE.y - 12.0 - back.size.y)
 		TipLayer.attach(back, "Leave without claiming anything. You can come back as often as you like." if UI.touch else "Leave without claiming anything (Esc or right click). You can come back as often as you like.")
 		# A word in the dark, with a thin line under it: no plate.
 		for state: String in ["normal", "hover", "pressed", "focus"]:

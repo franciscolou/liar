@@ -95,7 +95,7 @@ func show_tip(control: Control, bbcode: String) -> void:
 	await get_tree().process_frame
 	if _owner != control or not is_instance_valid(control):
 		return
-	_text.custom_minimum_size = Vector2(minf(ceilf(_text.get_content_width()), MAX_WIDTH), 0)
+	_text.custom_minimum_size = Vector2(minf(ceilf(_text.get_content_width()), UI.grow(MAX_WIDTH)), 0)
 	_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	await get_tree().process_frame
 	if _owner != control or not is_instance_valid(control):

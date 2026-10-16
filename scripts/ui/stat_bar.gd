@@ -87,17 +87,17 @@ func _notification(what: int) -> void:
 
 
 func coin_center() -> Vector2:
-	return _coin_icon.global_position + _coin_icon.size / 2.0
+	return _coin_icon.get_global_transform() * (_coin_icon.size / 2.0)
 
 
 func hearts_center() -> Vector2:
-	return _hearts.global_position + _hearts.size / 2.0
+	return _hearts.get_global_transform() * (_hearts.size / 2.0)
 
 
 ## The middle of the Morale point at `index`, counted from the left.
 func heart_center(index: int) -> Vector2:
 	var step := _icon_size + 1.0
-	return _hearts.global_position + Vector2(step * maxi(index, 0) + _icon_size / 2.0, _hearts.size.y / 2.0)
+	return _hearts.get_global_transform() * Vector2(step * maxi(index, 0) + _icon_size / 2.0, _hearts.size.y / 2.0)
 
 
 func _icon(path: String) -> TextureRect:

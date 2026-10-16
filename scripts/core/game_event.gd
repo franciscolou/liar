@@ -55,8 +55,9 @@ extends RefCounted
 ##   card_peeked {viewer, owner, index, card}   private to the viewer
 ##   before_hand_reach {owner, by, how}         cancellable: `by` is about to see,
 ##     take or replace cards of `owner` (how: &"peek", &"swap", &"recall";
-##     see GameEngine.reach_hand)
-##   hand_missed {owner, by, how}               it was cancelled: the hand stays as it is
+##     see GameEngine.reach_hand). A recall asks every hand, copy or not, and
+##     adds `card`, the character named
+##   hand_missed {owner, by, how[, card]}       it was cancelled: the hand stays as it is
 ##   before_item_reach {owner, by, how}         cancellable: `by` is about to take or
 ##     destroy an item of `owner` (how: &"steal", &"break"; see GameEngine.reach_items)
 ##   items_missed {owner, by, how}              it was cancelled: the items stay as they are

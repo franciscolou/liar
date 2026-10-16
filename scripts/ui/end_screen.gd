@@ -12,6 +12,9 @@ const PLATE_INK := Color("d9935c")
 const ROW := Vector2(247, 578)
 const ROW_PLATE := Vector2(210, 48)
 const ROW_GAP := 14.0
+## Touch mode: wider and taller plates, for the bigger words and a thumb.
+const TOUCH_ROW := Vector2(112, 574)
+const TOUCH_ROW_PLATE := Vector2(300, 62)
 
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
@@ -50,7 +53,7 @@ func _ready() -> void:
 	$Label.text = Loc.t("%s now holds\nCarcaj's crown.") % winner if winner != "" else Loc.t("Nobody is left\nto take the crown.")
 	$Label.add_theme_color_override("font_color", UI.GOLD)
 	$Label.add_theme_font_override("font", UI.bold())
-	$Label.add_theme_font_size_override("font_size", 40)
+	$Label.add_theme_font_size_override("font_size", UI.grow(40))
 	lobby_button = Button.new()
 	lobby_button.position = Vector2(686, 381)
 	lobby_button.size = Vector2(329, 61)
@@ -69,15 +72,15 @@ func _ready() -> void:
 		again_button.disabled = true
 		again_button.mouse_default_cursor_shape = Control.CURSOR_ARROW
 		var waiting := UI.label("Only the host can deal again.", 15, PLATE_INK)
-		waiting.position = Vector2(686, 356) if _mirror == null else Vector2(ROW.x, ROW.y - 26)
-		waiting.size = Vector2(329, 22) if _mirror == null else Vector2(ROW_PLATE.x, 22)
+		waiting.position = Vector2(686, 356) if _mirror == null else _row() - Vector2(0, 30)
+		waiting.size = Vector2(329, 22) if _mirror == null else Vector2(_row_plate().x, 26)
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		add_child(waiting)
 		_plates.append(waiting)
 	var settings := UI.button("SETTINGS", PLATE_BORDER, 15)
 	settings_button = settings
-	settings.position = Vector2(1006, 12)
-	settings.size = Vector2(130, 34)
+	settings.size = UI.grown(Vector2(130, 34))
+	settings.position = Vector2(1136 - settings.size.x, 12)
 	settings.add_theme_color_override("font_color", PLATE_INK)
 	settings.add_theme_stylebox_override("normal", UI.box(PLATE, PLATE_BORDER, 4, 4, 0))
 	settings.add_theme_stylebox_override("hover", UI.box(PLATE.lightened(0.08), UI.GOLD, 4, 4, 0))
@@ -94,8 +97,8 @@ func _line_up() -> void:
 	for i in _plates.size():
 		var plate: Control = _plates[i]
 		if plate is Button and plate != settings_button:
-			plate.position = ROW + Vector2((ROW_PLATE.x + ROW_GAP) * i, 0)
-			plate.size = ROW_PLATE
+			plate.position = _row() + Vector2((_row_plate().x + ROW_GAP) * i, 0)
+			plate.size = _row_plate()
 		plate.modulate.a = 0.0
 		plate.hide()
 	_mirror.revealed.connect(func() -> void:
@@ -104,15 +107,26 @@ func _line_up() -> void:
 			plate.create_tween().tween_property(plate, "modulate:a", 1.0, 0.8).set_delay(0.3))
 
 
+func _row() -> Vector2:
+	return TOUCH_ROW if UI.touch else ROW
+
+
+func _row_plate() -> Vector2:
+	return TOUCH_ROW_PLATE if UI.touch else ROW_PLATE
+
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_TRANSLATION_CHANGED and is_node_ready():
 		_relabel()
 
 
 func _relabel() -> void:
-	UI.art_button(again_button, "PLAY AGAIN", PLATE, PLATE_BORDER, PLATE_INK, 30)
-	UI.art_button(back_button, "QUIT", PLATE, PLATE_BORDER, PLATE_INK, 30)
-	UI.art_button(lobby_button, "BACK TO LOBBY", PLATE, PLATE_BORDER, PLATE_INK, 30)
+	# The plates painted on the artwork do not grow in touch mode: neither do
+	# the words over them.
+	UI.native(func() -> void:
+		UI.art_button(again_button, "PLAY AGAIN", PLATE, PLATE_BORDER, PLATE_INK, 30)
+		UI.art_button(back_button, "QUIT", PLATE, PLATE_BORDER, PLATE_INK, 30)
+		UI.art_button(lobby_button, "BACK TO LOBBY", PLATE, PLATE_BORDER, PLATE_INK, 30))
 	# Nothing is painted under this one.
 	lobby_button.text = "BACK TO LOBBY"
 	lobby_button.add_theme_stylebox_override("normal", UI.box(PLATE, PLATE_BORDER, 4, 4, 0))
@@ -126,7 +140,7 @@ func _relabel() -> void:
 			b.add_theme_stylebox_override("hover", UI.box(PLATE.lightened(0.08), UI.GOLD, 4, 4, 0))
 			b.add_theme_stylebox_override("pressed", UI.box(PLATE.darkened(0.25), UI.GOLD, 4, 4, 0))
 		for b: Button in [again_button, lobby_button, back_button]:
-			b.add_theme_font_size_override("font_size", roundi(22 * UI.FONT_SCALE))
+			b.add_theme_font_size_override("font_size", UI.px(22))
 	again_button.add_theme_stylebox_override("disabled", UI.box(Color(0, 0, 0, 0.55), Color(0, 0, 0, 0), 0, 4, 0))
 
 

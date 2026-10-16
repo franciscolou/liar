@@ -35,6 +35,9 @@ const MANUAL := 1
 
 const PX := 2.0
 const TOP := 8.0  # where the book opens, from the top of the screen
+## Touch mode: the book is made bigger whole, nearly the width of the screen;
+## what is written in it keeps its desktop size inside (see UI.native).
+const TOUCH_SCALE := 1.3
 ## The book: the leather showing around the pages, the room the index tabs
 ## take above it, the edges of the pages under the open ones, and a page.
 const COVER := 10.0
@@ -158,6 +161,10 @@ func _init() -> void:
 
 
 func setup(engine: GameEngine, viewer: PlayerState) -> void:
+	UI.native(_setup.bind(engine, viewer))
+
+
+func _setup(engine: GameEngine, viewer: PlayerState) -> void:
 	_engine = engine
 	_viewer = viewer
 
@@ -165,6 +172,8 @@ func setup(engine: GameEngine, viewer: PlayerState) -> void:
 	_book.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_book.draw.connect(_draw_book)
 	_book.gui_input.connect(_on_book_input)
+	if UI.touch:
+		_book.scale = Vector2.ONE * TOUCH_SCALE
 	add_child(_book)
 	# The index tabs stand out of the top of the right page.
 	for page: int in [AUTO, MANUAL]:
@@ -172,7 +181,7 @@ func setup(engine: GameEngine, viewer: PlayerState) -> void:
 		tab.text = "Automatic" if page == AUTO else "Manual"
 		tab.focus_mode = Control.FOCUS_NONE
 		tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		tab.add_theme_font_size_override("font_size", roundi(14 * UI.FONT_SCALE))
+		tab.add_theme_font_size_override("font_size", UI.px(14))
 		tab.pressed.connect(set_mode.bind(page))
 		_book.add_child(tab)
 		_tabs[page] = tab
@@ -220,7 +229,7 @@ func _penned(text: String, extent: Vector2) -> Button:
 	b.size = extent
 	b.focus_mode = Control.FOCUS_NONE
 	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	b.add_theme_font_size_override("font_size", roundi(14 * UI.FONT_SCALE))
+	b.add_theme_font_size_override("font_size", UI.px(14))
 	# Filled in, so that it reads as a button against the page.
 	var fills := {"normal": Desk.PAPER_DARK, "hover": Desk.PAPER_LIGHT, "pressed": Desk.PAPER_SHADE, "focus": Desk.PAPER_DARK}
 	for state: String in fills:
@@ -247,7 +256,7 @@ func open() -> void:
 	_rebuild()
 	if not _placed:
 		_placed = true
-		_book.position = Vector2(roundf((size.x - _book.size.x) / 2.0), TOP)
+		_book.position = Vector2(roundf((size.x - _extent().x) / 2.0), TOP)
 
 
 func shut() -> void:
@@ -392,6 +401,10 @@ func _refresh() -> void:
 
 
 func _rebuild() -> void:
+	UI.native(_rebuild_now)
+
+
+func _rebuild_now() -> void:
 	_queued = false
 	var suspects := _suspects()
 	var left_count := ceili(suspects.size() / 2.0)
@@ -668,8 +681,16 @@ func _on_book_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_dragging = event.pressed
 	elif event is InputEventMouseMotion and _dragging:
-		_book.position = _on_screen(_book.position + event.relative)
+		_book.position = _on_screen(_book.position + event.relative * _book.scale)
 
 
+## A book taller than the screen (touch mode, a full table) can be dragged
+## up to show its foot.
 func _on_screen(at: Vector2) -> Vector2:
-	return at.clamp(Vector2.ZERO, (size - _book.size).max(Vector2.ZERO)).round()
+	var room := size - _extent()
+	return at.clamp(room.min(Vector2.ZERO), room.max(Vector2.ZERO)).round()
+
+
+## The size of the book on screen.
+func _extent() -> Vector2:
+	return _book.size * _book.scale

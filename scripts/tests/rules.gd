@@ -55,6 +55,8 @@ static func run() -> int:
 		"an untraceable hand can't be peeked at": _untraceable.bind(&"peek"),
 		"an untraceable hand can't be swapped": _untraceable.bind(&"swap"),
 		"an untraceable hand keeps its copy through a last call": _untraceable.bind(&"recall"),
+		"a last call asks a hand with no copy too, and it may vanish": _untraceable_no_copy.bind(true),
+		"a last call asks a hand with no copy too, and it may stay": _untraceable_no_copy.bind(false),
 		"nobody is untraceable from themselves": _untraceable_own,
 		"an item thrown away costs nothing and takes no turn": _discard,
 		"two swindles: the human is heard before the bot": _swindle_race.bind(false),
@@ -632,6 +634,33 @@ static func _untraceable(how: StringName) -> String:
 		return "the hand became %s" % [spy.cards]
 	var missed: Array = seen.of(&"hand_missed")
 	if missed.size() != 1 or missed[0].data.owner != spy or missed[0].data.how != how:
+		return "missed %d times" % missed.size()
+	return ""
+
+
+## Player 1 holds no copy of what the Last Call names and is asked about
+## their hand all the same (asking only the holders would give them away).
+static func _untraceable_no_copy(vanish: bool) -> String:
+	var table := Table.new(true, [&"spy"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var spy: PlayerState = engine.players[1]
+	spy.cards = [&"spy", &"bartender"]
+	table.puppets[1].answers[Decision.Kind.REACT] = _vanishes if vanish else func(_d: Decision) -> Variant: return null
+	table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"judge")
+	await engine.claim(engine.players[0], table.ability(LAST_CALL))
+	var asked: Array = table.asked(1, Decision.Kind.REACT).filter(
+			func(d: Decision) -> bool: return d.context.get("event") != null and d.context.event.type == &"before_hand_reach")
+	if asked.size() != 1:
+		return "asked %d times about their hand" % asked.size()
+	if spy.cards != [&"spy", &"bartender"]:
+		return "the hand became %s" % [spy.cards]
+	var recalled: Array = seen.of(&"cards_recalled")
+	if recalled.size() != 1 or recalled[0].data.hands.size() != 3:
+		return "the wrong hands were recalled"
+	var missed: Array = seen.of(&"hand_missed")
+	if missed.size() != (1 if vanish else 0):
 		return "missed %d times" % missed.size()
 	return ""
 

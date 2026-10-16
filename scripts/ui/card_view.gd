@@ -117,15 +117,15 @@ func set_caption(text: String) -> void:
 	# A name too long for the plate is written smaller, down to CAPTION_SMALLEST;
 	# past that it is cut like before.
 	var font := _caption.get_theme_font("font")
-	var points := roundi(CAPTION_FONT * UI.FONT_SCALE)
-	var smallest := roundi(CAPTION_SMALLEST * UI.FONT_SCALE)
+	var points := UI.px(CAPTION_FONT)
+	var smallest := UI.px(CAPTION_SMALLEST)
 	while points > smallest and font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, points).x > _caption.size.x:
 		points -= 1
 	_caption.add_theme_font_size_override("font_size", points)
 
 
 func center() -> Vector2:
-	return global_position + size / 2.0
+	return get_global_transform() * (size / 2.0)
 
 
 ## Drops the hover pose and stops reacting to the mouse.

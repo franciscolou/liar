@@ -51,7 +51,7 @@ func set_look(look: Material) -> void:
 
 
 func center() -> Vector2:
-	return global_position + size / 2.0
+	return get_global_transform() * (size / 2.0)
 
 
 func _tip() -> String:

@@ -212,6 +212,9 @@ static func _knob(metal: Color) -> ImageTexture:
 	# The grip: three notches across it.
 	for y: int in [8, 12, 16]:
 		image.fill_rect(Rect2i(4, y, 6, 2), metal.darkened(0.45))
+	if UI.touch:
+		# Twice the size, pixel for pixel: a thumb has to find it.
+		image.resize(image.get_width() * 2, image.get_height() * 2, Image.INTERPOLATE_NEAREST)
 	return ImageTexture.create_from_image(image)
 
 

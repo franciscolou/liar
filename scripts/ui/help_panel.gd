@@ -18,6 +18,11 @@ const STAGE := Rect2(24, 92, 600, 412)
 ## The strip at the foot of the stage that says what just happened.
 const NOTE := Rect2(14, 350, 572, 56)
 const COLUMN := Rect2(640, 92, 376, 412)
+## Touch mode: the board takes the whole screen, the stage keeps its size and
+## the column of text gets the rest, for the bigger letters.
+const TOUCH_SIZE := Vector2(1136, 636)
+const TOUCH_STAGE_AT := Vector2(16, 104)
+const TOUCH_COLUMN := Rect2(632, 104, 488, 476)
 const FELT := Color("1b3226")
 ## The match the lessons are played in: the player's hand and the other
 ## characters around.
@@ -117,6 +122,28 @@ const PARTS := [
 	["END TURN", Rect2(1022, 478, 130, 170), "Passes the turn without claiming anything. Extra options of the turn show up under it.", &"end"],
 ]
 
+## The same table as laid out in touch mode (see table.gd, TOUCH_*), with three
+## opponents, and what each part says to a finger.
+const TOUCH_PARTS := [
+	["TURN", Rect2(8, 6, 250, 34), "Shows whose turn it is.", &""],
+	["MENU", Rect2(1032, 8, 112, 46), "Pause, settings, this guide and the way out.", &""],
+	["SUSPICION BOOK", Rect2(978, 8, 48, 46), "Your notes on who holds each card. The notebook fills in automatically, but there is also a manual version. It only becomes active if the owner allows it before the match begins.", &"book"],
+	["OPPONENT", Rect2(193, 58, 229, 164), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
+	["OPPONENT", Rect2(462, 58, 229, 164), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
+	["OPPONENT", Rect2(731, 58, 229, 164), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
+	["THE MIDDLE", Rect2(326, 232, 500, 130), "Every claim is shown here, with a mark that also shows where it comes from and its target. The questions the game asks you show up here too.", &""],
+	["EMOTES", Rect2(8, 382, 40, 40), "Show the table how you feel! Tap to pick a face.", &"emotes"],
+	["CHAT", Rect2(52, 382, 40, 40), "Type a line for the whole table to see.", &"chat"],
+	["LOG", Rect2(8, 426, 84, 44), "Everything that happened in the match, in case you really need to look it up. Tap to open it.", &"log"],
+	["SHOP", Rect2(968, 322, 89, 148), "The shop, folded: tap it to see the items and their prices.", &"shop"],
+	["DECK", Rect2(1057, 322, 87, 148), "The characters nobody holds. A card that proved a claim goes back here.", &"deck"],
+	["YOU", Rect2(0, 478, 228, 62), "Your name, Morale and coins, and the statuses on you.", &"stats"],
+	["YOUR ITEMS", Rect2(0, 542, 228, 106), "Your inventory. On your turn, tap an item to use it.", &"items"],
+	["YOUR HAND", Rect2(232, 478, 196, 170), "Your cards. Tap one to claim an ability of it: that play is legitimate.", &"hand"],
+	["THE OTHER CHARACTERS", Rect2(432, 478, 586, 170), "Every other character of the match. Tap one to claim an ability of it: but mind the risk of being caught lying.", &"rack"],
+	["END TURN", Rect2(1022, 478, 130, 170), "Passes the turn without claiming anything. Extra options of the turn show up under it.", &"end"],
+]
+
 var _tabs: Array = []  # Button, one per lesson
 var _done: Array = []  # bool, one per lesson
 var _index := 0
@@ -140,28 +167,32 @@ func _init() -> void:
 	theme = UI.theme()
 	Content.ensure_loaded()
 
+	var touch := UI.touch
+	var board := TOUCH_SIZE if touch else SIZE
+	var stage_at := TOUCH_STAGE_AT if touch else STAGE.position
+	var column := TOUCH_COLUMN if touch else COLUMN
 	_panel = Panel.new()
 	Board.frame(_panel, UI.BORDER, 0, true)
-	_panel.size = SIZE
+	_panel.size = board
 	_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_panel.offset_left = -SIZE.x / 2.0
-	_panel.offset_top = -SIZE.y / 2.0
-	_panel.offset_right = SIZE.x / 2.0
-	_panel.offset_bottom = SIZE.y / 2.0
+	_panel.offset_left = -board.x / 2.0
+	_panel.offset_top = -board.y / 2.0
+	_panel.offset_right = board.x / 2.0
+	_panel.offset_bottom = board.y / 2.0
 	add_child(_panel)
 	var heading := CenterContainer.new()
 	heading.position = Vector2(0, 10)
-	heading.size = Vector2(SIZE.x, 34)
+	heading.size = Vector2(board.x, 34)
 	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	heading.add_child(Board.plaque("HOW TO PLAY", 24))
 	_panel.add_child(heading)
 
 	var gap := 6.0
-	var width := floorf((SIZE.x - 48.0 - gap * (LESSONS.size() - 1)) / LESSONS.size())
+	var width := floorf((board.x - 48.0 - gap * (LESSONS.size() - 1)) / LESSONS.size())
 	for i: int in LESSONS.size():
 		var b := UI.button(LESSONS[i].tab, UI.BORDER, 14)
-		b.position = Vector2(24 + i * (width + gap), 50)
-		b.size = Vector2(width, 30)
+		b.position = Vector2(24 + i * (width + gap), 52 if touch else 50)
+		b.size = Vector2(width, 44 if touch else 30)
 		b.pressed.connect(_show.bind(i))
 		_panel.add_child(b)
 		_tabs.append(b)
@@ -169,7 +200,7 @@ func _init() -> void:
 
 	var felt := Panel.new()
 	Board.inset(felt, FELT)
-	felt.position = STAGE.position
+	felt.position = stage_at
 	felt.size = STAGE.size
 	felt.clip_contents = true
 	_panel.add_child(felt)
@@ -183,51 +214,55 @@ func _init() -> void:
 	rule.size = Vector2(STAGE.size.x - 4, STAGE.size.y - NOTE.position.y + 6)
 	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	felt.add_child(rule)
-	_note = _rich(15)
+	_note = _rich(13 if touch else 15)
 	_note.position = NOTE.position
 	_note.size = NOTE.size
 	_note.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	felt.add_child(_note)
 
 	_title = UI.label("", 21, UI.GOLD, true)
-	_title.position = COLUMN.position
-	_title.size = Vector2(COLUMN.size.x, 28)
+	_title.position = column.position
+	_title.size = Vector2(column.size.x, 28)
 	_title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_panel.add_child(_title)
-	_text = _rich(16)
-	_text.position = COLUMN.position + Vector2(0, 34)
-	_text.size = Vector2(COLUMN.size.x, 292)
+	# A little smaller than the rest in touch mode: the lessons are long.
+	_text = _rich(14 if touch else 16)
+	_text.position = column.position + Vector2(0, 38 if touch else 34)
+	_text.size = Vector2(column.size.x, column.size.y - (136 if touch else 120))
 	_text.mouse_filter = Control.MOUSE_FILTER_PASS
 	_panel.add_child(_text)
 	_task_box = PanelContainer.new()
 	Board.inset(_task_box, UI.INK, Board.FRAME_DARK, 10)
-	_task_box.position = COLUMN.position + Vector2(0, 334)
-	_task_box.size = Vector2(COLUMN.size.x, 78)
+	_task_box.position = column.position + Vector2(0, column.size.y - (92 if touch else 78))
+	_task_box.size = Vector2(column.size.x, 92 if touch else 78)
 	_panel.add_child(_task_box)
-	_task = _rich(16)
+	_task = _rich(14 if touch else 16)
 	_task.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_task_box.add_child(_task)
 
 	var previous := UI.button("<", UI.BORDER, 18)
 	Board.plank(previous)
-	previous.position = Vector2(364, 520)
-	previous.size = Vector2(46, 44)
+	# Under the middle of the stage.
+	var buttons_y := board.y - 54.0 if touch else 520.0
+	var middle := stage_at.x + STAGE.size.x / 2.0 + (0.0 if touch else 196.0)
+	previous.size = Vector2(56, 48) if touch else Vector2(46, 44)
+	previous.position = Vector2(middle - 100.0 - 10.0 - previous.size.x, buttons_y)
 	previous.pressed.connect(_step.bind(-1))
 	_panel.add_child(previous)
 	var back := UI.button("Back", UI.BORDER, 18)
 	Board.plank(back)
-	back.position = Vector2(420, 520)
-	back.size = Vector2(200, 44)
+	back.size = Vector2(200, 48 if touch else 44)
+	back.position = Vector2(middle - 100.0, buttons_y)
 	back.pressed.connect(close)
 	_panel.add_child(back)
 	_next = UI.button(">", UI.BORDER, 18)
-	_next.position = Vector2(630, 520)
-	_next.size = Vector2(46, 44)
+	_next.size = previous.size
+	_next.position = Vector2(middle + 100.0 + 10.0, buttons_y)
 	_next.pressed.connect(_step.bind(1))
 	_panel.add_child(_next)
 	_count = UI.label("", 15, UI.MUTED, true)
-	_count.position = Vector2(COLUMN.position.x, 520)
-	_count.size = Vector2(COLUMN.size.x, 44)
+	_count.position = Vector2(column.position.x, buttons_y)
+	_count.size = Vector2(column.size.x, previous.size.y)
 	_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_count.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_count.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
@@ -315,8 +350,8 @@ func _refresh() -> void:
 func _rich(font_size: int) -> RichTextLabel:
 	var text := RichTextLabel.new()
 	text.bbcode_enabled = true
-	text.add_theme_font_size_override("normal_font_size", roundi(font_size * UI.FONT_SCALE))
-	text.add_theme_font_size_override("bold_font_size", roundi(font_size * UI.FONT_SCALE))
+	text.add_theme_font_size_override("normal_font_size", UI.px(font_size))
+	text.add_theme_font_size_override("bold_font_size", UI.px(font_size))
 	return text
 
 
@@ -907,7 +942,7 @@ func _lesson_table() -> void:
 	counter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	board.add_child(counter)
 	_s = {"seen": {}, "spots": []}
-	for part: Array in PARTS:
+	for part: Array in (TOUCH_PARTS if UI.touch else PARTS):
 		var where: Rect2 = part[1]
 		var spot := Button.new()
 		spot.position = where.position * MAP_SCALE + Vector2(1, 1)

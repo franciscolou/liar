@@ -103,7 +103,13 @@ var _away_mode := &""
 var _away_shown := []  # what the veil was last drawn for: [mode, choose]
 
 
+## In touch mode the box is made bigger whole (its `scale`, set by the table):
+## everything written on it keeps its desktop size inside (see UI.native).
 func _init() -> void:
+	UI.native(_build)
+
+
+func _build() -> void:
 	size = SIZE
 	custom_minimum_size = SIZE
 	pivot_offset = SIZE / 2.0
@@ -209,6 +215,10 @@ func bind(seat_player: PlayerState, game_engine: GameEngine) -> void:
 
 
 func sync() -> void:
+	UI.native(_sync)
+
+
+func _sync() -> void:
 	if player == null:
 		return
 	_stats.sync(player, engine.config.start_morale)
@@ -262,7 +272,7 @@ func leave(face_up := true, pace := 1.0) -> void:
 	_peekable = false
 	_revealed = false
 	_active = false
-	scale = Vector2.ONE
+	scale = get_meta(&"base_scale", Vector2.ONE)
 	_clock.left = -1.0
 	set_answer(0)
 	# Nothing stays floating over a box that is no longer there.
@@ -404,6 +414,10 @@ func _on_card_clicked(card: CardView) -> void:
 ## box is left as it is. `choose` gives the host the buttons to have a bot
 ## play the seat until they come back, or to kick them out of the match.
 func set_away(mode: StringName, choose: bool) -> void:
+	UI.native(_set_away.bind(mode, choose))
+
+
+func _set_away(mode: StringName, choose: bool) -> void:
 	if _gone or mode == &"bot":
 		mode = &""
 	if _away_shown == [mode, choose]:
@@ -503,7 +517,7 @@ func _on_item_clicked(view: ItemView) -> void:
 func set_targetable(value: bool) -> void:
 	_targetable = value
 	if not value:
-		scale = Vector2.ONE
+		scale = get_meta(&"base_scale", Vector2.ONE)
 	_set_cursor()
 	_restyle()
 
@@ -529,7 +543,7 @@ func set_peekable(value: bool) -> void:
 
 
 func anchor() -> Vector2:
-	return global_position + SIZE / 2.0
+	return get_global_transform() * (SIZE / 2.0)
 
 
 ## The chip of status `id` on this player, null if it has none.
@@ -611,7 +625,7 @@ func stat_bar() -> StatBar:
 ## The middle of the place the item at `index` of the inventory takes.
 func item_spot(index: int) -> Vector2:
 	var item := ItemView.BASE * 0.4
-	return _items.global_position + Vector2(maxi(index, 0) * (item.x + 2.0) + item.x / 2.0, item.y / 2.0)
+	return _items.get_global_transform() * Vector2(maxi(index, 0) * (item.x + 2.0) + item.x / 2.0, item.y / 2.0)
 
 
 func card_center(index: int) -> Vector2:
@@ -711,7 +725,9 @@ func _tip() -> String:
 
 func _hover(inside: bool) -> void:
 	if _targetable:
-		create_tween().tween_property(self, "scale", Vector2.ONE * (1.07 if inside else 1.0), 0.08)
+		# On top of the size the table gave the box (touch mode makes it bigger).
+		var base: Vector2 = get_meta(&"base_scale", Vector2.ONE)
+		create_tween().tween_property(self, "scale", base * (1.07 if inside else 1.0), 0.08)
 
 
 func _gui_input(event: InputEvent) -> void:

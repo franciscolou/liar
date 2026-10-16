@@ -95,6 +95,14 @@ const CASE_ITEMS := 502.0
 const ITEMS_PARTING := 0.5
 ## The switch of the book of suspicions: its size, and its knob in blocks.
 const SWITCH := Vector2(42, 22)
+## Touch mode: the switch is drawn this much bigger, and the small buttons of
+## the sheet and the case get at least this much room for a finger.
+const TOUCH_SWITCH := 1.6
+const TOUCH_STEP_BUTTON := Vector2(48, 36)
+## Touch mode: the case has no more height for the bigger rows, so the cards
+## of a cast in two rows are smaller, with room for bigger names under them.
+const TOUCH_GRID_SCALE := 0.74
+const TOUCH_CAPTION := 22.0
 const KNOB: Array[String] = [
 	"..###..",
 	".#o###.",
@@ -221,37 +229,40 @@ func _ready() -> void:
 	_build_case()
 
 	var back := UI.button("LEAVE ROOM", UI.BORDER, 20)
-	back.position = Vector2(20, 590)
-	back.size = Vector2(170, 46)
+	back.size = UI.grown(Vector2(170, 46))
+	back.position = Vector2(20, 636 - back.size.y)
 	Desk.brass(back)
 	back.pressed.connect(_on_leave)
 	if _host:
 		TipLayer.attach(back, "Closes the room for everyone.")
 	add_child(back)
-	var settings := UI.button("SETTINGS", UI.BORDER, 15)
+	# Between the plaque and the case there is no more room in touch mode:
+	# the word keeps its size.
+	var settings: Button = UI.native(func() -> Button: return UI.button("SETTINGS", UI.BORDER, 15))
 	settings.position = Vector2(264, 8)
 	settings.size = Vector2(132, 46)
 	Desk.brass(settings)
 	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
 	add_child(settings)
 	_start = UI.button("DEAL THE CARDS", UI.BORDER, 22)
-	_start.position = Vector2(872, 590)
-	_start.size = Vector2(260, 46)
+	_start.size = UI.grown(Vector2(260, 46))
+	_start.position = Vector2(1132 - _start.size.x, 636 - _start.size.y)
 	Desk.brass(_start, true)
 	_start.pressed.connect(_on_start)
 	_start.visible = _host
 	add_child(_start)
 	_problem = UI.label("", 14, UI.RED.lightened(0.25))
-	_problem.position = Vector2(546, 590)
-	_problem.size = Vector2(314, 46)
+	# In touch mode it shares the foot with the bigger buttons and the slip.
+	_problem.size = Vector2(220 if UI.touch else 314, _start.size.y)
+	_problem.position = _start.position - Vector2(_problem.size.x + 12.0, 0)
 	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_problem.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_problem.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(_problem)
 	if not _host:
 		var waiting := UI.label("Waiting for the host to deal...", 18, UI.CREAM, true)
-		waiting.position = Vector2(732, 590)
-		waiting.size = Vector2(400, 46)
+		waiting.size = Vector2(400, _start.size.y)
+		waiting.position = Vector2(732, _start.position.y)
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		waiting.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		add_child(waiting)
@@ -284,12 +295,13 @@ func _notification(what: int) -> void:
 ## A slip of paper beside the button that leaves: where the others find this
 ## room, or whose rules these are.
 func _build_address() -> void:
-	var slip: Desk = Desk.make(Desk.Kind.SHEET, Rect2(204, 590, 330, 46))
+	# Beside the button to leave, which is bigger in touch mode.
+	var slip: Desk = Desk.make(Desk.Kind.SHEET, Rect2(256, 582, 290, 54) if UI.touch else Rect2(204, 590, 330, 46))
 	slip.rotation = -0.012
 	slip.dog_ear = false
 	slip.tone = Desk.DIM_PAPER
 	add_child(slip)
-	var line := Desk.written("Only the host changes the table. You may change your name.", 14, Desk.INK_FADED)
+	var line: Label = UI.native(func() -> Label: return Desk.written("Only the host changes the table. You may change your name.", 14, Desk.INK_FADED))
 	# Wrapping first: until then the label is as wide as its text.
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	line.position = Vector2(10, 2)
@@ -302,7 +314,8 @@ func _build_address() -> void:
 		return
 	var addresses: Array = Room.addresses()
 	Desk.ink(line, Desk.INK)
-	line.add_theme_font_size_override("font_size", roundi(16 * UI.FONT_SCALE))
+	# The slip is no wider in touch mode: the address keeps its size.
+	line.add_theme_font_size_override("font_size", roundi(16 * UI.FONT_SCALE) if UI.touch else UI.px(16))
 	line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_write_address()
 	if addresses.is_empty():
@@ -347,7 +360,7 @@ func _build_players() -> void:
 	_seat_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(_seat_title)
 	_add_bot = UI.button("ADD BOT", UI.BORDER, 14)
-	_add_bot.custom_minimum_size = Vector2(96, 26)
+	_add_bot.custom_minimum_size = Vector2(130, 30) if UI.touch else Vector2(96, 26)
 	_add_bot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	Desk.penned(_add_bot)
 	_add_bot.pressed.connect(func(): _room.add_bot())
@@ -378,7 +391,7 @@ func _build_players() -> void:
 		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		row.add_child(tag)
 		var remove := UI.button("X", UI.BORDER, 13)
-		remove.custom_minimum_size = Vector2(30, 22)
+		remove.custom_minimum_size = Vector2(44, 24) if UI.touch else Vector2(30, 22)
 		remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		Desk.penned(remove, Desk.INK_RED)
 		_slim(remove, [&"normal", &"hover", &"pressed"])
@@ -451,8 +464,8 @@ func _build_rules() -> void:
 	_reader.bbcode_enabled = true
 	_reader.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_reader.add_theme_color_override("default_color", Desk.INK)
-	_reader.add_theme_font_size_override("normal_font_size", 15)
-	_reader.add_theme_font_size_override("bold_font_size", 15)
+	_reader.add_theme_font_size_override("normal_font_size", UI.grow(15))
+	_reader.add_theme_font_size_override("bold_font_size", UI.grow(15))
 	box.add_child(_reader)
 	_file.resized.connect(_place_ghost)
 	_place_ghost()
@@ -694,12 +707,12 @@ func _build_case() -> void:
 	head.add_child(title)
 	head.add_child(_reset_button(_reset_characters, _characters_default))
 	_mode_random = UI.button("Random", UI.BORDER, 15)
-	_mode_random.custom_minimum_size = Vector2(110, 32)
+	_mode_random.custom_minimum_size = Vector2(148, 36) if UI.touch else Vector2(110, 32)
 	_mode_random.pressed.connect(_set_random.bind(true))
 	TipLayer.attach(_mode_random, "Draw the characters of the match at random.")
 	head.add_child(_mode_random)
 	_mode_picked = UI.button("Hand-picked", UI.BORDER, 15)
-	_mode_picked.custom_minimum_size = Vector2(130, 32)
+	_mode_picked.custom_minimum_size = Vector2(172, 36) if UI.touch else Vector2(130, 32)
 	_mode_picked.pressed.connect(_set_random.bind(false))
 	TipLayer.attach(_mode_picked, "Choose exactly which characters are in the match.")
 	head.add_child(_mode_picked)
@@ -720,7 +733,7 @@ func _build_case() -> void:
 	_book_switch = Button.new()
 	_book_switch.toggle_mode = true
 	_book_switch.focus_mode = Control.FOCUS_NONE
-	_book_switch.custom_minimum_size = SWITCH
+	_book_switch.custom_minimum_size = SWITCH * (TOUCH_SWITCH if UI.touch else 1.0)
 	_book_switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
 		_book_switch.add_theme_stylebox_override(state, StyleBoxEmpty.new())
@@ -756,9 +769,10 @@ func _build_case() -> void:
 	var defs := Content.character_list()
 	var rows := 1 if defs.size() <= GRID_ROW else 2
 	var per_row := ceili(defs.size() / float(rows))
-	var card_scale := 1.15 if rows == 1 else 0.9
+	var card_scale := 1.15 if rows == 1 else TOUCH_GRID_SCALE if UI.touch else 0.9
 	var card_height := CardView.BASE.y * card_scale
-	var row_height := card_height + 16.0
+	var caption_height := TOUCH_CAPTION if UI.touch else 16.0
+	var row_height := card_height + caption_height
 	var step := GRID_WIDTH / per_row
 	var grid := Control.new()
 	grid.custom_minimum_size = Vector2(GRID_WIDTH, rows * row_height + 2.0)
@@ -787,7 +801,7 @@ func _build_case() -> void:
 		caption.clip_text = true
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		caption.position = Vector2(column * step, top + card_height + 1.0)
-		caption.size = Vector2(step, 16)
+		caption.size = Vector2(step, caption_height)
 		grid.add_child(caption)
 
 	box.add_child(_stepper("Copies of each character", "More copies make every claim more believable.",
@@ -796,7 +810,8 @@ func _build_case() -> void:
 	# Held a little above its own line, clear of the ridge of the case.
 	var foot := Control.new()
 	foot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_summary = UI.label("", 13, UI.CREAM.darkened(0.25))
+	# Over the ridge there is no room for it to grow in touch mode.
+	_summary = UI.native(func() -> Label: return UI.label("", 13, UI.CREAM.darkened(0.25)))
 	_summary.position = Vector2(0, -SUMMARY_RISE)
 	foot.custom_minimum_size = Vector2(0, _summary.get_combined_minimum_size().y - SUMMARY_RISE)
 	foot.add_child(_summary)
@@ -897,7 +912,14 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var paper := _on_paper
-	var l := UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)
+	# The sheet of house rules is no wider in touch mode: there the words keep
+	# their size, and a long one wraps.
+	var narrow := paper and UI.touch
+	var l: Label = UI.native(func() -> Label: return UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)) if narrow \
+			else UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)
+	if narrow:
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size.x = 120
 	if paper:
 		Desk.ink(l)
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -906,17 +928,17 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 		l.mouse_filter = Control.MOUSE_FILTER_PASS
 		TipLayer.attach(l, tip)
 	var minus := UI.button("-", UI.BORDER, 15)
-	minus.custom_minimum_size = Vector2(34, 26)
+	minus.custom_minimum_size = TOUCH_STEP_BUTTON if UI.touch else Vector2(34, 26)
 	var value := UI.label("", 16, UI.GOLD, true)
-	value.custom_minimum_size = Vector2(52, 0)
+	value.custom_minimum_size = Vector2(40 if narrow else 52, 0)
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var plus := UI.button("+", UI.BORDER, 15)
-	plus.custom_minimum_size = Vector2(34, 26)
+	plus.custom_minimum_size = TOUCH_STEP_BUTTON if UI.touch else Vector2(34, 26)
 	if paper:
 		Desk.ink(value, Desk.INK_RED)
 	for b: Button in [minus, plus]:
 		if paper:
-			b.custom_minimum_size.y = 24
+			b.custom_minimum_size = Vector2(40, 34) if narrow else Vector2(b.custom_minimum_size.x, 24)
 			Desk.penned(b)
 		else:
 			Desk.velvet(b)
@@ -1117,6 +1139,8 @@ func _set_book_knob(at: float) -> void:
 ## rimmed in gold thread, and a round gold knob that slides across it.
 func _draw_book_switch() -> void:
 	var b := _book_switch
+	if UI.touch:
+		b.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE * TOUCH_SWITCH)
 	var on := _config.suspect_book
 	var rim := UI.GOLD if on or (b.is_hovered() and _host) else Desk.BRASS
 	var groove := Desk.VELVET_DEEP.lerp(Desk.VELVET_LIGHT, 0.55 * _book_knob)
@@ -1144,7 +1168,7 @@ func _style_toggle(b: Button, on: bool) -> void:
 ## It only shows while `is_default` says the section was changed.
 func _reset_button(action: Callable, is_default: Callable) -> Button:
 	var b := UI.button("", UI.RED, 14)
-	b.custom_minimum_size = Vector2(30, 26)
+	b.custom_minimum_size = Vector2(42, 36) if UI.touch else Vector2(30, 26)
 	b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	TipLayer.attach(b, "Reset")
 	var icon := Control.new()

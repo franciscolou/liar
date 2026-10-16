@@ -1333,9 +1333,11 @@ func renew_proven_card(player: PlayerState, character_id: StringName) -> void:
 ## too), goes back to the deck, and each of those places gets a new card.
 func recall_cards(by: PlayerState, card: StringName) -> void:
 	# Somebody else's hand: they may keep it out of this (see reach_hand).
+	# Every hand is asked, copy or not: asking only those who hold one would
+	# tell whoever called it who does.
 	var kept: Array = []
 	for p: PlayerState in seat_order(by):
-		if p != by and p.cards.has(card) and not await reach_hand(by, p, &"recall"):
+		if p != by and not await reach_hand(by, p, &"recall", card):
 			kept.append(p)
 	if over:
 		return
@@ -1364,10 +1366,13 @@ func recall_cards(by: PlayerState, card: StringName) -> void:
 ## Before `by` sees, takes or replaces cards in the hand of `owner` (`how`:
 ## &"peek", &"swap", &"recall"): false when the hand was kept out of reach
 ## (before_hand_reach cancelled, see spy.gd), and then hand_missed says so.
-func reach_hand(by: PlayerState, owner: PlayerState, how: StringName) -> bool:
+## `card` is the character a recall named.
+func reach_hand(by: PlayerState, owner: PlayerState, how: StringName, card := &"") -> bool:
 	if by == owner or not owner.alive:
 		return true
 	var data := {"owner": owner, "by": by, "how": how}
+	if how == &"recall":
+		data.card = card
 	var reach := await fire(&"before_hand_reach", data)
 	if not reach.cancelled:
 		return true

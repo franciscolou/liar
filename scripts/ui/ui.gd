@@ -50,8 +50,13 @@ const CARD_CORNER := [3, 2, 1]
 ## to act like one. Decided and switched by `TouchMode` (`touch_mode.gd`);
 ## widgets only read it, at the moment they handle an event or lay themselves out.
 static var touch := false
+## How much bigger text is in touch mode: the table of 1152x648 is a hand's
+## width on a phone, and at the desktop sizes it had to be read squinting.
+const TOUCH_TEXT := 1.35
 
 static var _theme: Theme
+static var _theme_touch := false
+static var _native := 0
 static var _queasy: Shader
 static var _font: Font
 static var _bold: Font
@@ -172,12 +177,48 @@ static func box(bg: Color, border: Color = BORDER, width := 2, radius := 4, marg
 	return sb
 
 
+## The font size for `size` (the desktop one) on this screen: every text of
+## the game goes through here or `grow`, so touch mode can make all of it
+## bigger at once.
+static func px(size: float) -> int:
+	return grow(size * FONT_SCALE)
+
+
+## `amount` (a size in px), made bigger in touch mode. For a font size that
+## was never scaled by FONT_SCALE, and for anything that has to grow with
+## the text around it.
+static func grow(amount: float) -> int:
+	return roundi(amount * _growth())
+
+
+## Runs `build` with text at its desktop size even in touch mode, and returns
+## what it returns: for a widget
+## that is made bigger whole (its `scale`), where text grown on its own would
+## be grown twice and no longer fit its drawing.
+static func native(build: Callable) -> Variant:
+	_native += 1
+	var made: Variant = build.call()
+	_native -= 1
+	return made
+
+
+static func _growth() -> float:
+	return TOUCH_TEXT if touch and _native == 0 else 1.0
+
+
+## `extent` (a desktop size), made bigger in touch mode: for buttons and
+## the boxes that hold text.
+static func grown(extent: Vector2) -> Vector2:
+	return (extent * _growth()).round()
+
+
 static func theme() -> Theme:
-	if _theme != null:
+	if _theme != null and _theme_touch == touch:
 		return _theme
+	_theme_touch = touch
 	var t := Theme.new()
 	t.default_font = font()
-	t.default_font_size = 18
+	t.default_font_size = grow(18)
 	t.set_color("font_color", "Label", CREAM)
 	t.set_color("font_shadow_color", "Label", Color(0, 0, 0, 0.6))
 	t.set_constant("shadow_offset_x", "Label", 1)
@@ -207,8 +248,8 @@ static func theme() -> Theme:
 	t.set_color("default_color", "RichTextLabel", CREAM)
 	t.set_font("normal_font", "RichTextLabel", font())
 	t.set_font("bold_font", "RichTextLabel", bold())
-	t.set_font_size("normal_font_size", "RichTextLabel", 16)
-	t.set_font_size("bold_font_size", "RichTextLabel", 16)
+	t.set_font_size("normal_font_size", "RichTextLabel", grow(16))
+	t.set_font_size("bold_font_size", "RichTextLabel", grow(16))
 	_theme = t
 	return t
 
@@ -224,7 +265,7 @@ static func _grabber(color: Color) -> ImageTexture:
 static func label(text: String, size := 16, color: Color = CREAM, is_bold := false) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", roundi(size * FONT_SCALE))
+	l.add_theme_font_size_override("font_size", px(size))
 	l.add_theme_color_override("font_color", color)
 	if is_bold:
 		l.add_theme_font_override("font", bold())
@@ -236,7 +277,7 @@ static func label(text: String, size := 16, color: Color = CREAM, is_bold := fal
 static func button(text: String, accent: Color = BORDER, size := 16) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.add_theme_font_size_override("font_size", roundi(size * FONT_SCALE))
+	b.add_theme_font_size_override("font_size", px(size))
 	if accent != BORDER:
 		b.add_theme_stylebox_override("normal", box(accent.darkened(0.55), accent, 2, 4, 6))
 		b.add_theme_stylebox_override("hover", box(accent.darkened(0.35), accent.lightened(0.3), 2, 4, 6))
@@ -252,7 +293,7 @@ static func button(text: String, accent: Color = BORDER, size := 16) -> Button:
 static func art_button(b: Button, text: String, fill: Color, border: Color, ink: Color, size: int) -> void:
 	var painted := Loc.t(text) == text
 	b.text = "" if painted else text
-	b.add_theme_font_size_override("font_size", roundi(size * FONT_SCALE))
+	b.add_theme_font_size_override("font_size", px(size))
 	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
 		b.add_theme_color_override(state, ink)
 	b.add_theme_stylebox_override("normal", StyleBoxEmpty.new() if painted else box(fill, border, 4, 4, 0))
@@ -288,23 +329,26 @@ static func draw_reroll(b: Button) -> void:
 
 
 ## Hover feedback for any control: a quick scale-up around its centre.
+## A control made bigger whole keeps that size in the meta "base_scale": the
+## growth is on top of it.
 static func juice(c: Control, amount := 1.06) -> void:
 	c.mouse_entered.connect(func():
 		if c is BaseButton and c.disabled:
 			return
 		c.pivot_offset = c.size / 2.0
-		c.create_tween().tween_property(c, "scale", Vector2.ONE * amount, 0.08))
+		c.create_tween().tween_property(c, "scale", c.get_meta(&"base_scale", Vector2.ONE) * amount, 0.08))
 	c.mouse_exited.connect(func():
 		c.pivot_offset = c.size / 2.0
-		c.create_tween().tween_property(c, "scale", Vector2.ONE, 0.1))
+		c.create_tween().tween_property(c, "scale", c.get_meta(&"base_scale", Vector2.ONE), 0.1))
 
 
 ## Scale punch, for things that just changed.
 static func pop(c: CanvasItem, amount := 1.3, time := 0.25) -> void:
 	if c is Control:
 		c.pivot_offset = c.size / 2.0
-	c.scale = Vector2.ONE * amount
-	c.create_tween().tween_property(c, "scale", Vector2.ONE, time) \
+	var base: Vector2 = c.get_meta(&"base_scale", Vector2.ONE)
+	c.scale = base * amount
+	c.create_tween().tween_property(c, "scale", base, time) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 

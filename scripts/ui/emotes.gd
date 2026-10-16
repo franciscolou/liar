@@ -33,6 +33,11 @@ const COLUMN_X := -4.0  # the faces are wider than the button: centred on it
 ## is typed on, to the right of the button.
 const SAY_LENGTH := 60
 const SAY_LINE := Vector2(204, 24)
+## Touch mode: the buttons and the faces are made bigger whole, and the line
+## to type on opens high on the screen, where the phone's keyboard, which
+## comes up from below, leaves it in sight.
+const TOUCH_SCALE := 1.65
+const TOUCH_LINE := Rect2(276, 64, 600, 52)
 ## The face on the button that opens the column.
 const FACE := [
 	"..#####..",
@@ -164,10 +169,12 @@ var _options: Array = []
 var _open := false
 var _amount := 0.0  # 0 = shut, 1 = the column fully out
 var _tween: Tween
+var _s := 1.0  # how much bigger the buttons are drawn (TOUCH_SCALE in touch mode)
 
 
 func _init() -> void:
-	size = BUTTON
+	_s = TOUCH_SCALE if UI.touch else 1.0
+	size = BUTTON * _s
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_toggle = _bare_button(BUTTON)
 	_toggle.draw.connect(_draw_toggle)
@@ -175,7 +182,7 @@ func _init() -> void:
 	TipLayer.attach(_toggle, "[b]Emotes[/b]\nShow the table how you feel (keys 1 to 6).")
 	add_child(_toggle)
 	_say = _bare_button(BUTTON)
-	_say.position = Vector2(BUTTON.x + 4.0, 0)
+	_say.position = Vector2(BUTTON.x * _s + 4.0, 0)
 	_say.draw.connect(_draw_say)
 	_say.pressed.connect(func() -> void: open_line(not typing()))
 	TipLayer.attach(_say, "[b]Say something[/b] (T)\nType a line for the whole table to see.")
@@ -187,7 +194,9 @@ func _init() -> void:
 	_line.placeholder_text = "Say something..."
 	_line.context_menu_enabled = false
 	_line.caret_blink = true
-	_line.add_theme_font_size_override("font_size", roundi(14 * UI.FONT_SCALE))
+	_line.add_theme_font_size_override("font_size", UI.px(14))
+	if UI.touch:
+		_line.top_level = true
 	_line.add_theme_color_override("font_color", UI.CREAM)
 	_line.add_theme_color_override("font_placeholder_color", UI.MUTED.darkened(0.2))
 	for state: String in ["normal", "focus", "read_only"]:
@@ -201,7 +210,7 @@ func _init() -> void:
 	add_child(_line)
 	for kind in KINDS.size():
 		var option := _bare_button(OPTION)
-		option.position = Vector2(COLUMN_X, 0)
+		option.position = Vector2(COLUMN_X * _s, 0)
 		option.visible = false
 		option.draw.connect(_draw_option.bind(option, kind))
 		option.pressed.connect(pick.bind(kind))
@@ -219,7 +228,13 @@ func _bare_button(extent: Vector2) -> Button:
 		b.add_theme_stylebox_override(state, StyleBoxEmpty.new())
 	b.mouse_entered.connect(b.queue_redraw)
 	b.mouse_exited.connect(b.queue_redraw)
+	b.scale = Vector2.ONE * _s
 	return b
+
+
+## How tall the buttons are on screen.
+func height() -> float:
+	return BUTTON.y * _s
 
 
 ## Sends `kind`. Nothing holds it back: as many, and as fast, as the player
@@ -245,6 +260,9 @@ func open_line(open: bool) -> void:
 		# button: it is centred on it, not hung from its top.
 		_line.size = SAY_LINE
 		_line.position.y = roundf((BUTTON.y - _line.size.y) / 2.0)
+		if UI.touch:
+			_line.position = TOUCH_LINE.position
+			_line.size = TOUCH_LINE.size
 		_line.grab_focus()
 		_line.edit()
 	elif _line.has_focus():
@@ -282,7 +300,7 @@ func _input(event: InputEvent) -> void:
 		open_line(false)
 	# A click anywhere else puts the column away.
 	if _open and event is InputEventMouseButton and event.pressed:
-		var column := Rect2(global_position + Vector2(COLUMN_X, -STEP * _options.size()), Vector2(OPTION.x, STEP * _options.size() + BUTTON.y))
+		var column := Rect2(global_position + Vector2(COLUMN_X, -STEP * _options.size()) * _s, Vector2(OPTION.x, STEP * _options.size() + BUTTON.y) * _s)
 		if not column.has_point(event.global_position):
 			_set_open(false)
 
@@ -305,7 +323,7 @@ func _place(amount: float) -> void:
 		var option: Button = _options[i]
 		option.visible = amount > 0.0
 		option.modulate.a = amount
-		option.position.y = roundf(-STEP * (_options.size() - i) * amount)
+		option.position.y = roundf(-STEP * _s * (_options.size() - i) * amount)
 
 
 func _draw_toggle() -> void:
@@ -460,7 +478,7 @@ class Speech extends Control:
 	## the balloon up places it after adding it.
 	func _ready() -> void:
 		_font = get_theme_font("font", "Label")
-		_font_size = roundi(FONT * UI.FONT_SCALE)
+		_font_size = UI.px(FONT)
 		# One line if it fits, wrapped at WIDTH if not.
 		var wide := _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, _font_size).x
 		_across = minf(ceilf(wide) + 2.0, WIDTH)

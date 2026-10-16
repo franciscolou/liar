@@ -103,8 +103,8 @@ func setup(d: Decision, spots: Array, ink: Color) -> void:
 
 	if d.cancellable:
 		var back := UI.button("Cancel", UI.BORDER, 14)
-		back.size = Vector2(120, 30)
-		back.position = Vector2(SIZE.x / 2.0 - 60.0, 318)
+		back.size = UI.grown(Vector2(120, 30))
+		back.position = Vector2(SIZE.x / 2.0 - back.size.x / 2.0, 318)
 		back.pressed.connect(_pick.bind(-1))
 		add_child(back)
 	_place()
@@ -186,7 +186,7 @@ func _draw() -> void:
 		var tag := at + Vector2(-15, _views[i].size.y / 2.0 + 4.0)
 		draw_texture_rect(_coin, Rect2(tag.round(), Vector2(14, 14)), false, Color(1, 1, 1, out))
 		draw_string(UI.bold(), (tag + Vector2(17, 12)).round(), str(_prices[i]), HORIZONTAL_ALIGNMENT_LEFT, -1,
-				roundi(15 * UI.FONT_SCALE), Color(_ink, out))
+				UI.px(15), Color(_ink, out))
 	if _hovered < 0 or _wand.charge <= 0.0:
 		return
 	# The wand has it: sparks run from its tip to the item.

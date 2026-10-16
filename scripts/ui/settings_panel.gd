@@ -44,7 +44,7 @@ func _init() -> void:
 		var b := UI.button(Loc.LANGUAGES[code], UI.BORDER, 15)
 		Board.plank(b)
 		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-		b.custom_minimum_size = Vector2(124, 32)
+		b.custom_minimum_size = UI.grown(Vector2(124, 32))
 		b.pressed.connect(_on_language_pressed.bind(code))
 		language_row.add_child(b)
 		_language_buttons[code] = b
@@ -55,15 +55,17 @@ func _init() -> void:
 	for on: bool in [true, false]:
 		var b := UI.button("On" if on else "Off", UI.BORDER, 15)
 		Board.plank(b)
-		b.custom_minimum_size = Vector2(124, 32)
+		b.custom_minimum_size = UI.grown(Vector2(124, 32))
 		b.pressed.connect(_on_fullscreen_pressed.bind(on))
 		fullscreen_row.add_child(b)
 		_fullscreen_buttons[on] = b
+	# A phone is always full screen.
+	fullscreen_row.visible = not OS.has_feature("mobile")
 	box.add_child(fullscreen_row)
 
 	var back := UI.button("Back", UI.GOLD, 18)
 	Board.plank(back, UI.GOLD)
-	back.custom_minimum_size = Vector2(200, 42)
+	back.custom_minimum_size = UI.grown(Vector2(200, 42))
 	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	back.pressed.connect(close)
 	box.add_child(back)
@@ -100,7 +102,7 @@ func _row(text: String) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	var l := UI.label(text, 18)
-	l.custom_minimum_size = Vector2(170, 0)
+	l.custom_minimum_size = UI.grown(Vector2(170, 0))
 	row.add_child(l)
 	return row
 
@@ -112,13 +114,13 @@ func _volume_row(text: String, value: float, setter: Callable) -> HBoxContainer:
 	slider.max_value = 1.0
 	slider.step = 0.01
 	slider.value = value
-	slider.custom_minimum_size = Vector2(210, 24)
+	slider.custom_minimum_size = UI.grown(Vector2(210, 24))
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slider.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	Board.rail(slider)
 	row.add_child(slider)
 	var percent := UI.label("", 18, UI.GOLD, true)
-	percent.custom_minimum_size = Vector2(56, 0)
+	percent.custom_minimum_size = UI.grown(Vector2(56, 0))
 	percent.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(percent)
 	var show_value := func(v: float): percent.text = "%d%%" % roundi(v * 100.0)

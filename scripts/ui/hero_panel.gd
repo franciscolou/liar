@@ -21,6 +21,10 @@ const TurnClock := preload("res://scripts/ui/turn_clock.gd")
 const CLOCK_BOX := Rect2(8, 12, 216, 150)
 const SIZE := Vector2(1152, 170)
 const MAX_EXTRAS := 3
+## In touch mode only two fit, each tall enough for a thumb; the rest are in
+## their characters' menus as always.
+const TOUCH_EXTRAS := 2
+const TOUCH_EXTRA_HEIGHT := 38.0
 const STRIP_SCALE := 1.22
 ## The hand lies on the mat: how wide a card is with the gap to the next,
 ## and how many fit side by side.
@@ -225,13 +229,15 @@ func sync() -> void:
 	if my_turn:
 		# All of them are also listed in their character's menu; only so many
 		# fit next to END TURN.
-		var shown := _urgent_first(_options.extras).slice(0, MAX_EXTRAS)
+		var shown := _urgent_first(_options.extras).slice(0, TOUCH_EXTRAS if UI.touch else MAX_EXTRAS)
 		var compact := shown.size() > 2
 		_extras.add_theme_constant_override("separation", 2 if compact else 4)
 		for extra: Dictionary in shown:
 			var cost: int = extra.get("cost", 0)
-			var b := UI.button("%s (%d)" % [extra.label, cost] if cost > 0 else extra.label, UI.PURPLE, 11 if compact else 12)
-			b.custom_minimum_size = Vector2(116, 26 if compact else 34)
+			# The column is no wider in touch mode: the words keep their size.
+			var text: String = "%s (%d)" % [extra.label, cost] if cost > 0 else extra.label
+			var b: Button = UI.native(func() -> Button: return UI.button(text, UI.PURPLE, 11 if compact else 12))
+			b.custom_minimum_size = Vector2(116, TOUCH_EXTRA_HEIGHT if UI.touch else 26 if compact else 34)
 			if compact:
 				b.clip_text = true
 			else:
@@ -277,7 +283,7 @@ func set_items_shown(shown: bool) -> void:
 
 
 func hand_center() -> Vector2:
-	return _hand.global_position + Vector2(90, 78)
+	return _hand.get_global_transform() * Vector2(90, 78)
 
 
 ## The chip of status `id` on this player, null if it has none.
@@ -361,7 +367,7 @@ func stat_bar() -> StatBar:
 
 ## The middle of the inventory slot at `index`.
 func item_spot(index: int) -> Vector2:
-	return _inventory.global_position + Vector2(maxi(index, 0) * Desk.SOCKET_STEP, 0) + Desk.SOCKET / 2.0
+	return _inventory.get_global_transform() * (Vector2(maxi(index, 0) * Desk.SOCKET_STEP, 0) + Desk.SOCKET / 2.0)
 
 
 func card_center(index: int) -> Vector2:

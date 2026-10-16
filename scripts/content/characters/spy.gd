@@ -38,5 +38,9 @@ class Untraceable extends Ability:
 	func resolve(play: Play) -> void:
 		play.event.cancelled = true
 
-	func ai_react_weight(_event: GameEvent, _player: PlayerState, _engine: GameEngine) -> float:
+	func ai_react_weight(event: GameEvent, player: PlayerState, _engine: GameEngine) -> float:
+		# A Last Call asks every hand: with no copy of the card there is
+		# nothing to keep, but now and then a hand vanishes all the same.
+		if event.type == &"before_hand_reach" and event.data.how == &"recall" and not player.cards.has(event.data.card):
+			return 0.15
 		return 0.85

@@ -283,7 +283,8 @@ func _ready() -> void:
 			if p.id == mine or (_room == null and viewer == null):
 				controller.table = self
 				viewer = p
-			if _room != null and _room.hosting:
+			# Every machine has one: any of them may end up hosting the room.
+			if _room != null:
 				controller.stand_in = _stand_in(p)
 		controller.engine = engine
 		controller.player = p
@@ -293,6 +294,8 @@ func _ready() -> void:
 		_room.seat_back.connect(_on_seat_back)
 		_room.away_changed.connect(_on_away_changed)
 		_room.out_of_step.connect(_on_out_of_step)
+		_room.passing.connect(_on_passing)
+		_room.host_changed.connect(_on_host_changed)
 		if _room.catching_up:
 			_replaying = true
 			engine.hurry = true
@@ -343,6 +346,27 @@ func _on_away_chosen(mode: StringName, p: PlayerState) -> void:
 		return
 	_confirm(Loc.t("Kick %s out of the match? Their cards go back into the deck, and they cannot come back to it.") % p.name,
 			"Kick", _room.set_away.bind(p.id, &"kick"))
+
+
+## The host left: the room is moving to `heir`, maybe this machine.
+func _on_passing(heir: String, mine: bool) -> void:
+	if mine:
+		_log_line(Loc.t("The host left. The room passes to you: waiting for the others..."), &"doubt_declared")
+	else:
+		_log_line(Loc.t("The host left. Reconnecting to %s...") % heir, &"doubt_declared")
+
+
+## The room is back, with another host: if it is this machine, the boxes of
+## those who are away get the host's buttons.
+func _on_host_changed() -> void:
+	if _room.hosting:
+		var addresses: Array = Room.addresses()
+		var at: String = _room.address_at(addresses[0]) if not addresses.is_empty() else "?"
+		_log_line(Loc.t("You host the room now. Whoever drops out comes back at %s.") % at, &"coins")
+	else:
+		_log_line(Loc.t("The room is back, hosted by %s.") % _room.host_name(), &"coins")
+	for seat: int in _seats:
+		_on_away_changed(seat)
 
 
 func _on_seat_back(seat: int) -> void:
@@ -2563,10 +2587,10 @@ func _toggle_pause() -> void:
 		Transition.go(MENU_SCENE, Transition.DOORS, true)
 	var asks := "Leave the match and go back to the menu?"
 	if _room != null and _room.hosting:
-		asks = "Leave the match and go back to the menu? The room closes for everyone."
+		asks = "Leave the match and go back to the menu? Another player takes the room over."
 	quit.pressed.connect(_confirm.bind(asks, "Quit to menu", leave))
 	if _room != null:
-		TipLayer.attach(quit, "Closes the room for everyone." if _room.hosting else "Leaves the room. Your seat waits for you, unless the host gives it to a bot or kicks you out.")
+		TipLayer.attach(quit, "Leaves the room, which passes to another player. Your seat waits for you, unless the new host gives it to a bot or kicks you out." if _room.hosting else "Leaves the room. Your seat waits for you, unless the host gives it to a bot or kicks you out.")
 	box.add_child(quit)
 	if UI.touch:
 		# Each of them as tall as the first, for a thumb.

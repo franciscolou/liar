@@ -234,7 +234,7 @@ func _ready() -> void:
 	Desk.brass(back)
 	back.pressed.connect(_on_leave)
 	if _host:
-		TipLayer.attach(back, "Closes the room for everyone.")
+		TipLayer.attach(back, "Leaves the room, which passes to another player.")
 	add_child(back)
 	# Between the plaque and the case there is no more room in touch mode:
 	# the word keeps its size.
@@ -269,6 +269,14 @@ func _ready() -> void:
 	_things = Desk.things(self, _desk)
 	add_child(Desk.lamplight())
 	_room.changed.connect(_on_room_changed)
+	# The host left and the room passed to this machine: the screen is the
+	# host's now.
+	_room.host_changed.connect(func() -> void:
+		if _room.hosting != _host:
+			get_tree().reload_current_scene())
+	_room.reach_checked.connect(_on_reach_checked)
+	if not _room.reachable:
+		_on_reach_checked(false)
 	_refresh()
 	if Transition.desk_bare():
 		desk_slide(1.0)
@@ -326,6 +334,25 @@ func _build_address() -> void:
 		if addresses.size() > 1:
 			tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1).map(func(ip: String) -> String: return _room.address_at(ip)))
 		return tip + "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % _room.port)
+
+
+## Whether the room could pass to this machine if the host left (see
+## Room.reachable): a guest's slip says so when it could not.
+func _on_reach_checked(ok: bool) -> void:
+	if _host or _address_line == null:
+		return
+	if ok:
+		_address_line.text = "Only the host changes the table. You may change your name."
+		Desk.ink(_address_line, Desk.INK_FADED)
+		return
+	_address_line.text = "If the host leaves, the room cannot pass to you: let the game through the firewall."
+	Desk.ink(_address_line, Desk.INK_RED)
+	if not _address_line.has_meta("warned"):
+		_address_line.set_meta("warned", true)
+		_address_line.mouse_filter = Control.MOUSE_FILTER_PASS
+		TipLayer.attach(_address_line, func() -> String:
+			return Loc.t("The others could not get through to this computer. If the host leaves, the room passes to someone else, or closes.") \
+					+ "\n" + Loc.t("In the Windows firewall, allow the game on private and public networks (with Radmin VPN, the network is often public)."))
 
 
 ## The host's line is formatted here, so it does not translate itself.

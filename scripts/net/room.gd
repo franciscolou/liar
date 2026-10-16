@@ -23,13 +23,28 @@ extends Node
 ## Someone who drops out of a match leaves their seat empty (`away`): it does
 ## nothing until the host has a bot play it or kicks them out of the match.
 ## Unless kicked, they may come back to it. Each person in a match gets a key
-## of their own as it is dealt (`_keys`), which their machine keeps on disk
+## of their own as it is dealt, which their machine keeps on disk
 ## (`_known_keys`) and shows when it joins again: that, and not the name, is
-## how the host knows the seat is theirs (see _hello). The host keeps every
-## answer it has handed out this match (`_history`), and the one coming back
-## gets them all with the deal: their machine plays the whole match again from
+## how the host knows the seat is theirs (see _hello; every machine has the
+## hashes of the keys, `_key_hashes`). Every machine keeps each answer handed
+## out this match (`_history`), and the one coming back gets them all from the
+## host with the deal: their machine plays the whole match again from
 ## the start, without stopping for anything (`catching_up`), until it reaches
 ## a decision that is still open.
+##
+## A host who leaves does not end the room: it passes to one of the others.
+## Every guest listens on a port of its own from the lobby on (`_probe`), and
+## the machines send each other a packet there now and then: the host ranks
+## the guests by who got through to them and tells everyone (`_succession`).
+## When the host is gone, every machine walks that list in the same order:
+## the first one on it opens the room on its port (`_take_over`), the others
+## join it (`_resume`), each with a token of its own (`_token`, whose hash the
+## seat carries as its `mark`) to be known by. Every machine keeps the answers
+## it got (`_history`), and those it sent that never came back (`_sent`): the
+## new host takes the longest history there is, hands the rest of it to whoever
+## is behind, and only then sends on the answers that were lost on the way and
+## any new ones. Whoever does not come back in time (`HANDOVER_GRACE`) has
+## left, as if they had dropped out, and the old host's seat waits for them.
 
 signal changed
 ## A player left in the middle of a match; the host answers for that seat.
@@ -47,6 +62,16 @@ signal out_of_step(turn: int)
 signal emoted(seat: int, kind: int)
 ## The player at `seat` of the match typed something to the table.
 signal said(seat: int, text: String)
+## The host left: the room is trying to pass to `heir` (the player's name),
+## who may be this machine (`mine`). Once for each one it tries.
+signal passing(heir: String, mine: bool)
+## The room is back, with another host (which may be this machine).
+signal host_changed
+## Whether the others could get through to this machine, so that it could take
+## the room over (see `reachable`). Only said when someone on another computer
+## tried.
+signal reach_checked(ok: bool)
+signal _tail_came
 
 const Transition := preload("res://scripts/ui/transition.gd")
 const PATH := "res://scripts/net/room.gd"
@@ -64,8 +89,19 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 22
+const PROTOCOL := 23
 const JOIN_TIMEOUT := 8.0
+## How long a machine tries each heir on the list before the next one.
+const HANDOVER_TIMEOUT := 8.0
+## How long the new host waits for the others to come back to it.
+const HANDOVER_GRACE := 14.0
+## Each test packet is sent this many times, this far apart: UDP may lose some.
+const PROBE_TIMES := 3
+const PROBE_GAP := 0.4
+## How long after a guest starts listening the host says whether anyone got
+## through to it.
+const PROBE_VERDICT := 4.0
+const PROBE_TAG := "LIAR?"
 ## Where a machine keeps the keys of the seats it was dealt (see _known_keys).
 const KEYS_PATH := "user://rejoin.cfg"
 ## How many of those it keeps, the latest ones.
@@ -87,6 +123,11 @@ var hosting := false
 ## Host: the UDP port the room listens on (PORT, unless another room on this
 ## computer has it).
 var port := PORT
+## The host left and this machine is looking for the one taking the room over.
+var handing_over := false
+## False once the others tried and could not get through to this machine: if
+## the host leaves, the room cannot pass to it (most likely a firewall).
+var reachable := true
 ## [{name: String, bot: bool, peer: int}]; peer is 0 for a bot.
 var seats: Array = []
 ## The rules as the host has them set. They stay between matches.
@@ -125,8 +166,54 @@ var _split := false
 var _dealt: Dictionary = {}
 ## Host: every answer handed out this match, in order: [number, seat, wire].
 var _history: Array = []
-## Host: the key of each seat of the match, "" for its own seat and the bots'.
-var _keys: Array = []
+## The hash of the key of each seat of the match, "" for the bots'. Every
+## machine has them, so that whoever takes the room over knows them too.
+var _key_hashes: Array = []
+## What this machine is known by in the room; its seat carries the hash.
+var _token := ""
+## The room's own number, for the test packets and for finding the same room
+## again after its host left.
+var _nonce := 0
+## This machine's peer in the room; it is changed by a handover.
+var _me := 0
+## Guest: answers this machine sent that have not come back yet: number ->
+## [seat, wire]. They are sent again to a new host.
+var _sent: Dictionary = {}
+## Guest: where this machine listens for the test packets, and on which port.
+var _probe: PacketPeerUDP
+var _probe_port := 0
+## Whether the host still has to be told where this machine listens.
+var _unannounced := true
+## Host: peer -> {port, addresses} of where each guest listens.
+var _listen: Dictionary = {}
+## Host: peer -> {peer that got through: index of the address it used}.
+var _reach: Dictionary = {}
+## Host: the guests told nobody got through to them.
+var _warned: Dictionary = {}
+## Who takes the room over, in order: [{peer, name, port, addresses, reach}],
+## and peer -> the computer each guest is on (the same text for the same one).
+var _succession: Array = []
+var _machines: Dictionary = {}
+## Walking the list after the host left: where this machine is on it, and a
+## number for each try (a timer of a try given up on does nothing).
+var _walk: Array = []
+var _step := -1
+var _attempt := 0
+## New host: waiting for the others (`_pending`: mark -> peer they had), what
+## each one that came back had (`_resumes`), answers held back meanwhile.
+var _taking_over := false
+var _pending: Dictionary = {}
+var _resumes: Dictionary = {}
+var _held: Array = []
+var _renamed: Dictionary = {}  # peer before the handover -> peer after it
+var _take_over_id := 0
+var _reconciling := false
+## Vector2i(number, seat) of every answer handed out this match: the same one
+## coming twice (sent again to a new host) is only passed on once.
+var _given: Dictionary = {}
+## This machine is walking out: the connection closing is no reason to look
+## for another host.
+var _leaving := false
 ## How many of the answers in `_inbox` are from the past (see catching_up).
 var _replay_left := 0
 
@@ -158,13 +245,21 @@ static func host(player_name: String) -> String:
 		if at >= PORT + PORT_RANGE:
 			return Loc.t("Could not open a room: ports %d to %d are all in use on this computer.") % [PORT, PORT + PORT_RANGE - 1]
 	var room := _enter(peer)
-	room.hosting = true
-	room.port = at
-	room.config = GameConfig.new()
-	room.seats = [{"name": clean_name(player_name), "bot": false, "peer": 1}]
-	for i in 3:
-		room.add_bot()
+	room.hosted(player_name, at)
 	return ""
+
+
+## This machine has just opened the room on `at`, with `bots` bots seated.
+func hosted(player_name: String, at: int, bots := 3) -> void:
+	hosting = true
+	port = at
+	_me = 1
+	_player_name = clean_name(player_name)
+	_nonce = randi_range(1, 0x7fffffff)
+	config = GameConfig.new()
+	seats = [{"name": _player_name, "bot": false, "peer": 1, "mark": _mark()}]
+	for i in bots:
+		add_bot()
 
 
 ## Starts joining the room at `address` ("host" or "host:port"). Returns ""
@@ -231,18 +326,29 @@ static func clean_name(text: String) -> String:
 
 
 func _ready() -> void:
+	_token = Crypto.new().generate_random_bytes(16).hex_encode()
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected)
-	multiplayer.connection_failed.connect(_fail.bind("Could not reach the room."))
-	multiplayer.server_disconnected.connect(_fail.bind("The host closed the room."))
+	multiplayer.connection_failed.connect(_on_connection_failed)
+	multiplayer.server_disconnected.connect(_on_host_gone)
 
 
-## Walks out of the room (closing it for everyone, if this machine hosts it).
-## The scene is left to the caller.
+func _notification(what: int) -> void:
+	# The window is closing: the others are told at once, instead of finding
+	# out when the connection times out.
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and multiplayer.multiplayer_peer != null:
+		_leaving = true
+		multiplayer.multiplayer_peer.close()
+
+
+## Walks out of the room. If this machine hosts it, it passes to one of the
+## others. The scene is left to the caller.
 func leave() -> void:
+	_leaving = true
 	release()
 	if current == self:
 		current = null
+	_close_probe()
 	multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	queue_free()
@@ -263,12 +369,33 @@ func _on_join_timeout() -> void:
 
 
 func _on_connected() -> void:
-	_hello.rpc_id(1, _player_name, _build(), known_keys())
+	if multiplayer.multiplayer_peer is OfflineMultiplayerPeer:
+		return
+	_me = my_peer()
+	_unannounced = true
+	if handing_over:
+		_resume.rpc_id(1, _nonce, _token, _player_name, _build(), known_keys(), _history.size(), _sent.duplicate())
+	else:
+		_hello.rpc_id(1, _player_name, _build(), known_keys(), _mark())
+
+
+func _on_connection_failed() -> void:
+	if handing_over:
+		_next_heir()
+	else:
+		_fail("Could not reach the room.")
 
 
 func _on_peer_disconnected(peer: int) -> void:
 	if not hosting:
 		return
+	_listen.erase(peer)
+	_reach.erase(peer)
+	_warned.erase(peer)
+	if _resumes.has(peer):
+		# It was to hand over the answers it had: there are none to wait for.
+		_resumes.erase(peer)
+		_tail_came.emit()
 	var seat := _seat_of(peer)
 	if seat < 0:
 		return
@@ -280,6 +407,7 @@ func _on_peer_disconnected(peer: int) -> void:
 		# The seat waits for them, doing nothing, until the host says otherwise.
 		_set_away(played, &"idle")
 	_push()
+	_rank()
 
 
 ## Takes this machine to another screen. A match still being played is cut
@@ -354,7 +482,7 @@ func push() -> void:
 
 
 func _push() -> void:
-	_send(_lobby, [{"seats": seats, "config": config.to_wire()}])
+	_send(_lobby, [_state()])
 	changed.emit()
 
 
@@ -366,10 +494,13 @@ func _send(method: Callable, arguments: Array) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func _hello(player_name: String, build: int, keys: Array) -> void:
-	if not hosting:
-		return
-	var peer := multiplayer.get_remote_sender_id()
+func _hello(player_name: String, build: int, keys: Array, mark: String) -> void:
+	if hosting:
+		_greet(multiplayer.get_remote_sender_id(), player_name, build, keys, mark)
+
+
+## Host: `peer` asks to come in.
+func _greet(peer: int, player_name: String, build: int, keys: Array, mark: String) -> void:
 	if _seat_of(peer) >= 0:
 		return
 	var bots := seats.filter(func(seat: Dictionary) -> bool: return seat.bot)
@@ -382,7 +513,7 @@ func _hello(player_name: String, build: int, keys: Array) -> void:
 		if back >= 0 and away.get(back) == &"kick":
 			why = "You were removed from the match being played in that room. Try again when it ends."
 		elif back >= 0:
-			_take_back(peer, back)
+			_take_back(peer, back, mark)
 			return
 		else:
 			why = "A match is being played in that room. Try again when it ends."
@@ -393,42 +524,66 @@ func _hello(player_name: String, build: int, keys: Array) -> void:
 		return
 	if seats.size() >= MAX_SEATS:
 		seats.erase(bots.back())
-	seats.append({"name": seat_name if seat_name != "" else "Player", "bot": false, "peer": peer})
+	seats.append({"name": seat_name if seat_name != "" else "Player", "bot": false, "peer": peer, "mark": mark})
 	_push()
 
 
 ## Host: the empty seat of the match whose key is among `keys`, or -1.
 func _seat_with_key(keys: Array) -> int:
-	for i in mini(match_peers.size(), _keys.size()):
-		if match_peers[i] == 0 and _keys[i] != "" and keys.has(_keys[i]):
+	var hashes := keys.filter(func(key: Variant) -> bool: return key is String).map(_hash)
+	for i in mini(match_peers.size(), _key_hashes.size()):
+		if match_peers[i] == 0 and _key_hashes[i] != "" and hashes.has(_key_hashes[i]):
 			return i
 	return -1
+
+
+static func _hash(text: String) -> String:
+	return text.sha256_text()
+
+
+## What this machine's seat carries to be known by.
+func _mark() -> String:
+	return _hash(_token)
+
+
+## What everyone in the room is sent of it: the seats and the rules.
+func _state() -> Dictionary:
+	return {"seats": seats, "config": config.to_wire(), "nonce": _nonce}
 
 
 ## Host: `peer` comes back to the seat they left. They get the deal and every
 ## answer given so far, before anything else of the match can reach them; from
 ## then on the answers go to them as to everyone else.
-func _take_back(peer: int, seat: int) -> void:
+func _take_back(peer: int, seat: int, mark: String) -> void:
 	match_peers[seat] = peer
 	away.erase(seat)
-	_back.rpc_id(peer, _match_id, _dealt, match_peers, _history, away, {"seats": seats, "config": config.to_wire()})
+	var state := _state()
+	state.hashes = _key_hashes
+	_back.rpc_id(peer, _match_id, _dealt, match_peers, _history, away, state)
 	_send(_seat_back, [_match_id, seat, peer])
 	_seat_back(_match_id, seat, peer)
-	seats.append({"name": _dealt.seats[seat].name, "bot": false, "peer": peer})
+	seats.append({"name": _dealt.seats[seat].name, "bot": false, "peer": peer, "mark": mark})
 	_push()
 
 
 @rpc("authority", "call_remote", "reliable")
 func _back(id: int, dealt: Dictionary, peers: Array, history: Array, empty: Dictionary, state: Dictionary) -> void:
 	_joined = true
+	handing_over = false
 	seats = state.seats
 	config = GameConfig.from_wire(state.config)
+	_nonce = state.nonce
 	_start_dealt(id, dealt, peers)
+	_key_hashes = state.hashes
 	away = empty.duplicate()
+	_history = history.duplicate()
+	for entry: Array in _history:
+		_given[Vector2i(entry[0], entry[1])] = true
 	_inbox = history.duplicate()
 	_replay_left = _inbox.size()
 	catching_up = true
 	changed.emit()
+	_announce()
 	_show(GAME, Transition.DEAL)
 
 
@@ -458,10 +613,16 @@ func _rename(text: String) -> void:
 func _lobby(state: Dictionary) -> void:
 	seats = state.seats
 	config = GameConfig.from_wire(state.config)
+	_nonce = state.nonce
+	if handing_over:
+		# Back in the room too late to be waited for: let in again instead.
+		handing_over = false
+		host_changed.emit()
 	if not _joined:
 		_joined = true
 		_show(LOBBY, Transition.DESK)
 	changed.emit()
+	_announce()
 
 
 # --- starting and ending a match ---------------------------------------------------
@@ -478,16 +639,18 @@ func start() -> void:
 	# The seed is what makes every machine deal the same match.
 	dealt.rng_seed = randi_range(1, 0x7fffffff)
 	var peers := seats.map(func(seat: Dictionary) -> int: return seat.peer)
-	# Each of the others gets a key to their seat, and nobody else sees it.
+	# Each person gets a key to their seat, the host too (the room may pass to
+	# someone else, and they may want to come back), and nobody else sees it:
+	# everyone gets only the hashes.
 	var keys := []
 	var crypto := Crypto.new()
 	for peer: int in peers:
-		keys.append(crypto.generate_random_bytes(16).hex_encode() if peer > 1 else "")
+		keys.append(crypto.generate_random_bytes(16).hex_encode() if peer >= 1 else "")
+	var hashes := keys.map(func(key: String) -> String: return _hash(key) if key != "" else "")
 	for i in peers.size():
 		if peers[i] > 1:
-			_start.rpc_id(peers[i], _match_id + 1, dealt.to_wire(), peers, keys[i])
-	_start(_match_id + 1, dealt.to_wire(), peers)
-	_keys = keys
+			_start.rpc_id(peers[i], _match_id + 1, dealt.to_wire(), peers, keys[i], hashes)
+	_start(_match_id + 1, dealt.to_wire(), peers, keys[peers.find(1)], hashes)
 
 
 ## Host: everyone leaves the match (played out or not) and goes back to the
@@ -501,8 +664,9 @@ func to_lobby() -> void:
 
 
 @rpc("authority", "call_remote", "reliable")
-func _start(id: int, dealt: Dictionary, peers: Array, key := "") -> void:
+func _start(id: int, dealt: Dictionary, peers: Array, key: String, hashes: Array) -> void:
 	_start_dealt(id, dealt, peers)
+	_key_hashes = hashes
 	if key != "":
 		remember_key(key)
 	_show(GAME, Transition.DEAL)
@@ -521,7 +685,9 @@ func _begin(id: int, peers: Array, dealt: Dictionary = {}) -> void:
 	match_peers = peers
 	_dealt = dealt
 	_history.clear()
-	_keys = []
+	_given.clear()
+	_key_hashes = []
+	_sent.clear()
 	away = {}
 	_replay_left = 0
 	catching_up = false
@@ -632,7 +798,10 @@ func submit(ticket: Ticket, wire: Variant) -> void:
 	var seat: int = ticket.decision.player.id
 	if hosting:
 		_relay(ticket.number, seat, wire)
-	else:
+		return
+	# Kept until it comes back: if the host leaves first, it goes to the next.
+	_sent[ticket.number] = [seat, wire]
+	if not handing_over:
 		_answer_up.rpc_id(1, _match_id, ticket.number, seat, wire)
 
 
@@ -671,12 +840,16 @@ func _answer_up(id: int, number: int, seat: int, wire: Variant) -> void:
 		return
 	if seat < 0 or seat >= match_peers.size() or match_peers[seat] != multiplayer.get_remote_sender_id():
 		return
-	_relay(number, seat, wire)
+	if not _given.has(Vector2i(number, seat)):
+		_relay(number, seat, wire)
 
 
-## Host: this answer is the next one, for every machine.
+## Host: this answer is the next one, for every machine. While taking the
+## room over, it waits for what the others had (see _end_take_over).
 func _relay(number: int, seat: int, wire: Variant) -> void:
-	_history.append([number, seat, wire])
+	if _taking_over:
+		_held.append([number, seat, wire])
+		return
 	_send(_answer_down, [_match_id, number, seat, wire])
 	_answer_down(_match_id, number, seat, wire)
 
@@ -685,6 +858,11 @@ func _relay(number: int, seat: int, wire: Variant) -> void:
 func _answer_down(id: int, number: int, seat: int, wire: Variant) -> void:
 	if id != _match_id:
 		return
+	# Every machine keeps them all: any of them may have to host the room.
+	_history.append([number, seat, wire])
+	_given[Vector2i(number, seat)] = true
+	if _sent.has(number) and _sent[number][0] == seat:
+		_sent.erase(number)
 	_inbox.append([number, seat, wire])
 	_deliver()
 
@@ -730,7 +908,7 @@ func emote(kind: int) -> void:
 		return
 	if hosting:
 		_emote_relay(seat, kind)
-	else:
+	elif not handing_over:
 		_emote_up.rpc_id(1, _match_id, kind)
 
 
@@ -765,7 +943,7 @@ func say(text: String) -> void:
 		return
 	if hosting:
 		_say_relay(seat, line)
-	else:
+	elif not handing_over:
 		_say_up.rpc_id(1, _match_id, line)
 
 
@@ -803,7 +981,7 @@ func report(turn: int, fingerprint: int) -> void:
 	if hosting:
 		_sums[turn] = fingerprint
 		_compare(turn)
-	else:
+	elif not handing_over:
 		_report.rpc_id(1, _match_id, turn, fingerprint)
 
 
@@ -832,3 +1010,502 @@ func _compare(turn: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _out_of_step(turn: int) -> void:
 	out_of_step.emit(turn)
+
+
+# --- passing the room on -----------------------------------------------------------
+
+## The name of whoever hosts the room.
+func host_name() -> String:
+	for seat: Dictionary in seats:
+		if seat.peer == 1:
+			return seat.name
+	return ""
+
+
+## Guest: listens for the test packets, on a port of the room's range (the
+## room may be opened on it one day), and tells the host where.
+func _announce() -> void:
+	if hosting or not _unannounced:
+		return
+	if _probe == null:
+		_probe = PacketPeerUDP.new()
+		_probe_port = 0
+		for at in range(PORT, PORT + PORT_RANGE):
+			if _probe.bind(at) == OK:
+				_probe_port = at
+				break
+		if _probe_port == 0:
+			# Every port taken: this machine cannot take the room over.
+			_probe = null
+			return
+	_unannounced = false
+	_listening.rpc_id(1, _probe_port, addresses())
+
+
+func _close_probe() -> void:
+	if _probe != null:
+		_probe.close()
+		_probe = null
+	_probe_port = 0
+
+
+func _process(_delta: float) -> void:
+	if _probe == null:
+		return
+	while _probe.get_available_packet_count() > 0:
+		var parts := _probe.get_packet().get_string_from_utf8().split("|")
+		if parts.size() != 5 or parts[0] != PROBE_TAG or parts[1].to_int() != _nonce or parts[3].to_int() != _me:
+			continue
+		if not hosting and not handing_over:
+			_heard.rpc_id(1, parts[2].to_int(), parts[4].to_int())
+
+
+## Host: a guest listens at `at`. It is tried by every address it may have:
+## the one it came from, its own and, for a machine on the same computer,
+## this computer's.
+@rpc("any_peer", "call_remote", "reliable")
+func _listening(at: int, own: Array) -> void:
+	var peer := multiplayer.get_remote_sender_id()
+	if not hosting or _seat_of(peer) < 0:
+		return
+	var list := []
+	var seen := _remote_address(peer)
+	if not _loopback(seen):
+		list.append(seen)
+	for address: Variant in own:
+		if address is String and not list.has(address) and list.size() < 6:
+			list.append(address)
+	list.append("127.0.0.1")
+	var entry := {"port": at, "addresses": list}
+	_listen[peer] = entry
+	_reach[peer] = {}
+	_warned.erase(peer)
+	_probe_round()
+	_rank()
+	get_tree().create_timer(PROBE_VERDICT).timeout.connect(_verdict.bind(peer, entry))
+
+
+static func _loopback(address: String) -> bool:
+	return address == "" or address.begins_with("127.") or address == "::1" or address.begins_with("::ffff:127.")
+
+
+func _remote_address(peer: int) -> String:
+	var enet := multiplayer.multiplayer_peer as ENetMultiplayerPeer
+	if enet == null or not multiplayer.get_peers().has(peer):
+		return ""
+	var link := enet.get_peer(peer)
+	return link.get_remote_address() if link != null else ""
+
+
+## Host: the computer `peer` is on, as an address: "" for this one.
+func _machine_of(peer: int) -> String:
+	if peer == 1:
+		return ""
+	var seen := _remote_address(peer)
+	return "" if _loopback(seen) else seen
+
+
+## Host: every machine sends the test packets to every guest but itself.
+func _probe_round() -> void:
+	var targets := []
+	for peer: int in _listen:
+		targets.append({"peer": peer, "port": _listen[peer].port, "addresses": _listen[peer].addresses})
+	for peer: int in _listen:
+		_probe_now.rpc_id(peer, _nonce, targets.filter(func(target: Dictionary) -> bool: return target.peer != peer))
+	_send_probes(targets)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _probe_now(nonce: int, targets: Array) -> void:
+	_nonce = nonce
+	_send_probes(targets)
+
+
+func _send_probes(targets: Array) -> void:
+	if targets.is_empty():
+		return
+	for i in PROBE_TIMES:
+		get_tree().create_timer(PROBE_GAP * i).timeout.connect(_send_burst.bind(targets))
+
+
+func _send_burst(targets: Array) -> void:
+	var out := PacketPeerUDP.new()
+	for target: Dictionary in targets:
+		for i in target.addresses.size():
+			out.set_dest_address(target.addresses[i], target.port)
+			out.put_packet(("%s|%d|%d|%d|%d" % [PROBE_TAG, _nonce, _me, target.peer, i]).to_utf8_buffer())
+	out.close()
+
+
+## Host: a test packet from `from` got through to the guest that says so, by
+## the address numbered `index`.
+@rpc("any_peer", "call_remote", "reliable")
+func _heard(from: int, index: int) -> void:
+	var target := multiplayer.get_remote_sender_id()
+	if not hosting or not _reach.has(target):
+		return
+	var heard: Dictionary = _reach[target]
+	if heard.has(from) and heard[from] <= index:
+		return
+	heard[from] = index
+	if _warned.has(target) and _machine_of(from) != _machine_of(target):
+		_warned.erase(target)
+		_reach_note.rpc_id(target, true)
+	_rank()
+
+
+## Host: whether anyone on another computer got through to `peer`, once they
+## have had the time to. A machine on the same computer always does: it does
+## not count.
+func _verdict(peer: int, entry: Dictionary) -> void:
+	if not hosting or not is_same(_listen.get(peer), entry):
+		return
+	var home := _machine_of(peer)
+	var tried := _machine_of(1) != home or _listen.keys().any(func(other: int) -> bool:
+		return other != peer and _machine_of(other) != home)
+	var heard: Dictionary = _reach.get(peer, {})
+	if not tried or heard.keys().any(func(from: int) -> bool: return _machine_of(from) != home):
+		return
+	_warned[peer] = true
+	_reach_note.rpc_id(peer, false)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reach_note(ok: bool) -> void:
+	reachable = ok
+	reach_checked.emit(ok)
+
+
+## Host: who would take the room over, best first: the guests the most others
+## on other computers got through to, then the ones this machine got through
+## to, in the order they sit. Everyone gets the list.
+func _rank() -> void:
+	if not hosting or _taking_over:
+		return
+	var entries := []
+	var machines := {}
+	for i in seats.size():
+		var seat: Dictionary = seats[i]
+		if seat.bot or seat.peer <= 1:
+			continue
+		var home := _machine_of(seat.peer)
+		machines[seat.peer] = home
+		if not _listen.has(seat.peer):
+			continue
+		var heard: Dictionary = _reach.get(seat.peer, {})
+		var score := 0
+		for from: int in heard:
+			if _machine_of(from) != home:
+				score += 2 if from > 1 else 1
+		entries.append({"peer": seat.peer, "name": seat.name, "port": _listen[seat.peer].port,
+				"addresses": _listen[seat.peer].addresses, "reach": heard.duplicate(), "score": score, "order": i})
+	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return a.score > b.score or (a.score == b.score and a.order < b.order))
+	_succession = entries
+	_machines = machines
+	_send(_succession_down, [entries, machines])
+
+
+@rpc("authority", "call_remote", "reliable")
+func _succession_down(entries: Array, machines: Dictionary) -> void:
+	_succession = entries
+	_machines = machines
+
+
+## Guest: the host is gone. The room passes to the first one on the list who
+## can be reached; this machine takes it if that is itself.
+func _on_host_gone() -> void:
+	if _leaving or hosting:
+		return
+	if handing_over:
+		# The one taking the room over left too, or was never there.
+		_next_heir()
+		return
+	var heirs := _succession.filter(func(entry: Dictionary) -> bool: return entry.peer != 1)
+	if not _joined or heirs.is_empty():
+		_fail("The host closed the room.")
+		return
+	handing_over = true
+	_walk = heirs
+	_step = -1
+	_next_heir()
+
+
+## The next one on the list: this machine opens the room, or joins whoever
+## does. A try that gets nowhere in HANDOVER_TIMEOUT is given up on.
+func _next_heir() -> void:
+	if not handing_over:
+		return
+	_attempt += 1
+	_step += 1
+	if _step >= _walk.size():
+		handing_over = false
+		_fail("The host left, and nobody could take the room over.")
+		return
+	var heir: Dictionary = _walk[_step]
+	var mine: bool = heir.peer == _me
+	passing.emit(heir.name, mine)
+	if mine:
+		if not _take_over(heir):
+			_next_heir()
+		return
+	var link := ENetMultiplayerPeer.new()
+	if link.create_client(_address_of(heir), heir.port) != OK:
+		_next_heir.call_deferred()
+		return
+	_swap_link(link)
+	get_tree().create_timer(HANDOVER_TIMEOUT).timeout.connect(_heir_late.bind(_attempt))
+
+
+func _heir_late(attempt: int) -> void:
+	if handing_over and attempt == _attempt and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		_next_heir()
+
+
+## Where this machine reaches `heir`: by the address that got its test
+## packet through, or this computer's if it is on it.
+func _address_of(heir: Dictionary) -> String:
+	var reach: Dictionary = heir.reach
+	if reach.has(_me):
+		return heir.addresses[reach[_me]]
+	if _machines.has(_me) and _machines.get(_me) == _machines.get(heir.peer):
+		return "127.0.0.1"
+	return heir.addresses[0]
+
+
+## Puts the room on another connection. The old one is closed only once it
+## has been let go of, so that it says nothing about closing.
+func _swap_link(link: MultiplayerPeer) -> void:
+	var old := multiplayer.multiplayer_peer
+	multiplayer.multiplayer_peer = link
+	if old != null:
+		old.close()
+
+
+## This machine is the next host: it opens the room on the port it listened
+## on and waits for the others to come back to it. False if it cannot.
+func _take_over(heir: Dictionary) -> bool:
+	_close_probe()
+	var server := ENetMultiplayerPeer.new()
+	if server.create_server(heir.port, MAX_SEATS * 2) != OK:
+		return false
+	_swap_link(server)
+	handing_over = false
+	hosting = true
+	port = heir.port
+	_taking_over = true
+	_take_over_id += 1
+	_pending.clear()
+	_resumes.clear()
+	_held.clear()
+	_renamed.clear()
+	_listen.clear()
+	_reach.clear()
+	_warned.clear()
+	var was := _me
+	_me = 1
+	_renamed[was] = 1
+	# The old host's seat is left; everyone else's waits for them, as the
+	# peer they had made negative (nobody answers for it, nor is it absent).
+	for i in range(seats.size() - 1, -1, -1):
+		var seat: Dictionary = seats[i]
+		if seat.bot:
+			continue
+		if seat.peer == 1:
+			seats.remove_at(i)
+		elif seat.peer == was:
+			seat.peer = 1
+		elif seat.peer > 1:
+			_pending[seat.get("mark", "")] = seat.peer
+			seat.peer = -seat.peer
+	if in_match:
+		var left := -1
+		for i in match_peers.size():
+			var peer: int = match_peers[i]
+			if peer == 1:
+				left = i
+				match_peers[i] = 0
+			elif peer == was:
+				match_peers[i] = 1
+			elif peer > 1:
+				match_peers[i] = -peer
+		if left >= 0:
+			seat_left.emit(left)
+			_set_away(left, &"idle")
+	get_tree().create_timer(HANDOVER_GRACE).timeout.connect(_end_take_over.bind(_take_over_id))
+	if _pending.is_empty():
+		_end_take_over.call_deferred(_take_over_id)
+	return true
+
+
+## New host: one of the others is back (or someone else came in).
+@rpc("any_peer", "call_remote", "reliable")
+func _resume(nonce: int, token: String, player_name: String, build: int, keys: Array, had: int, sent: Dictionary) -> void:
+	var peer := multiplayer.get_remote_sender_id()
+	if not hosting:
+		return
+	if nonce != _nonce:
+		# Another room that happens to be on that port.
+		_not_this_room.rpc_id(peer)
+		return
+	var mark := _hash(token)
+	if not _taking_over or _reconciling or not _pending.has(mark):
+		# Too late to be waited for: as anyone coming in.
+		_greet(peer, player_name, build, keys, mark)
+		return
+	var was: int = _pending[mark]
+	_pending.erase(mark)
+	_renamed[was] = peer
+	for seat: Dictionary in seats:
+		if seat.peer == -was:
+			seat.peer = peer
+	var at := match_peers.find(-was) if in_match else -1
+	if at >= 0:
+		match_peers[at] = peer
+	_resumes[peer] = {"had": had, "sent": sent}
+	if _pending.is_empty():
+		_end_take_over(_take_over_id)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _not_this_room() -> void:
+	if handing_over:
+		_next_heir()
+
+
+## New host: the others are back, or have had their time. The longest history
+## any of them has is the match as it stands: the new host takes it, hands the
+## rest of it to whoever is behind, and only then passes on the answers that
+## never made it round, and the new ones.
+func _end_take_over(id: int) -> void:
+	if id != _take_over_id or not _taking_over or _reconciling or not hosting:
+		return
+	_reconciling = true
+	# Whoever is not back has left, like anyone who drops out.
+	for mark: String in _pending:
+		var was: int = _pending[mark]
+		for i in range(seats.size() - 1, -1, -1):
+			if seats[i].peer == -was:
+				seats.remove_at(i)
+		var at := match_peers.find(-was) if in_match else -1
+		if at >= 0:
+			match_peers[at] = 0
+			seat_left.emit(at)
+			_away_down(_match_id, at, "idle")
+	_pending.clear()
+	while in_match:
+		var ahead := 0
+		var longest := _history.size()
+		for peer: int in _resumes:
+			if _resumes[peer].had > longest:
+				longest = _resumes[peer].had
+				ahead = peer
+		if ahead == 0:
+			break
+		_tail_up.rpc_id(ahead, _match_id, _history.size())
+		await _tail_came
+		if not hosting or id != _take_over_id:
+			return
+		if _resumes.has(ahead):
+			_resumes[ahead].had = mini(_resumes[ahead].had, _history.size())
+	_taking_over = false
+	_reconciling = false
+	var machines := {}
+	for peer: int in _machines:
+		if _renamed.has(peer) and _renamed[peer] != 1:
+			machines[_renamed[peer]] = _machines[peer]
+	var heirs := []
+	for entry: Dictionary in _succession:
+		if not _renamed.has(entry.peer) or _renamed[entry.peer] == 1:
+			continue
+		var moved := entry.duplicate(true)
+		moved.peer = _renamed[entry.peer]
+		moved.reach = {}
+		for from: int in entry.reach:
+			if _renamed.has(from) and _renamed[from] != 1:
+				moved.reach[_renamed[from]] = entry.reach[from]
+		heirs.append(moved)
+	_succession = heirs
+	_machines = machines
+	for peer: int in _resumes:
+		var state := _state()
+		state.peers = match_peers
+		state.away = away
+		state.tail = _history.slice(_resumes[peer].had) if in_match else []
+		state.heirs = heirs
+		state.machines = machines
+		_resumed.rpc_id(peer, _match_id, state)
+	if in_match:
+		# Lost on the way: what was sent to the old host and never came back,
+		# from the others and from this machine, in the order it was asked.
+		var lost := []
+		for peer: int in _resumes:
+			var sent: Dictionary = _resumes[peer].sent
+			for number: int in sent:
+				lost.append([number, sent[number][0], sent[number][1], peer])
+		for number: int in _sent:
+			lost.append([number, _sent[number][0], _sent[number][1], 1])
+		lost.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+		for entry: Array in lost:
+			var seat: int = entry[1]
+			if seat >= 0 and seat < match_peers.size() and match_peers[seat] == entry[3] and not _given.has(Vector2i(entry[0], seat)):
+				_relay(entry[0], seat, entry[2])
+		_sent.clear()
+		for entry: Array in _held:
+			if not _given.has(Vector2i(entry[0], entry[1])):
+				_relay(entry[0], entry[1], entry[2])
+	_held.clear()
+	_resumes.clear()
+	_push()
+	host_changed.emit()
+	# What the old host was answering for (a bot in a seat, a kick) is now
+	# answered here.
+	for ticket: Ticket in _tickets.values():
+		ticket.controller.cover(ticket)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _tail_up(id: int, from: int) -> void:
+	if id == _match_id:
+		_tail_down.rpc_id(1, _match_id, _history.slice(from))
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _tail_down(id: int, entries: Array) -> void:
+	var peer := multiplayer.get_remote_sender_id()
+	if not hosting or id != _match_id or not _resumes.has(peer):
+		return
+	for entry: Array in entries:
+		_answer_down(_match_id, entry[0], entry[1], entry[2])
+	_tail_came.emit()
+
+
+## Guest: back in the room, under its new host.
+@rpc("authority", "call_remote", "reliable")
+func _resumed(id: int, state: Dictionary) -> void:
+	if not handing_over:
+		return
+	handing_over = false
+	seats = state.seats
+	config = GameConfig.from_wire(state.config)
+	_nonce = state.nonce
+	_succession = state.heirs
+	_machines = state.machines
+	if in_match and id == _match_id:
+		var before := match_peers
+		match_peers = state.peers
+		away = state.away
+		for entry: Array in state.tail:
+			_answer_down(_match_id, entry[0], entry[1], entry[2])
+		for seat in match_peers.size():
+			if match_peers[seat] == 0 and seat < before.size() and before[seat] != 0:
+				seat_left.emit(seat)
+		for seat: int in away:
+			away_changed.emit(seat)
+		# Whatever was answered here while the room was moving goes up now
+		# (the host passes each answer on only once).
+		for number: int in _sent:
+			_answer_up.rpc_id(1, _match_id, number, _sent[number][0], _sent[number][1])
+	host_changed.emit()
+	changed.emit()
+	_announce()

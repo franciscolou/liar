@@ -21,8 +21,10 @@ const KICK := "kick"
 var table: Node
 ## The room the match is played in (room.gd). Null offline.
 var room: Node
-## Host only: answers for the seat once its player has left the room, if the
-## host has a bot play it (Room.away), and for what an empty seat cannot pass on.
+## Answers for the seat once its player has left the room, if the host has a
+## bot play it (Room.away), and for what an empty seat cannot pass on. Every
+## machine in a room keeps one, so that whoever takes the room over has one
+## that has seen the whole match, but only the host's answers.
 var stand_in: BotController
 
 var _turns := 0
@@ -76,7 +78,7 @@ func _answer(ticket: RefCounted) -> void:
 	if table != null:
 		ticket.asked = true
 		answer = await table.request(decision)
-	elif stand_in != null and room.absent(player.id):
+	elif stand_in != null and room.hosting and room.absent(player.id):
 		var mode: StringName = room.away_mode(player.id)
 		if mode == &"idle":
 			# Nobody answers for someone who may still come back: the match

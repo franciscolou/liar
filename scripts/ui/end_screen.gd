@@ -77,6 +77,13 @@ func _ready() -> void:
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		add_child(waiting)
 		_plates.append(waiting)
+		# The host left and the room passed to this machine: it deals now.
+		room.host_changed.connect(func() -> void:
+			if room.hosting and is_instance_valid(waiting):
+				again_button.disabled = false
+				again_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+				_plates.erase(waiting)
+				waiting.queue_free())
 	var settings := UI.button("SETTINGS", PLATE_BORDER, 15)
 	settings_button = settings
 	settings.size = UI.grown(Vector2(130, 34))

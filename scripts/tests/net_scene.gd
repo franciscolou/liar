@@ -13,7 +13,10 @@ extends Node
 ## the match up to where the others are. A waiting seat stops the match on
 ## the next thing it is asked: then they come back to answer it. In the last
 ## one the host kicks them out, and they are turned away when they try to come
-## back.
+## back. Then the host itself walks away twice in the middle of a match: the
+## room passes to one of the others and the match goes on there. The first
+## time the old host comes back to the new one, by the key of their seat; the
+## second time the new host has a bot play the seat.
 
 const Room := preload("res://scripts/net/room.gd")
 # Past the ports real rooms take, so a game open on this computer is no bother.
@@ -45,6 +48,25 @@ func _ready() -> void:
 			if problem != "":
 				push_error("net: match %d: %s" % [m, problem])
 				failed += 1
+		# One more guest: when the host leaves, one of them takes the room
+		# over and the others have to find it.
+		# Back in the lobby, as Room.to_lobby leaves them: nobody joins a match.
+		for room: Node in _rooms:
+			room.in_match = false
+		_join(30, "Guest3")
+		var full := await _until(func() -> bool: return _rooms.all(func(room: Node) -> bool:
+				return room.seats.size() == _rooms.size() + 1), "the third guest never got in")
+		if full != "":
+			print("FAILED  ", full)
+			failed += 1
+		for m in [MATCHES, MATCHES + 1]:
+			var outcome: Variant = await _hand_over_match(m, m == MATCHES)
+			problem = outcome if outcome is String else "it stopped on a script error"
+			print("%s  match %d (the host leaves)%s" % ["ok    " if problem == "" else "FAILED", m, "" if problem == "" else ": " + problem])
+			if problem != "":
+				push_error("net: match %d: %s" % [m, problem])
+				failed += 1
+				break
 	print("NET DONE: %d failed" % failed)
 	var verdict := Label.new()
 	verdict.text = "Net: %d failed. See the output." % failed
@@ -71,20 +93,17 @@ func _open() -> String:
 	if server.create_server(PORT, 8) != OK:
 		return "port %d is taken" % PORT
 	host.multiplayer.multiplayer_peer = server
-	host.hosting = true
-	host.config = GameConfig.new()
-	host.seats = [{"name": "Host", "bot": false, "peer": 1}]
-	host.add_bot()
+	host.hosted("Host", PORT, 1)
 	_rooms.append(host)
 	for i in [1, 2]:
 		_join(i)
 	return await _until(func() -> bool: return host.seats.size() == 4 and _rooms.all(func(room: Node) -> bool: return room.seats.size() == 4), "the machines never got in")
 
 
-func _join(index: int, player_name := "") -> Node:
+func _join(index: int, player_name := "", port := PORT) -> Node:
 	var room := _machine(index)
 	var client := ENetMultiplayerPeer.new()
-	client.create_client("127.0.0.1", PORT)
+	client.create_client("127.0.0.1", port)
 	room.multiplayer.multiplayer_peer = client
 	room._player_name = player_name if player_name != "" else "Guest%d" % index
 	room._joined = true  # no lobby scene to open here
@@ -103,12 +122,14 @@ func _until(condition: Callable, problem: String) -> String:
 	return ""
 
 
-func _play(m: int) -> String:
+## Deals match `m` to every machine in the room, as Room.start does, and sets
+## them all playing it.
+func _deal(m: int) -> Array:
 	var host: Node = _rooms[0]
 	var dealt := GameConfig.new()
 	for seat: Dictionary in host.seats:
 		dealt.seats.append({"name": seat.name, "bot": seat.bot})
-	dealt.character_count = 4 + m * 2
+	dealt.character_count = 4 + (m % MATCHES) * 2
 	dealt.max_turns = 400
 	dealt.rng_seed = 500 + m
 	var peers: Array = host.seats.map(func(seat: Dictionary) -> int: return seat.peer)
@@ -118,15 +139,24 @@ func _play(m: int) -> String:
 		room._begin(m + 1, peers.duplicate(), dealt.to_wire())
 		if not room.out_of_step.is_connected(_note):
 			room.out_of_step.connect(_note)
-	# A key to each seat of the others, as Room.start deals them.
-	host._keys = peers.map(func(peer: int) -> String: return "key-%d-%d" % [m, peer] if peer > 1 else "")
-	for key: String in host._keys:
+	# A key to each person's seat, and their hashes to everyone.
+	var keys: Array = peers.map(func(peer: int) -> String: return "key-%d-%d" % [m, peer] if peer >= 1 else "")
+	var hashes: Array = keys.map(func(key: String) -> String: return key.sha256_text() if key != "" else "")
+	for room: Node in _rooms:
+		room._key_hashes = hashes.duplicate()
+	for key: String in keys:
 		if key != "":
 			Room._known_keys.append(key)
 	for room: Node in _rooms:
 		tables.append(_sit(room, GameConfig.from_wire(dealt.to_wire())))
 	for table: Machine in tables:
 		table.engine.run()
+	return tables
+
+
+func _play(m: int) -> String:
+	var host: Node = _rooms[0]
+	var tables := _deal(m)
 
 	# In the odd matches the last machine leaves once the match is under way.
 	var leaver: Machine = tables.back() if m % 2 == 1 and tables.size() > 2 else null
@@ -188,6 +218,23 @@ func _play(m: int) -> String:
 				return "came back to another seat"
 			tables.append(again)
 			again.engine.run()
+	var ended := await _finish(tables)
+	if ended != "":
+		return ended
+	if someone_left and host.seats.size() != _rooms.size() + 1:
+		return "the one who left still has a seat"
+	if someone_left:
+		var first: Machine = tables[0]
+		var gone: PlayerState = first.engine.players[first.engine.players.size() - 1]
+		var fate := "still in" if gone.alive else ("kicked" if gone.left.is_empty() else "eliminated")
+		print("        the one who left: %s" % fate)
+	return ""
+
+
+## Waits for every machine to play the match out, and checks that they all
+## played the same one.
+func _finish(tables: Array) -> String:
+	var host: Node = _rooms[0]
 	var late := await _until(func() -> bool: return tables.all(func(table: Machine) -> bool: return table.engine.over or table.done), "did not finish: turns %s, %d decisions open on the host" % [
 		tables.map(func(table: Machine) -> int: return table.engine.turn_count), host._tickets.size()])
 	for table: Machine in tables:
@@ -203,14 +250,71 @@ func _play(m: int) -> String:
 	for table: Machine in tables:
 		if table.summary() != first.summary():
 			return "the machines ended in different matches:\n%s\n%s" % [first.summary(), table.summary()]
-	if someone_left and host.seats.size() != _rooms.size() + 1:
-		return "the one who left still has a seat"
 	print("        %d machines, %d decisions, %s" % [tables.size(), host._next_ticket, first.summary().get_slice("\n", 0)])
-	if someone_left:
-		var gone: PlayerState = first.engine.players[first.engine.players.size() - 1]
-		var fate := "still in" if gone.alive else ("kicked" if gone.left.is_empty() else "eliminated")
-		print("        the one who left: %s" % fate)
 	return ""
+
+
+## The host walks away halfway through match `m`: the room has to pass to one
+## of the others, in one piece, and the match go on there. With `comes_back`
+## the old host comes back to the new one later, from another machine and by
+## the key of their seat; without, the new host has a bot play the seat.
+func _hand_over_match(m: int, comes_back: bool) -> String:
+	var heard := await _until(func() -> bool: return _rooms.slice(1).all(func(room: Node) -> bool: return not room._succession.is_empty()),
+			"the guests never heard who would take the room over")
+	if heard != "":
+		return heard
+	var host: Node = _rooms[0]
+	var tables := _deal(m)
+	var leaver: Machine = tables[0]
+	var under_way := await _until(func() -> bool: return leaver.engine.turn_count >= 6 or leaver.engine.over, "never got to turn 6")
+	if under_way != "":
+		return under_way
+	var left_seat: int = host.my_match_seat()
+	leaver.engine.abort()
+	tables.erase(leaver)
+	leaver.queue_free()
+	_rooms.erase(host)
+	host.leave()
+	var moved := await _until(func() -> bool:
+		return _rooms.any(func(room: Node) -> bool: return room.hosting) \
+				and _rooms.all(func(room: Node) -> bool: return not room.handing_over and not room._taking_over), "the room never passed to anyone")
+	if moved != "":
+		return moved
+	var hosts := _rooms.filter(func(room: Node) -> bool: return room.hosting)
+	if hosts.size() != 1:
+		return "the room split in %d" % hosts.size()
+	var heir: Node = hosts[0]
+	_rooms.erase(heir)
+	_rooms.push_front(heir)
+	for table: Machine in tables:
+		if table.room == heir:
+			tables.erase(table)
+			tables.push_front(table)
+			break
+	print("        the room passed to %s, on port %d" % [heir.host_name(), heir.port])
+	if heir.away_mode(left_seat) != &"idle":
+		return "the old host's seat is not waiting"
+	if _rooms.any(func(room: Node) -> bool: return room.host_name() != heir.host_name()):
+		return "the machines do not agree on who hosts the room"
+	if comes_back:
+		var held := func() -> bool: return heir._tickets.values().any(func(ticket: RefCounted) -> bool:
+			return ticket.decision.player.id == left_seat and not ticket.asked)
+		var turn: int = tables[0].engine.turn_count
+		var later := await _until(func() -> bool: return tables[0].engine.turn_count >= turn + 4 or tables[0].engine.over or held.call(), "never got 4 turns further")
+		if later != "":
+			return later
+		var comer := _join(20 + m, "Boss", heir.port)
+		var back := await _until(func() -> bool: return comer.in_match, "the old host never got the match back")
+		if back != "":
+			return back
+		var again := _sit(comer, GameConfig.from_wire(comer._dealt))
+		if comer.my_match_seat() != left_seat:
+			return "the old host came back to another seat"
+		tables.append(again)
+		again.engine.run()
+	else:
+		heir.set_away(left_seat, &"bot")
+	return await _finish(tables)
 
 
 func host_table(tables: Array) -> Machine:
@@ -243,8 +347,8 @@ func _sit(room: Node, config: GameConfig) -> Machine:
 			if p.id == mine:
 				controller.table = table
 				table.person = _bot(engine, p)
-			if room.hosting:
-				controller.stand_in = _bot(engine, p)
+			# On every machine, as at a real table: any of them may come to host.
+			controller.stand_in = _bot(engine, p)
 		controller.engine = engine
 		controller.player = p
 		engine.controllers[p.id] = controller

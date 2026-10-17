@@ -142,6 +142,12 @@ const TOUCH_STAGE_TOP := 230.0
 ## Seconds a claim shows its description on the stage before it folds away;
 ## a tap on the stage opens it again (and folds it).
 const TOUCH_READ_TIME := 5.0
+## Touch mode: how dark the table goes around a description the player opened,
+## and how fast it gets there.
+const TOUCH_READ_DIM := 0.45
+const TOUCH_READ_FADE := 0.15
+## Touch mode: a press on the veil this soon after it came is the one that opened it.
+const TOUCH_READ_GUARD := 250
 ## The shop, made bigger whole, and the emote buttons.
 const TOUCH_SHOP_SCALE := 1.4
 ## The top right buttons: the menu's plate, and the square ones beside it.
@@ -191,6 +197,7 @@ var _stage_stack: Array = []
 var _prompt: PanelContainer
 var _popup: Control
 var _modal: Control
+var _read_veil: Control  # touch mode: the table dimmed around a description being read
 var _log: RichTextLabel
 var _log_panel: Control
 var _log_box: PanelContainer
@@ -499,6 +506,10 @@ func _back_out() -> bool:
 	if _popup.get_child_count() > 0:
 		_close_popup()
 		return true
+	# The phone's back button folds a description that holds the table.
+	if _read_veil != null and _read_veil.get_meta(&"on", false):
+		_fold_reading()
+		return true
 	if _choosing_target():
 		_answer(null)
 		return true
@@ -599,6 +610,8 @@ func _build() -> void:
 	if UI.touch:
 		_touch_corner()
 	_popup = _layer()
+	if UI.touch:
+		_build_read_veil()
 	_modal = _layer()
 	# Above anything _lift_hovered brings forward.
 	for layer: Control in [_fx, _overlay, _popup, _modal]:
@@ -3482,11 +3495,16 @@ func _touch_description(entry: Dictionary, text: VBoxContainer) -> void:
 func _on_stage_input(event: InputEvent) -> void:
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		return
+	# The second press of a double tap would fold what the first one opened.
+	if event.double_click:
+		return
 	if _stage_stack.is_empty():
 		return
 	var entry: Dictionary = _stage_stack.back()
 	entry.reading = not entry.get("reading", false)
 	entry.opened = true
+	# Opened by hand, it holds the table until a tap anywhere folds it.
+	entry.held = entry.reading
 	_play_sfx("ui_key")
 	_render_stage()
 
@@ -3510,6 +3528,67 @@ func _shield_prompt() -> void:
 		if not node.has_meta(&"filter"):
 			node.set_meta(&"filter", node.mouse_filter)
 		node.mouse_filter = Control.MOUSE_FILTER_IGNORE if shut else node.get_meta(&"filter")
+	_veil_reading()
+
+
+## Touch mode: a description the player tapped open dims the rest of the
+## table, which takes no tap while it is open: so it is plain that the
+## table waits, and a tap anywhere (the stage too) folds it. The one that
+## opens by itself with a new play does not hold the table.
+func _build_read_veil() -> void:
+	# A layer of its own: the modal one is emptied whenever a choice closes.
+	_read_veil = _layer()
+	_read_veil.z_index = 2
+	_read_veil.visible = false
+	_read_veil.modulate.a = 0.0
+	# The veil lies above the stage: the stage shows through a hole in it.
+	_read_veil.draw.connect(func() -> void:
+		var whole := Rect2(Vector2.ZERO, _read_veil.size)
+		var hole := _read_veil.get_global_transform().affine_inverse() * _stage.get_global_rect()
+		var dark := Color(0, 0, 0, TOUCH_READ_DIM)
+		_read_veil.draw_rect(Rect2(0, 0, whole.size.x, hole.position.y), dark)
+		_read_veil.draw_rect(Rect2(0, hole.end.y, whole.size.x, whole.size.y - hole.end.y), dark)
+		_read_veil.draw_rect(Rect2(0, hole.position.y, hole.position.x, hole.size.y), dark)
+		_read_veil.draw_rect(Rect2(hole.end.x, hole.position.y, whole.size.x - hole.end.x, hole.size.y), dark))
+	_read_veil.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_read_veil.accept_event()
+			# The press that opened it, come round again, is not a tap on it.
+			if Time.get_ticks_msec() - _read_veil.get_meta(&"since", 0) >= TOUCH_READ_GUARD:
+				_fold_reading())
+	_stage.item_rect_changed.connect(_read_veil.queue_redraw)
+
+
+func _fold_reading() -> void:
+	if _stage_stack.is_empty():
+		return
+	var entry: Dictionary = _stage_stack.back()
+	entry.reading = false
+	entry.held = false
+	_play_sfx("ui_key")
+	_render_stage()
+
+
+## Shows the veil while the description on the stage was opened by hand.
+func _veil_reading() -> void:
+	if _read_veil == null:
+		return
+	var on: bool = _stage_reading() and _stage_stack.back().get("held", false)
+	if on == _read_veil.get_meta(&"on", false):
+		return
+	_read_veil.set_meta(&"on", on)
+	# Fading out, it already lets the taps through.
+	_read_veil.mouse_filter = Control.MOUSE_FILTER_STOP if on else Control.MOUSE_FILTER_IGNORE
+	if on:
+		_read_veil.set_meta(&"since", Time.get_ticks_msec())
+		_read_veil.visible = true
+		_read_veil.queue_redraw()
+	var fade := create_tween()
+	fade.tween_property(_read_veil, "modulate:a", 1.0 if on else 0.0, TOUCH_READ_FADE)
+	if not on:
+		fade.tween_callback(func() -> void:
+			if not _read_veil.get_meta(&"on", false):
+				_read_veil.visible = false)
 
 
 ## Touch mode: the stage, as big as its bigger text needs, kept in the middle.

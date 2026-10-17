@@ -1621,6 +1621,18 @@ def ui_gather():
     return out
 
 
+def ui_strike():
+    """A pen drawn hard across a name on the sheet of a clipboard: the nib
+    bites in, scratches along the paper with a little catch in the grain, and
+    lifts off."""
+    out = silence(0.4)
+    scratch = bandpass(noise(0.28, 0.006, 0.2, 421), 2200, 7000)
+    grain = random.Random(423)
+    mix(out, [x * (0.75 + 0.25 * grain.random()) * (1.0 if i > RATE * 0.02 else 1.6) for i, x in enumerate(scratch)], 0.0, 0.7)
+    mix(out, lowpass(noise(0.03, 0.0005, 0.01, 425), 1800), 0.0, 0.5)
+    return out
+
+
 SOUNDS = {
     "fx_creep": fx_creep,
     "fx_snatch": fx_snatch,
@@ -1631,6 +1643,7 @@ SOUNDS = {
     "ui_unlock": ui_unlock,
     "ui_deal": ui_deal,
     "ui_gather": ui_gather,
+    "ui_strike": ui_strike,
     "ui_key": ui_key,
     "emote_laugh": emote_laugh,
     "emote_sad": emote_sad,
@@ -1729,7 +1742,7 @@ PEAKS = {
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,
     "item_roulette_tick": 0.6, "item_roulette_cock": 0.8, "item_roulette_shot": 0.97,
     "ui_lock": 0.55, "ui_unlock": 0.5, "ui_deal": 0.5,
-    "ui_gather": 0.5, "ui_key": 0.09,
+    "ui_gather": 0.5, "ui_key": 0.09, "ui_strike": 0.4,
     "emote_laugh": 0.5, "emote_sad": 0.5, "emote_angry": 0.5, "emote_mystery": 0.5, "emote_handshake": 0.5, "emote_flex": 0.45,
     "fx_creep": 0.22, "fx_snatch": 0.5, "fx_puzzled": 0.4, "fx_bills": 0.5, "fx_syringe": 0.6,
     "fx_entropy": 0.6, "fx_chains": 0.7, "fx_supernova": 0.97, "fx_stardust": 0.45, "fx_singularity": 0.65,

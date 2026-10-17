@@ -149,6 +149,13 @@ func _input(event: InputEvent) -> void:
 		return
 	if not UI.touch:
 		return
+	if event is InputEventScreenTouch or event is InputEventScreenDrag:
+		# A Button presses on a touch of its own, and the finger also comes
+		# as the mouse it is turned into (held back and sent on below): left
+		# to reach the screen, every tap pressed a button twice (a stepper
+		# went up by 2 on a phone). The mouse is the only way in.
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			get_viewport().set_input_as_handled()

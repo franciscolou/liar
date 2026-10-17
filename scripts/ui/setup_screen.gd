@@ -129,10 +129,37 @@ const FILE_BAND := 38.0
 const SEAT_LINES := 70.0
 const SEAT_STEP := 26.0
 
+## Touch mode: a phone has no room for everything at once, so the whole
+## screen is one big case, its sections behind tabs. All of these are in the
+## case's own coordinates. The lid carries the title on the maker's plate,
+## the way out and the settings on the left and dealing on the right.
+const TOUCH_CASE := Rect2(4, -12, 1144, 660)
+const TOUCH_LID_MIDDLE := 56.0
+const TOUCH_PLAQUE := Rect2(454, 25, 236, 62)
+## The tabs stand on a ridge at the top of the well; each page is under it,
+## in two halves.
+const TOUCH_TABS := Rect2(34, 128, 1076, 48)
+const TOUCH_TAB_GAP := 8.0
+const TOUCH_LEFT := Rect2(34, 192, 528, 418)
+const TOUCH_RIGHT := Rect2(582, 192, 528, 418)
+## The lines of the clipboard are further apart under a finger.
+const TOUCH_SEAT_STEP := 32.0
+## The items page: hollows four to a row, the ones always on sale on a row
+## of their own above a ridge.
+const TOUCH_ITEM_SCALE := 1.2
+const TOUCH_ITEM_COLUMNS := 4
+const TOUCH_ITEM_ROW := 120.0
+## The picture of the item being read, clipped to its sheet.
+const TOUCH_ITEM_PHOTO := 2.0
+## The pages, in the order of their tabs.
+const TOUCH_PAGES := ["CHARACTERS", "ITEMS", "PLAYERS AND RULES"]
+
 ## Whether the house rules are unfolded. Folded away, their place is where
 ## the abilities of the characters are read. It is kept for the next time
 ## this screen opens (back from a match).
 static var _rules_open := false
+## Touch mode: the page that is open, kept the same way.
+static var _page := 0
 
 var _room: Node
 var _host := false
@@ -189,6 +216,24 @@ var _file_dragged := false
 var _file_grab := 0.0  # where the mouse took hold of it, less the pull it had
 ## True while the widgets being built go on paper, not on felt.
 var _on_paper := false
+## From one line of the clipboard to the next.
+var _seat_step := SEAT_STEP
+## Touch mode: the tabs, the pages under them, and what the case shows in
+## its well for each page ({sockets, ridges}).
+var _tabs: Array[Button] = []
+var _pages: Array[Control] = []
+var _page_looks: Array[Dictionary] = []
+## Touch mode: the items page reads an item the way the characters page
+## reads a character.
+var _item_cells: Dictionary = {}  # item id -> ItemView, the fixed ones too
+var _item_read: StringName
+var _item_title: Label
+var _item_photo: TextureRect
+var _item_head: Control
+var _item_name: Label
+var _item_kind: Label
+var _item_state: Label
+var _item_text: RichTextLabel
 
 
 func _ready() -> void:
@@ -209,63 +254,14 @@ func _ready() -> void:
 	_read_config()
 
 	_desk = Desk.desk()
-	_desk.props = [{"kind": &"ring", "at": Vector2(700, 610)}]
+	if not UI.touch:
+		_desk.props = [{"kind": &"ring", "at": Vector2(700, 610)}]
 	add_child(_desk)
 	add_child(TipLayer.new())
-
-	# The top right belongs to the lid of the case: the title and the
-	# settings share the left.
-	var plaque: Desk = Desk.make(Desk.Kind.PLAQUE, Rect2(20, 8, 236, 46))
-	add_child(plaque)
-	var title := Desk.written("SET THE TABLE", 24, UI.INK, true)
-	title.set_anchors_preset(Control.PRESET_FULL_RECT)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	plaque.add_child(title)
-
-	_build_address()
-	_build_players()
-	_build_rules()
-	_build_case()
-
-	var back := UI.button("LEAVE ROOM", UI.BORDER, 20)
-	back.size = UI.grown(Vector2(170, 46))
-	back.position = Vector2(20, 636 - back.size.y)
-	Desk.brass(back)
-	back.pressed.connect(_on_leave)
-	if _host:
-		TipLayer.attach(back, "Leaves the room, which passes to another player.")
-	add_child(back)
-	# Between the plaque and the case there is no more room in touch mode:
-	# the word keeps its size.
-	var settings: Button = UI.native(func() -> Button: return UI.button("SETTINGS", UI.BORDER, 15))
-	settings.position = Vector2(264, 8)
-	settings.size = Vector2(132, 46)
-	Desk.brass(settings)
-	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
-	add_child(settings)
-	_start = UI.button("DEAL THE CARDS", UI.BORDER, 22)
-	_start.size = UI.grown(Vector2(260, 46))
-	_start.position = Vector2(1132 - _start.size.x, 636 - _start.size.y)
-	Desk.brass(_start, true)
-	_start.pressed.connect(_on_start)
-	_start.visible = _host
-	add_child(_start)
-	_problem = UI.label("", 14, UI.RED.lightened(0.25))
-	# In touch mode it shares the foot with the bigger buttons and the slip.
-	_problem.size = Vector2(220 if UI.touch else 314, _start.size.y)
-	_problem.position = _start.position - Vector2(_problem.size.x + 12.0, 0)
-	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_problem.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_problem.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(_problem)
-	if not _host:
-		var waiting := UI.label("Waiting for the host to deal...", 18, UI.CREAM, true)
-		waiting.size = Vector2(400, _start.size.y)
-		waiting.position = Vector2(732, _start.position.y)
-		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		waiting.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		add_child(waiting)
+	if UI.touch:
+		_build_touch()
+	else:
+		_build_desktop()
 	_things = Desk.things(self, _desk)
 	add_child(Desk.lamplight())
 	_room.changed.connect(_on_room_changed)
@@ -280,6 +276,395 @@ func _ready() -> void:
 	_refresh()
 	if Transition.desk_bare():
 		desk_slide(1.0)
+
+
+## The desk with everything lying on it, for a mouse.
+func _build_desktop() -> void:
+	# The top right belongs to the lid of the case: the title and the
+	# settings share the left.
+	var plaque: Desk = Desk.make(Desk.Kind.PLAQUE, Rect2(20, 8, 236, 46))
+	add_child(plaque)
+	plaque.add_child(_plaque_title())
+
+	_build_address(self, Rect2(204, 590, 330, 46))
+	_build_players(self, CLIPBOARD)
+	_build_rules()
+	_build_case()
+
+	var made := _build_buttons(self)
+	var back: Button = made.back
+	back.position = Vector2(20, 636 - back.size.y)
+	var settings: Button = made.settings
+	settings.position = Vector2(264, 8)
+	_start.position = Vector2(1132 - _start.size.x, 636 - _start.size.y)
+	_problem.size = Vector2(314, _start.size.y)
+	_problem.position = _start.position - Vector2(_problem.size.x + 12.0, 0)
+	if made.waiting != null:
+		var waiting: Label = made.waiting
+		waiting.size = Vector2(400, _start.size.y)
+		waiting.position = Vector2(732, _start.position.y)
+
+
+func _plaque_title() -> Label:
+	var title := Desk.written("SET THE TABLE", 24, UI.INK, true)
+	title.set_anchors_preset(Control.PRESET_FULL_RECT)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return title
+
+
+## The way out, the settings, dealing the cards and why they can't be dealt
+## yet, on `parent`; the caller puts them in their places.
+func _build_buttons(parent: Control) -> Dictionary:
+	var back := UI.button("LEAVE ROOM", UI.BORDER, 20)
+	back.size = UI.grown(Vector2(170, 46))
+	Desk.brass(back)
+	back.pressed.connect(_on_leave)
+	if _host:
+		TipLayer.attach(back, "Leaves the room, which passes to another player.")
+	parent.add_child(back)
+	var settings := UI.button("SETTINGS", UI.BORDER, 15)
+	settings.size = UI.grown(Vector2(132, 46))
+	Desk.brass(settings)
+	settings.pressed.connect(func(): add_child(SettingsPanel.new()))
+	parent.add_child(settings)
+	_start = UI.button("DEAL THE CARDS", UI.BORDER, 22)
+	_start.size = UI.grown(Vector2(260, 46))
+	Desk.brass(_start, true)
+	_start.pressed.connect(_on_start)
+	_start.visible = _host
+	parent.add_child(_start)
+	_problem = UI.label("", 13 if UI.touch else 14, UI.RED.lightened(0.25))
+	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_problem.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_problem.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(_problem)
+	var waiting: Label = null
+	if not _host:
+		waiting = UI.label("Waiting for the host to deal...", 18, UI.CREAM, true)
+		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		waiting.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		parent.add_child(waiting)
+	return {"back": back, "settings": settings, "waiting": waiting}
+
+
+## Touch mode: one big case over the whole screen. The lid holds the title
+## and the buttons, and the well three pages behind tabs: the characters
+## with the file of the one being read, the items with the file of theirs,
+## and the clipboard of players beside the house rules.
+func _build_touch() -> void:
+	_case = Desk.make(Desk.Kind.CASE, TOUCH_CASE)
+	add_child(_case)
+	var plaque: Desk = Desk.make(Desk.Kind.PLAQUE, TOUCH_PLAQUE)
+	_case.add_child(plaque)
+	plaque.add_child(_plaque_title())
+	var made := _build_buttons(_case)
+	var back: Button = made.back
+	back.position = Vector2(26, roundf(TOUCH_LID_MIDDLE - back.size.y / 2.0))
+	var settings: Button = made.settings
+	settings.position = Vector2(back.position.x + back.size.x + 10.0, roundf(TOUCH_LID_MIDDLE - settings.size.y / 2.0))
+	_start.position = Vector2(TOUCH_CASE.size.x - 26.0 - _start.size.x, roundf(TOUCH_LID_MIDDLE - _start.size.y / 2.0))
+	if made.waiting != null:
+		var waiting: Label = made.waiting
+		waiting.size = Vector2(400, _start.size.y)
+		waiting.position = Vector2(_start.position.x + _start.size.x - waiting.size.x, _start.position.y)
+
+	# The tabs, and why the cards can't be dealt yet at the end of their row.
+	# A row that lays itself out: a tab is only as wide as its text once the
+	# text is translated, which happens after it is built.
+	var row := HBoxContainer.new()
+	row.position = TOUCH_TABS.position
+	row.size = TOUCH_TABS.size
+	row.add_theme_constant_override("separation", int(TOUCH_TAB_GAP))
+	_case.add_child(row)
+	for index in TOUCH_PAGES.size():
+		var tab := _tab_button(TOUCH_PAGES[index], index)
+		row.add_child(tab)
+		_tabs.append(tab)
+	_problem.get_parent().remove_child(_problem)
+	_problem.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_problem.custom_minimum_size = Vector2(120, TOUCH_TABS.size.y)
+	row.add_child(_problem)
+
+	for index in TOUCH_PAGES.size():
+		var page := Control.new()
+		page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		page.size = TOUCH_CASE.size
+		_case.add_child(page)
+		_pages.append(page)
+		_page_looks.append({"sockets": [] as Array[Rect2], "ridges": [TOUCH_TABS.end.y] as Array[float]})
+	_build_touch_characters(_pages[0])
+	_build_touch_items(_pages[1])
+	_build_address(_pages[2], Rect2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 50.0, TOUCH_LEFT.size.x, 50))
+	_build_players(_pages[2], Rect2(TOUCH_LEFT.position, Vector2(TOUCH_LEFT.size.x, TOUCH_LEFT.size.y - 60.0)))
+	_build_touch_rules(_pages[2], TOUCH_RIGHT)
+	_show_page(_page)
+
+
+## A tab of the case: a flap of the lining rimmed in gold thread. The open
+## one is lit and runs down over the ridge into its page.
+func _tab_button(text: String, index: int) -> Button:
+	var tab := Button.new()
+	tab.text = text
+	tab.focus_mode = Control.FOCUS_NONE
+	tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	tab.add_theme_font_override("font", UI.bold())
+	tab.add_theme_font_size_override("font_size", UI.px(17))
+	for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+		var box := StyleBoxEmpty.new()
+		box.content_margin_left = 24
+		box.content_margin_right = 24
+		tab.add_theme_stylebox_override(state, box)
+	tab.custom_minimum_size = Vector2(150, TOUCH_TABS.size.y)
+	var back := Control.new()
+	back.show_behind_parent = true
+	back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# As wide as the tab turns out to be, whatever its text says.
+	back.set_anchors_preset(Control.PRESET_FULL_RECT)
+	back.draw.connect(_draw_tab.bind(back, index))
+	tab.add_child(back)
+	tab.pressed.connect(_show_page.bind(index))
+	return tab
+
+
+func _draw_tab(back: Control, index: int) -> void:
+	var on := index == _page
+	var w := back.size.x
+	# The open one hangs down over the ridge, into the page.
+	var h := back.size.y + (8.0 if on else 0.0)
+	var rim := UI.GOLD if on else Desk.BRASS_DARK
+	var fill := Desk.VELVET_LIGHT if on else Desk.VELVET_DEEP
+	back.draw_rect(Rect2(4, 0, w - 8.0, 2), rim)
+	back.draw_rect(Rect2(2, 2, w - 4.0, 2), rim)
+	back.draw_rect(Rect2(0, 4, w, h - 4.0), rim)
+	back.draw_rect(Rect2(4, 2, w - 8.0, 2), fill)
+	back.draw_rect(Rect2(2, 4, w - 4.0, h - (4.0 if on else 6.0)), fill)
+	# The lamp catches the top of the pile, and the shut ones sit in shade.
+	back.draw_rect(Rect2(4, 4, w - 8.0, 2), Desk.VELVET_SHEEN if on else Desk.VELVET)
+	if not on:
+		back.draw_rect(Rect2(2, h - 8.0, w - 4.0, 6), Color(0, 0, 0, 0.3))
+
+
+func _show_page(index: int) -> void:
+	_page = index
+	for i in _pages.size():
+		_pages[i].visible = i == index
+		_tabs[i].add_theme_color_override("font_color", UI.GOLD if i == index else UI.CREAM.darkened(0.3))
+		_tabs[i].add_theme_color_override("font_hover_color", UI.GOLD if i == index else UI.CREAM)
+		_tabs[i].add_theme_color_override("font_pressed_color", UI.GOLD)
+		_tabs[i].get_child(0).queue_redraw()
+	_case.sockets = _page_looks[index].sockets
+	_case.ridges = _page_looks[index].ridges
+	if TipLayer.current != null:
+		TipLayer.current.hide_all()
+
+
+## The page of the characters: how they are chosen along the top, the
+## cards on the left and the file of the one being read on the right, with
+## how many there are and how many copies of each under it.
+func _build_touch_characters(page: Control) -> void:
+	var head := _mode_row()
+	head.position = TOUCH_LEFT.position
+	head.size = Vector2(TOUCH_LEFT.size.x, 40)
+	page.add_child(head)
+
+	var grid := Control.new()
+	grid.position = TOUCH_LEFT.position + Vector2(0, 48)
+	grid.size = Vector2(TOUCH_LEFT.size.x, TOUCH_LEFT.size.y - 48.0 - 24.0)
+	page.add_child(grid)
+	var count := Content.character_list().size()
+	var rows := ceili(count / 6.0)
+	var per_row := ceili(count / float(rows))
+	var step := grid.size.x / per_row
+	var row_height := (grid.size.y - 10.0) / rows
+	var card_scale := minf((row_height - TOUCH_CAPTION - 4.0) / CardView.BASE.y, (step - 10.0) / CardView.BASE.x)
+	_fill_grid(grid, per_row, card_scale, TOUCH_CAPTION, 10.0)
+
+	# A long line under the cards: it keeps its desktop size to fit.
+	_summary = UI.native(func() -> Label: return UI.label("", 13, UI.CREAM.darkened(0.25)))
+	_summary.position = Vector2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 24.0)
+	_summary.size = Vector2(TOUCH_LEFT.size.x, 24)
+	_summary.clip_text = true
+	page.add_child(_summary)
+
+	var sheet := _build_reader(page, Rect2(TOUCH_RIGHT.position, Vector2(TOUCH_RIGHT.size.x, TOUCH_RIGHT.size.y - 94.0)))
+	sheet.rotation = 0.006
+	var steppers := VBoxContainer.new()
+	steppers.add_theme_constant_override("separation", 6)
+	steppers.position = Vector2(TOUCH_RIGHT.position.x, TOUCH_RIGHT.end.y - 82.0)
+	steppers.size = Vector2(TOUCH_RIGHT.size.x, 82)
+	page.add_child(steppers)
+	_build_count_rows()
+	steppers.add_child(_count_row)
+	steppers.add_child(_draw_row)
+	steppers.add_child(_copies_row())
+
+
+## The page of the items: a hollow in the foam for each, the ones always on
+## sale on a row of their own above a ridge, and the file of the one being
+## read on the right.
+func _build_touch_items(page: Control) -> void:
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	head.position = TOUCH_LEFT.position
+	head.size = Vector2(TOUCH_LEFT.size.x, 40)
+	page.add_child(head)
+	_item_title = UI.label("", 18, UI.GOLD, true)
+	_item_title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_item_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_item_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	head.add_child(_item_title)
+	head.add_child(_reset_button(_reset_items, _items_default))
+
+	var defs := Content.item_list()
+	var fixed := defs.filter(func(def: ItemDef) -> bool: return def.fixed)
+	var others := defs.filter(func(def: ItemDef) -> bool: return not def.fixed)
+	var step := TOUCH_LEFT.size.x / TOUCH_ITEM_COLUMNS
+	var top := TOUCH_LEFT.position.y + 48.0
+	var hollows: Array[Rect2] = []
+	var ridges: Array[float] = [TOUCH_TABS.end.y]
+	if not fixed.is_empty():
+		for i in fixed.size():
+			hollows.append(_item_cell(page, fixed[i], Vector2(TOUCH_LEFT.position.x + i * step, top), step))
+		var note := UI.label("Always on sale, outside the shop slots. Can't be banned.", 13, UI.CREAM.darkened(0.2))
+		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		note.position = Vector2(TOUCH_LEFT.position.x + fixed.size() * step + 8.0, top)
+		note.size = Vector2(TOUCH_LEFT.end.x - note.position.x, TOUCH_ITEM_ROW - 24.0)
+		note.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		page.add_child(note)
+		top += TOUCH_ITEM_ROW
+		ridges.append(top - 6.0)
+		top += 12.0
+	for i in others.size():
+		var at := Vector2(TOUCH_LEFT.position.x + (i % TOUCH_ITEM_COLUMNS) * step, top + floorf(i / float(TOUCH_ITEM_COLUMNS)) * TOUCH_ITEM_ROW)
+		hollows.append(_item_cell(page, others[i], at, step))
+	_page_looks[1].sockets = hollows
+	_page_looks[1].ridges = ridges
+	_build_item_reader(page, TOUCH_RIGHT)
+
+
+## One item in its hollow at `at`, `wide` across, with its name under it.
+## Returns the hollow.
+func _item_cell(page: Control, def: ItemDef, at: Vector2, wide: float) -> Rect2:
+	var view := ItemView.new(TOUCH_ITEM_SCALE)
+	view.position = Vector2(roundf(at.x + (wide - view.size.x) / 2.0), at.y + 6.0)
+	view.set_item(def)
+	page.add_child(view)
+	_item_cells[def.id] = view
+	var caption := UI.label(def.display_name, 11, UI.GOLD if def.fixed else UI.CREAM.darkened(0.15))
+	caption.clip_text = true
+	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	caption.position = Vector2(at.x, view.position.y + view.size.y + 6.0)
+	caption.size = Vector2(wide, TOUCH_CAPTION)
+	page.add_child(caption)
+	view.clicked.connect(_read_item.bind(def.id))
+	if def.fixed:
+		view.clicked.connect(_refuse.bind(view))
+	else:
+		_item_views[def.id] = view
+		if _host:
+			view.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			view.clicked.connect(func():
+				_items_on[def.id] = not _items_on[def.id]
+				_refresh())
+	return Rect2(view.position, view.size).grow(3.0)
+
+
+## A sheet where the item being read is written up: its picture clipped to
+## the corner, name, price and kind beside it, what it does under them.
+func _build_item_reader(page: Control, rect: Rect2) -> void:
+	var sheet: Desk = Desk.make(Desk.Kind.SHEET, rect)
+	sheet.dog_ear = false
+	sheet.tone = Desk.DIM_PAPER
+	sheet.browned = true
+	sheet.rotation = -0.006
+	page.add_child(sheet)
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 0)
+	box.offset_left = 18
+	box.offset_top = 16
+	box.offset_right = -18
+	box.offset_bottom = -12
+	box.add_theme_constant_override("separation", 10)
+	sheet.add_child(box)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 16)
+	box.add_child(head)
+	_item_head = head
+	var photo := Control.new()
+	photo.custom_minimum_size = ItemView.BASE * TOUCH_ITEM_PHOTO + Vector2(12, 12)
+	photo.draw.connect(func():
+		var frame := Rect2(Vector2.ZERO, photo.size)
+		photo.draw_rect(Rect2(frame.position + Vector2(3, 3), frame.size), Color(0, 0, 0, 0.25))
+		photo.draw_rect(frame, Desk.INK_FADED)
+		photo.draw_rect(frame.grow(-2.0), Desk.PAPER_DARK))
+	head.add_child(photo)
+	_item_photo = TextureRect.new()
+	_item_photo.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_item_photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_item_photo.stretch_mode = TextureRect.STRETCH_SCALE
+	_item_photo.position = Vector2(6, 6)
+	_item_photo.size = ItemView.BASE * TOUCH_ITEM_PHOTO
+	photo.add_child(_item_photo)
+	# The clip holds the picture to the sheet.
+	sheet.clip_at = box.offset_left + photo.custom_minimum_size.x / 2.0 - 10.0
+	var lines := VBoxContainer.new()
+	lines.alignment = BoxContainer.ALIGNMENT_CENTER
+	lines.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lines.add_theme_constant_override("separation", 4)
+	head.add_child(lines)
+	_item_name = Desk.written("", 22, Desk.INK, true)
+	_item_name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_item_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lines.add_child(_item_name)
+	_item_kind = Desk.written("", 15, Desk.INK_FADED)
+	_item_kind.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	lines.add_child(_item_kind)
+	_item_state = Desk.written("", 15, Desk.INK_RED, true)
+	_item_state.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_item_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lines.add_child(_item_state)
+	_item_text = RichTextLabel.new()
+	_item_text.bbcode_enabled = true
+	_item_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_item_text.add_theme_color_override("default_color", Desk.INK)
+	_item_text.add_theme_font_size_override("normal_font_size", UI.grow(15))
+	_item_text.add_theme_font_size_override("bold_font_size", UI.grow(15))
+	box.add_child(_item_text)
+
+
+## An item was tapped or held: its file goes on the sheet.
+func _read_item(item_id: StringName) -> void:
+	_item_read = item_id
+	_redraw_item_reader()
+
+
+func _redraw_item_reader() -> void:
+	if _item_text == null:
+		return
+	var def: ItemDef = Content.items.get(_item_read) if _item_read != &"" else null
+	_item_head.visible = def != null
+	var count := _items_on.values().count(true)
+	_item_title.text = "%s  %d/%d" % [Loc.t("ITEMS IN THE SHOP"), count, _items_on.size()]
+	if def == null:
+		_item_text.text = "[color=%s]%s[/color]" % [UI.hex(Desk.INK_FADED), Loc.t("Tap an item to read what it does here.")]
+		return
+	_item_photo.texture = UI.tex(def.texture_path)
+	_item_name.text = def.display_name.to_upper()
+	_item_kind.text = "%s  ·  %s" % [Loc.t("%d coins") % def.price, def.kind_label()]
+	var state := "Always on sale."
+	var ink := Desk.INK_GREEN
+	if not def.fixed:
+		state = "On sale in this match." if _items_on[def.id] else "Banned from this match."
+		ink = Desk.INK_GREEN if _items_on[def.id] else Desk.INK_RED
+	_item_state.text = Loc.t(state)
+	Desk.ink(_item_state, ink)
+	var text := def.description
+	if _host and not def.fixed:
+		text += "\n\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Tap to allow or ban it.")]
+	text = Desk.in_ink(text)
+	if _item_text.text != text:
+		_item_text.text = text
 
 
 ## The way in from the room screen and back (Transition.DESK): everything
@@ -302,14 +687,13 @@ func _notification(what: int) -> void:
 
 ## A slip of paper beside the button that leaves: where the others find this
 ## room, or whose rules these are.
-func _build_address() -> void:
-	# Beside the button to leave, which is bigger in touch mode.
-	var slip: Desk = Desk.make(Desk.Kind.SHEET, Rect2(256, 582, 290, 54) if UI.touch else Rect2(204, 590, 330, 46))
+func _build_address(parent: Control, rect: Rect2) -> void:
+	var slip: Desk = Desk.make(Desk.Kind.SHEET, rect)
 	slip.rotation = -0.012
 	slip.dog_ear = false
 	slip.tone = Desk.DIM_PAPER
-	add_child(slip)
-	var line: Label = UI.native(func() -> Label: return Desk.written("Only the host changes the table. You may change your name.", 14, Desk.INK_FADED))
+	parent.add_child(slip)
+	var line: Label = Desk.written("Only the host changes the table. You may change your name.", 14, Desk.INK_FADED)
 	# Wrapping first: until then the label is as wide as its text.
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	line.position = Vector2(10, 2)
@@ -322,8 +706,7 @@ func _build_address() -> void:
 		return
 	var addresses: Array = Room.addresses()
 	Desk.ink(line, Desk.INK)
-	# The slip is no wider in touch mode: the address keeps its size.
-	line.add_theme_font_size_override("font_size", roundi(16 * UI.FONT_SCALE) if UI.touch else UI.px(16))
+	line.add_theme_font_size_override("font_size", UI.px(16))
 	line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_write_address()
 	if addresses.is_empty():
@@ -367,17 +750,19 @@ func _write_address() -> void:
 
 
 ## The players sign in on the sheet of a clipboard, one to a line.
-func _build_players() -> void:
+func _build_players(parent: Control, rect: Rect2) -> void:
 	_on_paper = true
-	var board: Desk = Desk.make(Desk.Kind.CLIPBOARD, CLIPBOARD)
+	if UI.touch:
+		_seat_step = TOUCH_SEAT_STEP
+	var board: Desk = Desk.make(Desk.Kind.CLIPBOARD, rect)
 	board.tone = Desk.DIM_PAPER
 	board.browned = true
-	board.ruled = SEAT_STEP
-	board.ruled_from = SEAT_LINES + SEAT_STEP - Desk.SHEET_AT.y - 1.0
-	add_child(board)
+	board.ruled = _seat_step
+	board.ruled_from = SEAT_LINES + _seat_step - Desk.SHEET_AT.y - 1.0
+	parent.add_child(board)
 	var box := VBoxContainer.new()
 	box.position = Vector2(22, SEAT_LINES - 35.0)
-	box.size = Vector2(CLIPBOARD.size.x - 44.0, 0)
+	box.size = Vector2(rect.size.x - 44.0, 0)
 	box.add_theme_constant_override("separation", 5)
 	board.add_child(box)
 	var head := HBoxContainer.new()
@@ -396,7 +781,8 @@ func _build_players() -> void:
 	box.add_child(head)
 	# One line of the sheet to each seat: the rule of the paper is under the name.
 	var list := VBoxContainer.new()
-	list.add_theme_constant_override("separation", int(SEAT_STEP) - 24)
+	var line_height := _seat_step - 4.0 if UI.touch else 24.0
+	list.add_theme_constant_override("separation", int(_seat_step - line_height))
 	box.add_child(list)
 	for i in Room.MAX_SEATS:
 		var row := HBoxContainer.new()
@@ -406,7 +792,7 @@ func _build_players() -> void:
 		row.add_child(number)
 		var name_edit := LineEdit.new()
 		name_edit.max_length = Room.NAME_LENGTH
-		name_edit.custom_minimum_size = Vector2(170, 24)
+		name_edit.custom_minimum_size = Vector2(170, line_height)
 		Desk.line(name_edit, Desk.INK_BLUE, false)
 		_slim(name_edit, [&"normal", &"focus", &"read_only"])
 		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -417,12 +803,10 @@ func _build_players() -> void:
 		tag.custom_minimum_size = Vector2(58, 0)
 		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		row.add_child(tag)
-		var remove := UI.button("X", UI.BORDER, 13)
-		remove.custom_minimum_size = Vector2(44, 24) if UI.touch else Vector2(30, 22)
+		var remove := Cross.new()
+		remove.custom_minimum_size = Vector2(44, 28) if UI.touch else Vector2(26, 22)
 		remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		Desk.penned(remove, Desk.INK_RED)
-		_slim(remove, [&"normal", &"hover", &"pressed"])
-		remove.pressed.connect(func(): _room.remove_bot(i))
+		remove.pressed.connect(_cross_off.bind(i))
 		TipLayer.attach(remove, "Take this bot out of the room.")
 		row.add_child(remove)
 		list.add_child(row)
@@ -440,14 +824,7 @@ func _build_rules() -> void:
 	_file.browned = true
 	_file.clip_at = _file.size.x - 56.0
 	add_child(_file)
-	# Before the text, so that the text is written over it.
-	_ghosts = Control.new()
-	_ghosts.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_file.add_child(_ghosts)
-	_ghost_look = ShaderMaterial.new()
-	_ghost_look.shader = Shader.new()
-	_ghost_look.shader.code = GHOST_SHADER
-	_ghost = _new_ghost()
+	_build_ghosts(_file)
 	var box := VBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 0)
 	box.offset_left = 14
@@ -469,34 +846,111 @@ func _build_rules() -> void:
 	_rules = VBoxContainer.new()
 	_rules.add_theme_constant_override("separation", 0)
 	box.add_child(_rules)
-	_rules.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
-			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
-	_rules.add_child(_stepper("Starting coins", "",
-			func(): return _config.start_coins, func(v): _config.start_coins = v, 0, 10))
-	_rules.add_child(_stepper("Income per turn", "",
-			func(): return _config.income, func(v): _config.income = v, 0, 5))
-	_rules.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
-			func(): return _config.doubt_cost, func(v): _config.doubt_cost = v, 0, 6))
-	_rules.add_child(_stepper("Reward for a right LIAR!", "Coins you gain when you doubt someone who was lying.",
-			func(): return _config.doubt_reward, func(v): _config.doubt_reward = v, 0, 6))
-	_rules.add_child(_stepper("Turn timer", "How long each player has for their turn. When it runs out, the turn ends. The clock is the outline round the player's box, and it only runs while the table is waiting for them.",
-			_turn_time_index, func(v): _config.turn_seconds = TURN_TIMES[v],
-			0, TURN_TIMES.size() - 1, false, 1, "%s", TURN_TIME_NAMES))
-	_rules.add_child(_stepper("Shop slots", "",
-			func(): return _config.shop_slots, func(v): _config.shop_slots = v, 1, 4))
-	_rules.add_child(_stepper("Animation speed", "",
-			_anim_speed_index, func(v): _config.anim_speed = ANIM_SPEEDS[v] / 100.0,
-			0, ANIM_SPEEDS.size() - 1, false, 1, "%d%%", ANIM_SPEEDS))
-	_reader = RichTextLabel.new()
-	_reader.bbcode_enabled = true
-	_reader.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_reader.add_theme_color_override("default_color", Desk.INK)
-	_reader.add_theme_font_size_override("normal_font_size", UI.grow(15))
-	_reader.add_theme_font_size_override("bold_font_size", UI.grow(15))
+	_add_rules(_rules)
+	_reader = _new_reader()
 	box.add_child(_reader)
 	_file.resized.connect(_place_ghost)
 	_place_ghost()
 	_on_paper = false
+
+
+## The house rules, one stepper to a line, into `box`.
+func _add_rules(box: Container) -> void:
+	box.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
+			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
+	box.add_child(_stepper("Starting coins", "",
+			func(): return _config.start_coins, func(v): _config.start_coins = v, 0, 10))
+	box.add_child(_stepper("Income per turn", "",
+			func(): return _config.income, func(v): _config.income = v, 0, 5))
+	box.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
+			func(): return _config.doubt_cost, func(v): _config.doubt_cost = v, 0, 6))
+	box.add_child(_stepper("Reward for a right LIAR!", "Coins you gain when you doubt someone who was lying.",
+			func(): return _config.doubt_reward, func(v): _config.doubt_reward = v, 0, 6))
+	box.add_child(_stepper("Turn timer", "How long each player has for their turn. When it runs out, the turn ends. The clock is the outline round the player's box, and it only runs while the table is waiting for them.",
+			_turn_time_index, func(v): _config.turn_seconds = TURN_TIMES[v],
+			0, TURN_TIMES.size() - 1, false, 1, "%s", TURN_TIME_NAMES))
+	box.add_child(_stepper("Shop slots", "",
+			func(): return _config.shop_slots, func(v): _config.shop_slots = v, 1, 4))
+	box.add_child(_stepper("Animation speed", "",
+			_anim_speed_index, func(v): _config.anim_speed = ANIM_SPEEDS[v] / 100.0,
+			0, ANIM_SPEEDS.size() - 1, false, 1, "%d%%", ANIM_SPEEDS))
+
+
+## Where a character's abilities are read: ink on the sheet.
+func _new_reader() -> RichTextLabel:
+	var reader := RichTextLabel.new()
+	reader.bbcode_enabled = true
+	reader.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	reader.add_theme_color_override("default_color", Desk.INK)
+	reader.add_theme_font_size_override("normal_font_size", UI.grow(15))
+	reader.add_theme_font_size_override("bold_font_size", UI.grow(15))
+	return reader
+
+
+## Touch mode: the file of the character being read is a sheet of its own,
+## at `rect` on `page`, with the ghost of the character behind the text.
+func _build_reader(page: Control, rect: Rect2) -> Desk:
+	var sheet: Desk = Desk.make(Desk.Kind.SHEET, rect)
+	sheet.dog_ear = false
+	sheet.tone = Desk.DIM_PAPER
+	sheet.browned = true
+	sheet.clip_at = sheet.size.x - 56.0
+	page.add_child(sheet)
+	_build_ghosts(sheet)
+	_reader = _new_reader()
+	_reader.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 0)
+	_reader.offset_left = 16
+	_reader.offset_top = 14
+	_reader.offset_right = -16
+	_reader.offset_bottom = -12
+	sheet.add_child(_reader)
+	sheet.resized.connect(_place_ghost)
+	_place_ghost()
+	return sheet
+
+
+## Touch mode: the house rules on a sheet of their own, always open, with
+## the switch of the book of suspicions at the foot.
+func _build_touch_rules(page: Control, rect: Rect2) -> void:
+	_on_paper = true
+	var sheet: Desk = Desk.make(Desk.Kind.SHEET, rect)
+	sheet.dog_ear = false
+	sheet.tone = Desk.DIM_PAPER
+	sheet.browned = true
+	sheet.rotation = 0.005
+	page.add_child(sheet)
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 0)
+	box.offset_left = 18
+	box.offset_top = 12
+	box.offset_right = -18
+	box.offset_bottom = -10
+	box.add_theme_constant_override("separation", 4)
+	sheet.add_child(box)
+	var head := HBoxContainer.new()
+	head.custom_minimum_size = Vector2(0, 30)
+	var title := Desk.written("HOUSE RULES", 16, Desk.INK, true)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(title)
+	head.add_child(_reset_button(_reset_rules, _rules_default))
+	box.add_child(head)
+	_rules = VBoxContainer.new()
+	_rules.add_theme_constant_override("separation", 5)
+	box.add_child(_rules)
+	_add_rules(_rules)
+	_rules.add_child(_book_row())
+	_on_paper = false
+
+
+## Before the text, so that the text is written over it.
+func _build_ghosts(sheet: Control) -> void:
+	_ghosts = Control.new()
+	_ghosts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sheet.add_child(_ghosts)
+	_ghost_look = ShaderMaterial.new()
+	_ghost_look.shader = Shader.new()
+	_ghost_look.shader.code = GHOST_SHADER
+	_ghost = _new_ghost()
 
 
 func _new_ghost() -> TextureRect:
@@ -511,10 +965,11 @@ func _new_ghost() -> TextureRect:
 
 ## The ghost fills the right side of the sheet, from top to bottom.
 func _place_ghost() -> void:
-	var height := _file.size.y - 4.0
+	var sheet := _ghosts.get_parent() as Control
+	var height := sheet.size.y - 4.0
 	var width := height * CardView.BASE.x / CardView.BASE.y
 	for ghost: TextureRect in _ghosts.get_children():
-		ghost.position = Vector2(_file.size.x - 2.0 - width, 2.0)
+		ghost.position = Vector2(sheet.size.x - 2.0 - width, 2.0)
 		ghost.size = Vector2(width, height)
 
 
@@ -549,7 +1004,7 @@ func _file_home() -> float:
 		# As far up as the rules need, and no further: the sheet lies over
 		# the foot of the clipboard.
 		return minf(FILE_TOP, FILE_FOOT - _file_box.get_combined_minimum_size().y - 20.0)
-	return minf(FILE_TOP, CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * SEAT_STEP + 8.0)
+	return minf(FILE_TOP, CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * _seat_step + 8.0)
 
 
 ## The mouse is on the top of the open sheet, or has left it: a few grip
@@ -659,20 +1114,27 @@ func _set_rules_open(open: bool) -> void:
 ## only reaches the reader while the rules are folded away; asking for it
 ## folds them.
 func _read_character(character_id: StringName, asked: bool) -> void:
-	if _rules_open and not asked:
+	# In touch mode the rules have a page of their own: nothing to fold.
+	var folds := _rules_open and not UI.touch
+	if folds and not asked:
 		return
 	_read = character_id
-	if _rules_open:
+	if folds:
 		_set_rules_open(false)
 	else:
 		_redraw_reader()
 
 
-## A finger held on a card does what a right click does.
+## A finger held on a card does what a right click does; on an item, it
+## reads the item without allowing or banning it.
 func _on_held(control: Control) -> void:
 	for id: StringName in _cards:
 		if _cards[id] == control:
 			_read_character(id, true)
+			return
+	for id: StringName in _item_cells:
+		if _item_cells[id] == control:
+			_read_item(id)
 			return
 
 
@@ -682,12 +1144,13 @@ func _on_card_input(event: InputEvent, character_id: StringName) -> void:
 
 
 func _redraw_reader() -> void:
-	_rules.visible = _rules_open
-	_rules_arrow.queue_redraw()
-	_file_grip.visible = _rules_open
-	_reader.visible = not _rules_open
-	_ghosts.visible = not _rules_open
-	_place_file()
+	if not UI.touch:
+		_rules.visible = _rules_open
+		_rules_arrow.queue_redraw()
+		_file_grip.visible = _rules_open
+		_reader.visible = not _rules_open
+		_ghosts.visible = not _rules_open
+		_place_file()
 	var def := Content.character(_read) if _read != &"" else null
 	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Tap a character to read its abilities here." if UI.touch else "Hover a character to read its abilities here.")]
 	if def != null:
@@ -727,11 +1190,59 @@ func _build_case() -> void:
 	box.size = Vector2(CASE.size.x - 60.0, 0)
 	box.add_theme_constant_override("separation", 5)
 	_case.add_child(box)
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
+	var head := _mode_row()
 	var title := UI.label("CHARACTERS", 20, UI.GOLD, true)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
+	head.move_child(title, 0)
+	box.add_child(head)
+
+	# One row for the switch of the book and for the number of characters,
+	# which only shows while they are drawn at random: the row keeps its
+	# height without it, or everything under it would move up.
+	var options := _book_row()
+	options.custom_minimum_size = Vector2(0, 26)
+	box.add_child(options)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(24, 0)
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	options.add_child(gap)
+	_build_count_rows()
+	for row: Control in [_count_row, _draw_row]:
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		# Next to its buttons, not adrift in the middle of the row.
+		(row.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		options.add_child(row)
+	options.custom_minimum_size.y = _count_row.get_combined_minimum_size().y
+
+	# One row while the cast fits in it, two rows of smaller cards after that.
+	var defs := Content.character_list()
+	var rows := 1 if defs.size() <= GRID_ROW else 2
+	var per_row := ceili(defs.size() / float(rows))
+	var card_scale := 1.15 if rows == 1 else 0.9
+	var caption_height := 16.0
+	var grid := Control.new()
+	grid.size.x = GRID_WIDTH
+	grid.custom_minimum_size = Vector2(GRID_WIDTH, rows * (CardView.BASE.y * card_scale + caption_height) + 2.0)
+	box.add_child(grid)
+	_fill_grid(grid, per_row, card_scale, caption_height, 6.0)
+
+	box.add_child(_copies_row())
+	# Held a little above its own line, clear of the ridge of the case.
+	var foot := Control.new()
+	foot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_summary = UI.label("", 13, UI.CREAM.darkened(0.25))
+	_summary.position = Vector2(0, -SUMMARY_RISE)
+	foot.custom_minimum_size = Vector2(0, _summary.get_combined_minimum_size().y - SUMMARY_RISE)
+	foot.add_child(_summary)
+	box.add_child(foot)
+	_build_items()
+
+
+## Random or hand-picked, and the reset of the characters.
+func _mode_row() -> HBoxContainer:
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
 	head.add_child(_reset_button(_reset_characters, _characters_default))
 	_mode_random = UI.button("Random", UI.BORDER, 15)
 	_mode_random.custom_minimum_size = Vector2(148, 36) if UI.touch else Vector2(110, 32)
@@ -743,20 +1254,22 @@ func _build_case() -> void:
 	_mode_picked.pressed.connect(_set_random.bind(false))
 	TipLayer.attach(_mode_picked, "Choose exactly which characters are in the match.")
 	head.add_child(_mode_picked)
-	box.add_child(head)
+	return head
 
-	# One row for the switch of the book and for the number of characters,
-	# which only shows while they are drawn at random: the row keeps its
-	# height without it, or everything under it would move up.
-	var options := HBoxContainer.new()
-	options.add_theme_constant_override("separation", 10)
-	options.custom_minimum_size = Vector2(0, 26)
-	box.add_child(options)
+
+## The switch of the book of suspicions, with its name, on the velvet of the
+## case or on the sheet of the rules (touch mode).
+func _book_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
 	var book_tip := "Gives every player a book at the table to note down who they think holds each card: filled in by hand, or by the book itself."
 	var book_label := UI.label("Suspicion book", 14, UI.CREAM)
+	if _on_paper:
+		Desk.ink(book_label)
+		book_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	book_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	TipLayer.attach(book_label, book_tip)
-	options.add_child(book_label)
+	row.add_child(book_label)
 	_book_switch = Button.new()
 	_book_switch.toggle_mode = true
 	_book_switch.focus_mode = Control.FOCUS_NONE
@@ -771,45 +1284,47 @@ func _build_case() -> void:
 		_config.suspect_book = on
 		_refresh())
 	TipLayer.attach(_book_switch, book_tip)
-	options.add_child(_book_switch)
-	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(24, 0)
-	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	options.add_child(gap)
+	row.add_child(_book_switch)
+	if _on_paper:
+		# Under the buttons of the steppers above it, not at the very edge.
+		var pad := Control.new()
+		pad.custom_minimum_size = Vector2(28, 0)
+		pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(pad)
+		row.custom_minimum_size.y = 44
+	return row
+
+
+## How many characters are drawn at random, and, hand-picked, how many of
+## the chosen ones are drawn: all of them, unless the host wants the match
+## to hide which. Only one of the two shows at a time (_redraw).
+func _build_count_rows() -> void:
 	_count_row = _stepper("How many characters", "", func(): return _config.character_count,
 			func(v): _config.character_count = v, 3, Content.characters.size())
-	_count_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# Next to its buttons, not adrift in the middle of the row.
-	(_count_row.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	options.add_child(_count_row)
-	# Hand-picked, the same place says how many of the chosen ones are drawn:
-	# all of them, unless the host wants the match to hide which.
 	_draw_row = _stepper("Quantos personagens", "How many of the characters you picked are in the match, drawn at random. Nobody knows which until they show up.",
 			_drawn_count, func(v): _config.pool_draw = 0 if v >= _picked.size() else v,
 			3, func() -> int: return maxi(_picked.size(), 3))
-	_draw_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	(_draw_row.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	options.add_child(_draw_row)
-	options.custom_minimum_size.y = _count_row.get_combined_minimum_size().y
 
-	# One row while the cast fits in it, two rows of smaller cards after that.
+
+func _copies_row() -> Control:
+	return _stepper("Copies of each character", "More copies make every claim more believable.",
+			func(): return maxi(_config.copies_per_character, _min_copies()),
+			func(v): _config.copies_per_character = v, 2, 6)
+
+
+## The cards of the whole cast in `grid`, `per_row` to a row, each with its
+## name under it, `top` below the top of the grid (room for a card to lift).
+func _fill_grid(grid: Control, per_row: int, card_scale: float, caption_height: float, top: float) -> void:
 	var defs := Content.character_list()
-	var rows := 1 if defs.size() <= GRID_ROW else 2
-	var per_row := ceili(defs.size() / float(rows))
-	var card_scale := 1.15 if rows == 1 else TOUCH_GRID_SCALE if UI.touch else 0.9
 	var card_height := CardView.BASE.y * card_scale
-	var caption_height := TOUCH_CAPTION if UI.touch else 16.0
 	var row_height := card_height + caption_height
-	var step := GRID_WIDTH / per_row
-	var grid := Control.new()
-	grid.custom_minimum_size = Vector2(GRID_WIDTH, rows * row_height + 2.0)
-	box.add_child(grid)
+	var step := grid.size.x / per_row
 	for i in defs.size():
 		var def: CharacterDef = defs[i]
 		var column := i % per_row
-		var top := 6.0 + floorf(i / float(per_row)) * row_height
+		var at := top + floorf(i / float(per_row)) * row_height
 		var card := CardView.new(card_scale)
-		card.position = Vector2(roundf(column * step + (step - card.size.x) / 2.0), top)
+		card.position = Vector2(roundf(column * step + (step - card.size.x) / 2.0), at)
 		card.set_card(def.id, true)
 		# The abilities are read in the place of the house rules, not over the cards.
 		card.tips = false
@@ -827,24 +1342,9 @@ func _build_case() -> void:
 		# narrower than its text, and a long name would be centred in a wider box.
 		caption.clip_text = true
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		caption.position = Vector2(column * step, top + card_height + 1.0)
+		caption.position = Vector2(column * step, at + card_height + 1.0)
 		caption.size = Vector2(step, caption_height)
 		grid.add_child(caption)
-
-	box.add_child(_stepper("Copies of each character", "More copies make every claim more believable.",
-			func(): return maxi(_config.copies_per_character, _min_copies()),
-			func(v): _config.copies_per_character = v, 2, 6))
-	# Held a little above its own line, clear of the ridge of the case.
-	var foot := Control.new()
-	foot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Over the ridge there is no room for it to grow in touch mode.
-	_summary = UI.native(func() -> Label: return UI.label("", 13, UI.CREAM.darkened(0.25)))
-	_summary.position = Vector2(0, -SUMMARY_RISE)
-	foot.custom_minimum_size = Vector2(0, _summary.get_combined_minimum_size().y - SUMMARY_RISE)
-	foot.add_child(_summary)
-	box.add_child(foot)
-	_build_items()
-
 
 
 ## The items lie in the lower compartment of the case.
@@ -939,14 +1439,7 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var paper := _on_paper
-	# The sheet of house rules is no wider in touch mode: there the words keep
-	# their size, and a long one wraps.
-	var narrow := paper and UI.touch
-	var l: Label = UI.native(func() -> Label: return UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)) if narrow \
-			else UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)
-	if narrow:
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		l.custom_minimum_size.x = 120
+	var l := UI.label(text, 18 if big else 14, UI.GOLD if big else UI.CREAM, big)
 	if paper:
 		Desk.ink(l)
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -957,7 +1450,7 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 	var minus := UI.button("-", UI.BORDER, 15)
 	minus.custom_minimum_size = TOUCH_STEP_BUTTON if UI.touch else Vector2(34, 26)
 	var value := UI.label("", 16, UI.GOLD, true)
-	value.custom_minimum_size = Vector2(40 if narrow else 52, 0)
+	value.custom_minimum_size = Vector2(52, 0)
 	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var plus := UI.button("+", UI.BORDER, 15)
 	plus.custom_minimum_size = TOUCH_STEP_BUTTON if UI.touch else Vector2(34, 26)
@@ -965,7 +1458,7 @@ func _stepper(text: String, tip: String, getter: Callable, setter: Callable, low
 		Desk.ink(value, Desk.INK_RED)
 	for b: Button in [minus, plus]:
 		if paper:
-			b.custom_minimum_size = Vector2(40, 34) if narrow else Vector2(b.custom_minimum_size.x, 24)
+			b.custom_minimum_size = Vector2(44, 34) if UI.touch else Vector2(b.custom_minimum_size.x, 24)
 			Desk.penned(b)
 		else:
 			Desk.velvet(b)
@@ -1125,10 +1618,16 @@ func _redraw() -> void:
 		var chosen: bool = not _random and _picked.has(character_id)
 		card.highlight(UI.GOLD if chosen else null)
 		card.modulate = Color.WHITE if chosen or _random else Color(0.4, 0.38, 0.38)
-		card.note = "" if _random or not _host else ("In the match. Click to remove." if chosen else "Click to add to the match.")
+		if _random or not _host:
+			card.note = ""
+		elif UI.touch:
+			card.note = "In the match. Tap to remove." if chosen else "Tap to add to the match."
+		else:
+			card.note = "In the match. Click to remove." if chosen else "Click to add to the match."
 	for item_id: StringName in _item_views:
 		_item_views[item_id].modulate = Color.WHITE if _items_on[item_id] else Color(0.3, 0.28, 0.28)
 	_redraw_reader()
+	_redraw_item_reader()
 
 	var count := _character_count()
 	var copies := maxi(_config.copies_per_character, _min_copies())
@@ -1287,6 +1786,66 @@ func _input(event: InputEvent) -> void:
 		var edit: LineEdit = row.name
 		if edit.has_focus() and not (clicked and edit.get_global_rect().has_point(event.global_position)):
 			edit.release_focus()
+
+
+## The host takes a bot out of the room, with the scratch of the pen.
+func _cross_off(i: int) -> void:
+	_play_sfx("ui_strike")
+	_room.remove_bot(i)
+
+
+func _play_sfx(sound: String) -> void:
+	var path := "res://assets/sounds/%s.wav" % sound
+	var stream: AudioStream = null
+	if ResourceLoader.exists(path):
+		stream = load(path)
+	elif FileAccess.file_exists(path):
+		# Not imported yet (the editor has not rescanned): read the file directly.
+		stream = AudioStreamWAV.load_from_file(path)
+	if stream == null:
+		return
+	var player := AudioStreamPlayer.new()
+	player.stream = stream
+	player.bus = Settings.SFX_BUS
+	player.finished.connect(player.queue_free)
+	add_child(player)
+	player.play()
+
+
+## The host's cross next to a bot's name: an X in red ink, two quick strokes
+## in the 2 px blocks of the desk, darker and bigger under the mouse.
+class Cross extends Button:
+	func _init() -> void:
+		flat = true
+		focus_mode = Control.FOCUS_NONE
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		for state: String in ["normal", "hover", "pressed", "disabled", "focus"]:
+			add_theme_stylebox_override(state, StyleBoxEmpty.new())
+		mouse_entered.connect(queue_redraw)
+		mouse_exited.connect(queue_redraw)
+		button_down.connect(queue_redraw)
+		button_up.connect(queue_redraw)
+
+	func _draw() -> void:
+		var over := is_hovered() and not disabled
+		var half := (7.0 if UI.touch else 5.0) + (1.0 if over else 0.0)
+		var middle := (size * 0.5).round()
+		var ink := Color(Desk.INK_RED, 1.0 if over else 0.75)
+		if disabled:
+			ink = Color(Desk.INK_RED, 0.35)
+		elif is_pressed():
+			ink = Desk.INK_RED.darkened(0.25)
+		# Each stroke starts heavy and runs a block past the other one, as a pen does.
+		_stroke(middle + Vector2(-half, -half - 1.0), middle + Vector2(half + 1.0, half), ink)
+		_stroke(middle + Vector2(half, -half), middle + Vector2(-half, half + 2.0), Color(ink, ink.a * 0.9))
+
+	func _stroke(a: Vector2, b: Vector2, ink: Color) -> void:
+		var steps := int(ceilf(a.distance_to(b) / 2.0))
+		for k in steps + 1:
+			var t := float(k) / maxf(steps, 1)
+			var at := (a.lerp(b, t) / 2.0).round() * 2.0
+			var weight := 4.0 if t < 0.25 else 2.0
+			draw_rect(Rect2(at - Vector2(1.0, 1.0), Vector2(weight, 2.0 + (2.0 if t < 0.1 else 0.0))), ink)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

@@ -91,6 +91,10 @@ const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
 const PROTOCOL := 23
 const JOIN_TIMEOUT := 8.0
+## Joining with no port given: how long each port of the range is tried, past
+## the first, before the next one (the room may have passed to someone who
+## opened it on another, see _take_over).
+const SCAN_TIMEOUT := 1.5
 ## How long a machine tries each heir on the list before the next one.
 const HANDOVER_TIMEOUT := 8.0
 ## How long the new host waits for the others to come back to it.
@@ -155,6 +159,14 @@ var _match_id := 0
 var _joined := false
 var _player_name := ""
 var _address := ""
+## Joining: the port being tried, whether the next ones are tried if nobody
+## answers there, and a number for each try.
+var _knocking := PORT
+var _scanning := false
+var _try := 0
+## Guest: where this machine reached the room ("address" or "address:port"):
+## kept as the last address when it walks out, the room may have moved.
+var _where := ""
 var _tickets: Dictionary = {}  # number -> Ticket still open
 var _settled: Dictionary = {}  # number -> true
 var _next_ticket := 0
@@ -267,9 +279,11 @@ func hosted(player_name: String, at: int, bots := 3) -> void:
 static func join(address: String, player_name: String) -> String:
 	var where := address.strip_edges()
 	var port := PORT
+	var scanning := true
 	if where.count(":") == 1 and where.get_slice(":", 1).is_valid_int():
 		port = where.get_slice(":", 1).to_int()
 		where = where.get_slice(":", 0)
+		scanning = false
 	if where == "":
 		return Loc.t("Type the address of the room.")
 	var peer := ENetMultiplayerPeer.new()
@@ -278,8 +292,16 @@ static func join(address: String, player_name: String) -> String:
 	var room := _enter(peer)
 	room._player_name = clean_name(player_name)
 	room._address = where
-	room.get_tree().create_timer(JOIN_TIMEOUT).timeout.connect(room._on_join_timeout)
+	room._knocking = port
+	room._scanning = scanning
+	room._wait_at_door()
 	return ""
+
+
+func _wait_at_door() -> void:
+	_try += 1
+	var patience := SCAN_TIMEOUT if _scanning and _knocking != PORT else JOIN_TIMEOUT
+	get_tree().create_timer(patience).timeout.connect(_on_join_timeout.bind(_try))
 
 
 static func _enter(peer: MultiplayerPeer) -> Node:
@@ -345,6 +367,7 @@ func _notification(what: int) -> void:
 ## others. The scene is left to the caller.
 func leave() -> void:
 	_leaving = true
+	_keep_address()
 	release()
 	if current == self:
 		current = null
@@ -352,6 +375,26 @@ func leave() -> void:
 	multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	queue_free()
+
+
+## The address this machine would come back to the room by is kept as the last
+## one, for the room screen: the room may have moved since it was typed (it
+## passed to someone else, or is about to, as this host walks out).
+func _keep_address() -> void:
+	if current != self:
+		return
+	var back := _where
+	if hosting:
+		var heirs := _succession.filter(func(entry: Dictionary) -> bool: return entry.peer > 1)
+		if heirs.is_empty():
+			return
+		var heir: Dictionary = heirs[0]
+		var ip: String = "127.0.0.1" if _machine_of(heir.peer) == "" else heir.addresses[0]
+		back = ip if heir.port == PORT else "%s:%d" % [ip, heir.port]
+	if back == "":
+		return
+	Settings.last_address = back
+	Settings.save()
 
 
 ## The room is gone: back to the room screen, which says why.
@@ -363,9 +406,23 @@ func _fail(reason: String) -> void:
 	_show(SCREEN, Transition.DESK)
 
 
-func _on_join_timeout() -> void:
-	if not _joined:
-		_fail(Loc.t("Could not reach the room at %s.") % _address)
+func _on_join_timeout(attempt: int) -> void:
+	if not _joined and not handing_over and attempt == _try:
+		_knock_next()
+
+
+## Nobody answered at the port being tried: the next one of the range, if the
+## player gave none, or the room is not there.
+func _knock_next() -> void:
+	if _scanning and multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		while _knocking + 1 < PORT + PORT_RANGE:
+			_knocking += 1
+			var link := ENetMultiplayerPeer.new()
+			if link.create_client(_address, _knocking) == OK:
+				_swap_link(link)
+				_wait_at_door()
+				return
+	_fail(Loc.t("Could not reach the room at %s.") % _address)
 
 
 func _on_connected() -> void:
@@ -373,6 +430,11 @@ func _on_connected() -> void:
 		return
 	_me = my_peer()
 	_unannounced = true
+	if not handing_over:
+		# Someone is there: no more ports to try, and the time to get in starts.
+		_scanning = false
+		_where = _address if _knocking == PORT else "%s:%d" % [_address, _knocking]
+		_wait_at_door()
 	if handing_over:
 		_resume.rpc_id(1, _nonce, _token, _player_name, _build(), known_keys(), _history.size(), _sent.duplicate())
 	else:
@@ -382,6 +444,8 @@ func _on_connected() -> void:
 func _on_connection_failed() -> void:
 	if handing_over:
 		_next_heir()
+	elif not _joined:
+		_knock_next()
 	else:
 		_fail("Could not reach the room.")
 
@@ -1052,8 +1116,14 @@ func _close_probe() -> void:
 func _process(_delta: float) -> void:
 	if _probe == null:
 		return
+	var tag := (PROBE_TAG + "|").to_ascii_buffer()
 	while _probe.get_available_packet_count() > 0:
-		var parts := _probe.get_packet().get_string_from_utf8().split("|")
+		var packet := _probe.get_packet()
+		# Anything else that reaches the port (an ENet client knocking on
+		# what it thinks is a room) is no text of ours.
+		if packet.size() > 64 or packet.slice(0, tag.size()) != tag:
+			continue
+		var parts := packet.get_string_from_ascii().split("|")
 		if parts.size() != 5 or parts[0] != PROBE_TAG or parts[1].to_int() != _nonce or parts[3].to_int() != _me:
 			continue
 		if not hosting and not handing_over:
@@ -1240,6 +1310,8 @@ func _next_heir() -> void:
 	_step += 1
 	if _step >= _walk.size():
 		handing_over = false
+		# The last one tried must not get through later, as someone joining.
+		_swap_link(OfflineMultiplayerPeer.new())
 		_fail("The host left, and nobody could take the room over.")
 		return
 	var heir: Dictionary = _walk[_step]
@@ -1250,9 +1322,11 @@ func _next_heir() -> void:
 			_next_heir()
 		return
 	var link := ENetMultiplayerPeer.new()
-	if link.create_client(_address_of(heir), heir.port) != OK:
+	var ip := _address_of(heir)
+	if link.create_client(ip, heir.port) != OK:
 		_next_heir.call_deferred()
 		return
+	_where = ip if heir.port == PORT else "%s:%d" % [ip, heir.port]
 	_swap_link(link)
 	get_tree().create_timer(HANDOVER_TIMEOUT).timeout.connect(_heir_late.bind(_attempt))
 

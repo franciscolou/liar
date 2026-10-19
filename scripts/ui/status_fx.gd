@@ -44,6 +44,8 @@ const THREAT := 0.1
 const SEAL_SET := 0.45
 const SEAL_HOLD := 3.0
 const SEAL_JOLT := 0.4
+## Seconds a sleeping doll takes to wake up.
+const WAKE := 1.1
 ## Seconds each look takes to come apart once the player is out (see die).
 ## The chains keep their own time (ChainsFx.snap).
 const DEATH := {GROGGY: 0.75, HEXED: 0.75, TICKING: 0.95, SWORN: 0.65}
@@ -185,6 +187,8 @@ var _seal_set := 1.0
 ## 1 as the seal jumps, down to 0.
 var _seal_jolt := 0.0
 
+## Whether the doll is awake, as of the last sync (see voodooist.gd).
+var _doll_awake := false
 var _wanted := {}  # status id -> bool
 var _level := {}  # status id -> 0..1, how far its look has faded in
 ## The bomb goes off when the turn being played ends.
@@ -237,6 +241,11 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 	_urgent = false
 	for id: StringName in LOOKS:
 		_wanted[id] = player != null and player.alive and player.has_status(id)
+	if _wanted[HEXED]:
+		_doll_awake = player.statuses[HEXED].get("awake", false)
+		if _level.get(HEXED, 0.0) <= 0.0:
+			# A doll that is just showing is already as it is.
+			_doll.awake = 1.0 if _doll_awake else 0.0
 	if _wanted[TICKING]:
 		var planted: int = player.statuses[TICKING].get("planted", 0)
 		_urgent = engine.current == player and planted < engine.turn_count
@@ -387,6 +396,13 @@ func doll_landed() -> void:
 	if _wanted.get(HEXED, false):
 		_level[HEXED] = 1.0
 		_doll.level = 1.0
+		_doll.awake = 1.0 if _doll_awake else 0.0
+
+
+## The doll the player carries, for an effect to make it feed or totter
+## (VoodooDoll.hunger, VoodooDoll.stagger). Null with no doll showing.
+func doll() -> Control:
+	return _doll if _level.get(HEXED, 0.0) > 0.0 and not _dead else null
 
 
 ## Where the doll sits and what it hits on the way there, on screen: thrown,
@@ -426,6 +442,7 @@ func _process(delta: float) -> void:
 		_topple()
 	else:
 		_doll.level = _level.get(HEXED, 0.0)
+		_doll.awake = move_toward(_doll.awake, 1.0 if _doll_awake else 0.0, delta / WAKE)
 	# The chains are thrown on link by link, and are gone at once: they do
 	# not fade, they break (see PlayFx.chains_break).
 	_chains.bound = move_toward(_chains.bound, 1.0, delta / BIND) if _wanted.get(ENTROPY, false) else 0.0

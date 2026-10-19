@@ -21,6 +21,7 @@ const FONT_PATH := "res://assets/fonts/Jersey15-Regular.ttf"
 const CARD_BACK := "res://assets/Card.png"
 const ITEM_BACK := "res://assets/Item.png"
 const CARD_FRAME := "res://assets/ui/card_frame.png"
+const COIN_ICON := "res://assets/ui/coin.png"
 ## Folder of an alternative set of card art, looked up by file name; a card
 ## missing from it keeps its own art. "" uses the art each character names,
 ## in assets/cards/ (cut from assets/cards/portraits/ by
@@ -273,6 +274,68 @@ static func label(text: String, size := 16, color: Color = CREAM, is_bold := fal
 	return l
 
 
+## A price in coins: the coin and the amount, as the shop and the stat bar
+## show it. Text in a font of `size` (desktop size, as in `label`).
+static func coins(amount: int, size := 16, color: Color = GOLD, is_bold := true) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 3)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var icon := TextureRect.new()
+	icon.texture = tex(COIN_ICON)
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = Vector2.ONE * coin_side(size)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(icon)
+	var number := label(str(amount), size, color, is_bold)
+	number.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	row.add_child(number)
+	return row
+
+
+## The same price for BBCode (tooltips, rich labels).
+static func coins_bb(amount: int, size := 16) -> String:
+	var side := coin_side(size)
+	return "[img=%dx%d]%s[/img] %d" % [side, side, COIN_ICON, amount]
+
+
+## How big the coin is next to text of `size`.
+static func coin_side(size: float) -> int:
+	return maxi(10, roundi(px(size) * 0.85))
+
+
+## `text` on the left and a price in coins after it, on one line.
+static func priced(text: Control, amount: int, size := 16, color: Color = GOLD) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(text)
+	row.add_child(coins(amount, size, color))
+	return row
+
+
+## Puts a price in coins after the text of `b`: the text moves into a row
+## inside the button, with the coin and the amount after it. The row follows
+## the button's colours as it is disabled.
+static func price_button(b: Button, amount: int, size := 16) -> void:
+	var ink: Color = b.get_theme_color("font_color")
+	var words := label(b.text, size, ink)
+	words.auto_translate_mode = b.auto_translate_mode
+	b.text = ""
+	var row := priced(words, amount, size)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	b.add_child(row)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	b.custom_minimum_size.x = maxf(b.custom_minimum_size.x, row.get_combined_minimum_size().x + 24.0)
+	var fade := func() -> void:
+		if is_instance_valid(row):
+			row.modulate.a = 0.45 if b.disabled else 1.0
+	b.draw.connect(fade)
+	fade.call()
+
+
 ## A button that grows a little under the mouse. `accent` tints its border.
 static func button(text: String, accent: Color = BORDER, size := 16) -> Button:
 	var b := Button.new()
@@ -408,7 +471,7 @@ static func character_tip(def: CharacterDef, note := "") -> String:
 static func ability_tip(ability: Ability) -> String:
 	var head := "[b]%s[/b] [color=%s](%s)[/color]" % [ability.display_name, hex(MUTED), ability.kind_label()]
 	if ability.cost > 0:
-		head += " [color=%s]%s[/color]" % [hex(GOLD), Loc.t("%d coins") % ability.cost]
+		head += " [color=%s]%s[/color]" % [hex(GOLD), coins_bb(ability.cost)]
 	var body := ability.description
 	if ability.trigger_text != "":
 		body = "[color=%s]%s:[/color] %s" % [hex(BLUE), ability.trigger_text, body]
@@ -417,7 +480,7 @@ static func ability_tip(ability: Ability) -> String:
 
 static func item_tip(def: ItemDef, note := "") -> String:
 	var text := "[b][color=%s]%s[/color][/b]  [color=%s]%s · %s[/color]\n%s" % [
-		hex(GOLD), def.display_name.to_upper(), hex(MUTED), Loc.t("%d coins") % def.price, def.kind_label(), def.description]
+		hex(GOLD), def.display_name.to_upper(), hex(MUTED), coins_bb(def.price), def.kind_label(), def.description]
 	if note != "":
 		text += "\n[color=%s]%s[/color]" % [hex(BLUE), Loc.t(note)]
 	return text

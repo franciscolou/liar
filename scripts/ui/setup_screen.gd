@@ -103,6 +103,10 @@ const TOUCH_STEP_BUTTON := Vector2(48, 36)
 ## of a cast in two rows are smaller, with room for bigger names under them.
 const TOUCH_GRID_SCALE := 0.74
 const TOUCH_CAPTION := 22.0
+## Touch mode: the characters are big cards, this many to a row, in a column
+## the finger scrolls (the next row peeks out under the first).
+const TOUCH_CARDS_PER_ROW := 3
+const TOUCH_CARD_GAP := 22.0
 const KNOB: Array[String] = [
 	"..###..",
 	".#o###.",
@@ -232,6 +236,7 @@ var _item_photo: TextureRect
 var _item_head: Control
 var _item_name: Label
 var _item_kind: Label
+var _item_price: Label
 var _item_state: Label
 var _item_text: RichTextLabel
 
@@ -468,17 +473,25 @@ func _build_touch_characters(page: Control) -> void:
 	head.size = Vector2(TOUCH_LEFT.size.x, 40)
 	page.add_child(head)
 
+	# The cards are too big for the case: they scroll under the finger
+	# (TouchMode drags any ScrollContainer in its group).
+	var scroll := ScrollContainer.new()
+	scroll.position = TOUCH_LEFT.position + Vector2(0, 48)
+	scroll.size = Vector2(TOUCH_LEFT.size.x, TOUCH_LEFT.size.y - 48.0 - 24.0)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	scroll.add_to_group(TouchMode.SCROLLS)
+	page.add_child(scroll)
 	var grid := Control.new()
-	grid.position = TOUCH_LEFT.position + Vector2(0, 48)
-	grid.size = Vector2(TOUCH_LEFT.size.x, TOUCH_LEFT.size.y - 48.0 - 24.0)
-	page.add_child(grid)
+	grid.size = Vector2(scroll.size.x, 0)
+	scroll.add_child(grid)
 	var count := Content.character_list().size()
-	var rows := ceili(count / 6.0)
-	var per_row := ceili(count / float(rows))
+	var per_row := TOUCH_CARDS_PER_ROW
 	var step := grid.size.x / per_row
-	var row_height := (grid.size.y - 10.0) / rows
-	var card_scale := minf((row_height - TOUCH_CAPTION - 4.0) / CardView.BASE.y, (step - 10.0) / CardView.BASE.x)
-	_fill_grid(grid, per_row, card_scale, TOUCH_CAPTION, 10.0)
+	var card_scale := floorf((step - TOUCH_CARD_GAP) / CardView.BASE.x * 10.0) / 10.0
+	_fill_grid(grid, per_row, card_scale, TOUCH_CAPTION, 6.0)
+	var rows := ceili(count / float(per_row))
+	grid.custom_minimum_size = Vector2(scroll.size.x, 6.0 + rows * (CardView.BASE.y * card_scale + TOUCH_CAPTION) + 10.0)
 
 	# A long line under the cards: it keeps its desktop size to fit.
 	_summary = UI.native(func() -> Label: return UI.label("", 13, UI.CREAM.darkened(0.25)))
@@ -617,9 +630,26 @@ func _build_item_reader(page: Control, rect: Rect2) -> void:
 	_item_name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_item_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lines.add_child(_item_name)
+	# The price is the coin and the amount, then the kind of item.
+	var kind_row := HBoxContainer.new()
+	kind_row.add_theme_constant_override("separation", 3)
+	kind_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lines.add_child(kind_row)
+	var coin := TextureRect.new()
+	coin.texture = UI.tex(UI.COIN_ICON)
+	coin.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	coin.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	coin.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	coin.custom_minimum_size = Vector2.ONE * UI.coin_side(15)
+	coin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	coin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	kind_row.add_child(coin)
+	_item_price = Desk.written("", 15, Desk.INK, true)
+	_item_price.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	kind_row.add_child(_item_price)
 	_item_kind = Desk.written("", 15, Desk.INK_FADED)
 	_item_kind.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-	lines.add_child(_item_kind)
+	kind_row.add_child(_item_kind)
 	_item_state = Desk.written("", 15, Desk.INK_RED, true)
 	_item_state.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_item_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -651,7 +681,8 @@ func _redraw_item_reader() -> void:
 		return
 	_item_photo.texture = UI.tex(def.texture_path)
 	_item_name.text = def.display_name.to_upper()
-	_item_kind.text = "%s  ·  %s" % [Loc.t("%d coins") % def.price, def.kind_label()]
+	_item_price.text = str(def.price)
+	_item_kind.text = "  ·  %s" % def.kind_label()
 	var state := "Always on sale."
 	var ink := Desk.INK_GREEN
 	if not def.fixed:

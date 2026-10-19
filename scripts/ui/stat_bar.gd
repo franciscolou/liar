@@ -25,7 +25,9 @@ func _init(icon_size := 18, font_size := 16) -> void:
 	add_child(_hearts)
 	_coin_icon = _icon("res://assets/ui/coin.png")
 	add_child(_coin_icon)
-	_coins = UI.label("0", font_size, UI.GOLD, true)
+	# Not in bold: emboldened, Jersey 15 fills the holes of its digits and a
+	# 6, an 8 and a 9 look alike. A shadow keeps it standing out instead.
+	_coins = _number("0", font_size, UI.GOLD)
 	add_child(_coins)
 	_counters = HBoxContainer.new()
 	_counters.add_theme_constant_override("separation", 3)
@@ -54,7 +56,9 @@ func sync(player: PlayerState, max_morale: int, owner_view := false) -> void:
 			icon.mouse_filter = Control.MOUSE_FILTER_PASS
 			TipLayer.attach(icon, "[b]%s[/b]\n%s" % [Loc.t(def.get("name", counter_id)), Loc.fill(def.get("description", ""), def.get("args", []))])
 			_counters.add_child(icon)
-			_counters.add_child(UI.label(str(player.counters[counter_id]), _coins.get_theme_font_size("font_size"), UI.BLUE, true))
+			var count := _number(str(player.counters[counter_id]), 0, UI.BLUE)
+			count.add_theme_font_size_override("font_size", _coins.get_theme_font_size("font_size"))
+			_counters.add_child(count)
 		UI.pop(_counters, 1.3)
 
 
@@ -98,6 +102,14 @@ func hearts_center() -> Vector2:
 func heart_center(index: int) -> Vector2:
 	var step := _icon_size + 1.0
 	return _hearts.get_global_transform() * Vector2(step * maxi(index, 0) + _icon_size / 2.0, _hearts.size.y / 2.0)
+
+
+func _number(text: String, font_size: int, color: Color) -> Label:
+	var l := UI.label(text, font_size, color)
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
+	l.add_theme_constant_override("shadow_offset_x", 1)
+	l.add_theme_constant_override("shadow_offset_y", 1)
+	return l
 
 
 func _icon(path: String) -> TextureRect:

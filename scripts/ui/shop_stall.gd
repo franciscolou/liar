@@ -45,6 +45,16 @@ var shelves: Array[float] = []:
 	set(value):
 		shelves = value
 		queue_redraw()
+## Posts between columns of the goods, each as far from the right edge (the
+## edge that stays put). Drawn only while `parted`.
+var posts: Array = []:
+	set(value):
+		posts = value
+		queue_redraw()
+var parted := false:
+	set(value):
+		parted = value
+		queue_redraw()
 ## How much of the right end is the tray of the deck.
 var tray := 0.0:
 	set(value):
@@ -107,6 +117,14 @@ func _draw() -> void:
 		# the price tags to stand out on.
 		var under: float = shelves.max() + PX * 2.0
 		draw_rect(Rect2(EDGE, under, shelf_end - EDGE, h - EDGE - under), Color(0, 0, 0, 0.28))
+	if parted:
+		# In front of the shelves, like the post by the tray.
+		for at: float in posts:
+			var x := w - at
+			if x <= EDGE:
+				continue
+			draw_rect(Rect2(x, BEAM, 4.0, h - BEAM - EDGE), FRAME)
+			draw_rect(Rect2(x, BEAM, PX, h - BEAM - EDGE), FRAME_LIGHT)
 
 	# The frame: a beam across the top and a narrow moulding round the rest.
 	draw_rect(Rect2(PX, PX, w - PX * 2.0, BEAM - PX * 2.0), FRAME)

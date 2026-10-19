@@ -25,6 +25,8 @@ const CHIP_RED := Color("c8402f")
 const CHIP_GREEN := Color("3f8a5a")
 ## The middle of the table, where a bet is pushed to.
 const POT := Vector2(576, 322)
+## How far past a cursed box the bending of a curse_flush reaches, easing off.
+const WARP_FEATHER := 48.0
 const VoodooDoll := preload("res://scripts/ui/voodoo_doll.gd")
 const COIN_ART := "res://assets/ui/coin.png"
 const HEART_ART := "res://assets/ui/heart.png"
@@ -208,6 +210,10 @@ var _vault_owner: PlayerState
 ## The doll of a Hex, lying where it landed until the hex takes hold.
 var _doll: VoodooDoll
 var _doll_target: PlayerState
+## The Voodooist pulling the strings of her dolls (Puppet Strings), until
+## the turn is over (cut_strings): what her dolls do in the meantime is
+## theirs to show.
+var _strings: PlayerState
 ## The bomb of a Demolition, lit and waiting to be told which item it is for.
 var _bomb: BombFx
 ## The chains of an Entropy in pieces, hanging in the air until they are
@@ -884,6 +890,7 @@ func put_away() -> void:
 	drop_hole()
 	drop_lurk()
 	drop_bets()
+	drop_gun()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -1597,11 +1604,12 @@ func _fx_vagabond_on_the_cuff(play: Play) -> void:
 	await _wait(0.2)
 
 
-## The doll is held up in front of the Voodooist while the purple gathers on
-## it; then the magic lets go and it is flung at the target, dead straight
-## and fast. It strikes the top corner of their box, slides down the side and
-## stays slumped there, feeding, until the hex takes hold (the table then
-## swaps it for the player's own: doll_thrown_at).
+## Only a rag doll, for now: it is shown in the Voodooist's hand and tossed
+## underhand at the target, tumbling over in the air. It strikes the top
+## corner of their box, slides down the side and stays slumped there, asleep,
+## until the hex takes hold (the table then swaps it for the player's own:
+## doll_thrown_at). Nothing magic about any of it: the doll only wakes up
+## later, if nobody breaks it (see the doll_awake note, at the table).
 func _fx_voodooist_hex(play: Play) -> void:
 	drop_doll()
 	var speed: float = table._speed
@@ -1615,62 +1623,234 @@ func _fx_voodooist_hex(play: Play) -> void:
 		var way: Array[Vector2] = box.doll_way()
 		hit = way[0]
 		rest = way[1]
-	var held := here + (POT - here).limit_length(64.0)
+	var held := here + (POT - here).limit_length(48.0)
 	var doll := VoodooDoll.new()
+	doll.awake = 0.0
 	if box != null and box.has_method("doll_facing"):
 		doll.facing = box.doll_facing()
 		doll.hangs = box.doll_hangs()
-	doll.position = held + Vector2(0, 14)
-	doll.scale = Vector2(0.4, 0.4)
+	doll.position = held + Vector2(0, 10)
+	doll.scale = Vector2(0.6, 0.6)
 	doll.modulate.a = 0.0
 	add_child(doll)
 	_doll = doll
 	_doll_target = play.target
-	_snd("fx_hex")
-	dim(0.5, 1.7)
 	var show := doll.create_tween().set_parallel()
 	show.tween_property(doll, "modulate:a", 1.0, 0.12 / speed)
-	show.tween_property(doll, "position", held, 0.3 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	show.tween_property(doll, "scale", Vector2(1.2, 1.2), 0.3 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	rise(held, UI.PURPLE, 10, 50.0)
-	await _wait(0.35)
-	# The spell winds up: the light closes in on it, twice.
-	ring(held + doll.heart(), UI.PURPLE.lightened(0.3), 90.0, 12.0, 0.3, 4.0)
-	await _wait(0.22)
-	ring(held + doll.heart(), Color.WHITE, 70.0, 8.0, 0.22, 4.0)
-	await _wait(0.24)
-	if not is_instance_valid(doll):
-		return
-	# And lets go: one straight line, too fast to follow.
-	_snd("fx_zap")
-	doll.thrown = true
-	flash(Color(0.6, 0.3, 0.9, 0.22), 0.2)
-	burst(held, UI.PURPLE.lightened(0.3), 14, 220.0, 0.35, 0.0)
-	ring(held, UI.PURPLE, 10.0, 80.0, 0.25, 5.0)
-	line(held, hit, UI.PURPLE.lightened(0.4), 8.0, 0.3)
-	line(held, hit, Color.WHITE, 3.0, 0.18)
-	var fly := doll.create_tween().set_parallel()
-	fly.tween_property(doll, "position", hit, 0.13 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	fly.tween_property(doll, "scale", Vector2.ONE, 0.13 / speed)
-	await _wait(0.13)
-	if not is_instance_valid(doll):
-		return
-	_snd("fx_doll_hit")
-	burst(hit, UI.PURPLE, 14, 190.0, 0.45, -40.0)
-	ring(hit, UI.PURPLE.lightened(0.3), 8.0, 56.0, 0.25, 4.0)
-	table._shake_screen(6.0)
-	# And down the side of the box, coming to rest slumped against it.
-	doll.thrown = false
-	doll.create_tween().tween_property(doll, "position", rest, 0.55 / speed) \
-			.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	await _wait(0.6)
-	if not is_instance_valid(doll):
-		return
-	if box != null:
-		doll.drain = box.get_global_rect().get_center() - rest
-	flash(Color(0.4, 0.1, 0.6, 0.2), 0.35)
-	ring(rest + doll.heart(), UI.PURPLE.lightened(0.3), 70.0, 10.0, 0.35, 4.0)
+	show.tween_property(doll, "position", held, 0.2 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	show.tween_property(doll, "scale", Vector2.ONE, 0.2 / speed)
 	await _wait(0.4)
+	if not is_instance_valid(doll):
+		return
+	# Underhand, in a high arc, turning over once on the way.
+	_snd("fx_doll_toss")
+	doll.thrown = true
+	var arc := 50.0 + held.distance_to(hit) * 0.18
+	var turns := -doll.facing
+	var toss := func(t: float) -> void:
+		doll.position = held.lerp(hit, t) + Vector2(0, -arc * 4.0 * t * (1.0 - t))
+		doll.rotation = turns * TAU * t
+	doll.create_tween().tween_method(toss, 0.0, 1.0, 0.5 / speed)
+	await _wait(0.5)
+	if not is_instance_valid(doll):
+		return
+	doll.rotation = 0.0
+	doll.thrown = false
+	_snd("fx_doll_hit")
+	burst(hit, Color("a08a62"), 6, 90.0, 0.3, 260.0, 4.0)
+	table._shake_screen(3.0)
+	# And down the side of the box, coming to rest slumped against it.
+	doll.create_tween().tween_property(doll, "position", rest, 0.5 / speed) \
+			.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	await _wait(0.55)
+	if is_instance_valid(doll) and box != null:
+		doll.drain = box.get_global_rect().get_center() - rest
+
+
+## The Voodooist pulls on her strings: a thread runs from her to every doll
+## of hers that is awake, and each one jerks where it sits. What each doll
+## does comes after, one at a time (curse_flush, item_hexed, and the doll's
+## cut of the coins at the table, table._anim_hex_cut).
+func _fx_voodooist_puppet_strings(play: Play) -> void:
+	_strings = play.actor
+	var here := _at(play.actor)
+	_snd("fx_hex")
+	dim(0.35, 1.1)
+	rise(here, UI.PURPLE, 10, 40.0)
+	for p: PlayerState in table.engine.players:
+		var status: Dictionary = p.statuses.get(&"hexed", {})
+		if not p.alive or status.get("by", -1) != play.actor.id or not status.get("awake", false):
+			continue
+		var doll := _doll_on(p)
+		if doll == null:
+			continue
+		var at := doll.get_global_transform() * doll.heart()
+		line(here, at, Color(UI.PURPLE.lightened(0.5), 0.8), 2.0, 0.9, 0.3)
+		ring(at, UI.PURPLE.lightened(0.3), 50.0, 8.0, 0.35, 3.0)
+		var jerk := doll.create_tween()
+		jerk.tween_interval(0.3 / table._speed)
+		jerk.tween_property(doll, "stagger", 0.7, 0.12 / table._speed)
+		jerk.tween_property(doll, "stagger", 0.0, 0.5 / table._speed)
+	await _wait(0.9)
+
+
+## Whether `who` is pulling the strings of their dolls right now.
+func pulling_strings(who: PlayerState) -> bool:
+	return _strings != null and _strings == who
+
+
+## The strings are let go. Puppet Strings is no claim, so no claim_resolved
+## puts them away: the table does it when the turn ends (it ends the turn).
+func cut_strings() -> void:
+	_strings = null
+
+
+## The doll pinned on `p`, as it shows in their box, or null.
+func _doll_on(p: PlayerState) -> VoodooDoll:
+	var box: Variant = table._node_of(p)
+	if box == null or not box.has_method("doll_node"):
+		return null
+	return box.doll_node() as VoodooDoll
+
+
+## The box of `p` on screen, scale and all.
+func _box_rect(p: PlayerState) -> Rect2:
+	var box: Control = table._node_of(p)
+	if box == null:
+		return Rect2(_at(p) - Vector2(60, 40), Vector2(120, 80))
+	var onto := box.get_global_transform()
+	return Rect2(onto * Vector2.ZERO, box.size * onto.get_scale())
+
+
+## A doll's curse coming down on whoever carries it. The doll feeds, hard:
+## the purple is torn out of their box in a rush, and the box itself is drawn
+## in towards the doll, twisting and shimmering (WarpFx); then the doll lets
+## go, and the picture of the box is flung back out in a glittering wave. The
+## blow itself follows (table._anim_damage).
+func curse_flush(victim: PlayerState) -> void:
+	var speed: float = table._speed
+	var rect := _box_rect(victim)
+	var doll := _doll_on(victim)
+	var heart := doll.get_global_transform() * doll.heart() if doll != null else rect.get_center()
+	_snd("fx_hex_flush")
+	dim(0.45, 1.9)
+	# Bigger than the box: the bending eases off outside it, to nothing.
+	var warp := WarpFx.new(rect.grow(WARP_FEATHER), heart, rect.size.length() * 0.6, WARP_FEATHER * 1.6)
+	add_child(warp)
+	# Its own look, not the one shared under the effects (see _share_look).
+	warp.use_parent_material = false
+	if doll != null:
+		doll.create_tween().tween_property(doll, "hunger", 1.0, 0.9 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	warp.create_tween().tween_property(warp, "pull", 1.0, 0.9 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	stream(rect.get_center(), heart, UI.PURPLE.lightened(0.35), 16, 0.35, 0.8)
+	await _wait(0.4)
+	stream(rect.get_center() + Vector2(-rect.size.x * 0.3, 0), heart, UI.PURPLE.lightened(0.15), 10, 0.3, 0.4)
+	stream(rect.get_center() + Vector2(rect.size.x * 0.3, 0), heart, UI.PURPLE.lightened(0.15), 10, 0.3, 0.4)
+	await _wait(0.6)
+	# Let go: the box snaps back out, in a wave.
+	if doll != null and is_instance_valid(doll):
+		doll.create_tween().tween_property(doll, "hunger", 0.0, 0.35 / speed)
+	flash(Color(0.6, 0.3, 0.9, 0.2), 0.3)
+	if is_instance_valid(warp):
+		warp.strength = 1.0
+		var release := warp.create_tween().set_parallel()
+		release.tween_property(warp, "pull", 0.0, 0.12 / speed)
+		release.tween_property(warp, "wave", 1.0, 0.6 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		release.tween_property(warp, "strength", 0.0, 0.6 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		release.chain().tween_callback(warp.queue_free)
+	await _wait(0.5)
+
+
+## A doll dragging an item over to itself, sick with the effort: it totters
+## and lurches where it sits, and the item comes away from its place
+## (`item_at`) in fits and starts, wobbling, shrinking and going purple as it
+## goes, until the doll has it. Then the doll lets go and the item is borne
+## off to `home`, its place in the inventory of the doll's owner, on a trail
+## of motes. `caught` is called as the item leaves its place.
+func item_hexed(victim: PlayerState, texture: Texture2D, item_at: Vector2, home: Vector2, caught: Callable) -> void:
+	var speed: float = table._speed
+	var doll := _doll_on(victim)
+	var heart := doll.get_global_transform() * doll.heart() if doll != null else item_at + Vector2(50, 30)
+	_snd("fx_hex_lurch")
+	if doll != null:
+		doll.create_tween().tween_property(doll, "stagger", 1.0, 0.3 / speed)
+	await _wait(0.3)
+	caught.call()
+	var item_size := Vector2(44, 46)
+	var item := TextureRect.new()
+	item.texture = texture
+	item.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	item.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	item.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	item.size = item_size
+	item.pivot_offset = item_size / 2.0
+	item.position = item_at - item_size / 2.0
+	item.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(item)
+	ring(item_at, UI.PURPLE.lightened(0.3), 6.0, 32.0, 0.25, 3.0)
+	# In fits and starts: a tug, a wobble, a stop, and a little slipped back.
+	var tugs := 4
+	for i: int in tugs:
+		if not is_instance_valid(item):
+			return
+		var t := float(i + 1) / tugs
+		var goal := item_at.lerp(heart, t) + Vector2(randf_range(-10, 10), randf_range(-8, 8)) * (1.0 - t)
+		var tug := item.create_tween().set_parallel()
+		tug.tween_property(item, "position", goal - item_size / 2.0, 0.16 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tug.tween_property(item, "rotation", randf_range(-0.5, 0.5), 0.16 / speed)
+		tug.tween_property(item, "scale", Vector2.ONE * lerpf(1.0, 0.45, t), 0.16 / speed)
+		tug.tween_property(item, "modulate", Color.WHITE.lerp(UI.PURPLE.lightened(0.5), t), 0.16 / speed)
+		stream(goal, heart, UI.PURPLE.lightened(0.3), 4, 0.2, 0.1)
+		await _wait(0.16)
+		if i < tugs - 1 and is_instance_valid(item):
+			item.create_tween().tween_property(item, "position", item.position + (item_at - heart).normalized() * 5.0, 0.12 / speed)
+			await _wait(0.14)
+	if not is_instance_valid(item):
+		return
+	# Swallowed, for a moment.
+	item.hide()
+	burst(heart, UI.PURPLE.lightened(0.2), 8, 90.0, 0.3, -30.0, 5.0)
+	if doll != null and is_instance_valid(doll):
+		doll.create_tween().tween_property(doll, "stagger", 0.35, 0.2 / speed)
+	await _wait(0.22)
+	if not is_instance_valid(item):
+		return
+	# Let go, and carried off on a wide bend to its new owner.
+	item.show()
+	var bend := heart.lerp(home, 0.5) + (home - heart).orthogonal().normalized() * heart.distance_to(home) * 0.25
+	var carry := func(t: float) -> void:
+		var at := heart.lerp(bend, t).lerp(bend.lerp(home, t), t)
+		item.position = at - item_size / 2.0
+		item.rotation = lerpf(item.rotation, 0.0, t)
+		item.scale = Vector2.ONE * lerpf(0.45, 1.0, t)
+		item.modulate = UI.PURPLE.lightened(0.5).lerp(Color.WHITE, t * t)
+		if randf() < 0.5:
+			burst(at, UI.PURPLE.lightened(0.3), 1, 25.0, 0.45, -20.0, 5.0)
+	item.create_tween().tween_method(carry, 0.0, 1.0, 0.55 / speed)
+	await _wait(0.57)
+	_snd("item_get")
+	if is_instance_valid(item):
+		UI.pop(item, 1.4, 0.2)
+	if doll != null and is_instance_valid(doll):
+		doll.create_tween().tween_property(doll, "stagger", 0.0, 0.5 / speed)
+	await _wait(0.2)
+	if is_instance_valid(item):
+		item.queue_free()
+
+
+## A doll reaching for items that are not there (an Untraceable): it
+## totters, grasping at nothing, and settles again.
+func doll_missed(victim: PlayerState, at: Vector2) -> void:
+	var doll := _doll_on(victim)
+	_snd("fx_hex_lurch")
+	if doll != null:
+		var fit := doll.create_tween()
+		fit.tween_property(doll, "stagger", 1.0, 0.25 / table._speed)
+		fit.tween_interval(0.4 / table._speed)
+		fit.tween_property(doll, "stagger", 0.0, 0.4 / table._speed)
+	burst(at, SMOKE.lightened(0.4), 6, 70.0, 0.35, -30.0, 7.0)
+	table._float(Loc.t("NOTHING THERE"), at, UI.MUTED, 16)
+	await _wait(0.8)
 
 
 ## Whether the doll thrown at `who` is lying where it landed. The table asks
@@ -2982,6 +3162,263 @@ func drop_bomb() -> void:
 		leave.tween_property(_bomb, "modulate:a", 0.0, 0.15 / table._speed)
 		leave.tween_callback(_bomb.queue_free)
 	_bomb = null
+
+
+# --- the Clown ----------------------------------------------------------------
+
+const CLOWN_GUN := "res://assets/ui/clown_gun.png"
+const CLOWN_GUN_SIZE := Vector2(92, 96)
+## How far from the shooter's anchor the gun is held.
+const CLOWN_GUN_HELD := 80.0
+## The mouth of the barrel, in pixels of the art (61x64, barrel to the left):
+## up in the slide, well above the middle of the picture.
+const CLOWN_BORE := Vector2(2, 20)
+## How long the gun trembles, aimed, before it goes off.
+const CLOWN_SUSPENSE := 0.55
+## How far a box ducks under the shot.
+const CLOWN_DUCK := 34.0
+## The Laughter: how many HA!s are thrown at each player laughed at, how long
+## apart, and how long each one flies.
+const CLOWN_VOLLEY := 4
+const CLOWN_VOLLEY_GAP := 0.14
+const CLOWN_HA_FLIGHT := 0.45
+## The colours of the party: confetti, streamers, the laughs.
+const PARTY := ConfettiFx.INKS
+
+var _gun: TextureRect
+var _gun_owner: PlayerState
+var _gun_aim := Vector2.LEFT
+
+
+## The circus gun is twirled on a finger and comes to rest aimed at the
+## target. It stays out, aimed, while they make up their mind: whether it was
+## loaded is shown only after (gun_fired).
+func _fx_clown_bang(play: Play) -> void:
+	_draw_gun(play.actor, play.target)
+	await _wait(0.5)
+	if is_instance_valid(_gun):
+		_snd("item_roulette_cock")
+		UI.pop(_gun, 1.12, 0.12)
+	await _wait(0.2)
+
+
+func _draw_gun(shooter: PlayerState, target: PlayerState) -> void:
+	drop_gun()
+	var here := _at(shooter)
+	var there := _at(target)
+	var aim := (there - here).normalized() if there != here else Vector2.LEFT
+	# The art points its barrel to the left; flipped, the grip stays down.
+	var gun := _sprite(UI.tex(CLOWN_GUN), here + aim * CLOWN_GUN_HELD, CLOWN_GUN_SIZE)
+	gun.flip_v = aim.x > 0.0
+	var aimed := aim.angle() - PI
+	_gun = gun
+	_gun_owner = shooter
+	_gun_aim = aim
+	# Spun round twice on a finger before it settles.
+	gun.rotation = aimed + TAU * 2.0 * (1.0 if aim.x > 0.0 else -1.0)
+	gun.scale = Vector2.ONE * 0.3
+	gun.modulate.a = 0.0
+	var speed: float = table._speed
+	var draw := gun.create_tween().set_parallel()
+	draw.tween_property(gun, "modulate:a", 1.0, 0.1 / speed)
+	draw.tween_property(gun, "scale", Vector2.ONE, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	draw.tween_property(gun, "rotation", aimed, 0.45 / speed).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+	_snd("fx_lasso_spin")
+
+
+## The gun of `d` (a gun_fired event) is shown: a shot, or a flag and the
+## party out of an empty barrel, and the whole table laughing.
+func gun_fired(d: Dictionary) -> void:
+	var shooter: PlayerState = d.shooter
+	var target: PlayerState = d.target
+	if _gun == null or not is_instance_valid(_gun) or _gun_owner != shooter:
+		_draw_gun(shooter, target)
+		await _wait(0.45)
+	var gun := _gun
+	if gun == null or not is_instance_valid(gun):
+		return
+	var speed: float = table._speed
+	var aim := _gun_aim
+	var here := _at(shooter)
+	var there := _at(target)
+	var aimed := aim.angle() - PI
+
+	# Whoever paid to duck is out of the way before anything goes off.
+	var box: Control = table._node_of(target)
+	var box_at := box.position if box != null else Vector2.ZERO
+	if d.ducked and box != null:
+		_snd("card_draw")
+		table._float(Loc.t("DUCK!"), there + Vector2(0, -44), UI.CREAM, 22)
+		var dip := box.create_tween()
+		dip.tween_property(box, "position", box_at + Vector2(0, CLOWN_DUCK), 0.14 / speed) \
+				.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		await _wait(0.25)
+
+	# The gun trembles, aimed: loaded or not?
+	var tremble := gun.create_tween()
+	for i in 7:
+		tremble.tween_property(gun, "rotation", aimed + (0.05 if i % 2 == 0 else -0.05), CLOWN_SUSPENSE / 7.0 / speed)
+	tremble.tween_property(gun, "rotation", aimed, 0.03 / speed)
+	await _wait(CLOWN_SUSPENSE)
+	if not is_instance_valid(gun):
+		return
+
+	var muzzle := _muzzle(gun)
+	if d.loaded:
+		await _gun_shot(gun, aim, muzzle, there, d.ducked)
+	else:
+		await _gun_party(gun, aim, muzzle, there)
+
+	if d.ducked and box != null and is_instance_valid(box):
+		var up := box.create_tween()
+		up.tween_property(box, "position", box_at, 0.2 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	drop_gun()
+
+
+## Where the mouth of the barrel of `gun` is right now, on the screen: the
+## bore of the art, wherever the picture is turned, flipped and scaled to.
+func _muzzle(gun: TextureRect) -> Vector2:
+	var art := gun.texture.get_size() if gun.texture != null else Vector2(61, 64)
+	var fit := minf(gun.size.x / art.x, gun.size.y / art.y)
+	var bore := (gun.size - art * fit) / 2.0 + CLOWN_BORE * fit
+	if gun.flip_v:
+		bore.y = gun.size.y - bore.y
+	return gun.position + gun.pivot_offset + ((bore - gun.pivot_offset) * gun.scale).rotated(gun.rotation)
+
+
+## A real round: the shot and the recoil, and blood unless the target ducked
+## under it.
+func _gun_shot(gun: TextureRect, aim: Vector2, muzzle: Vector2, there: Vector2, ducked: bool) -> void:
+	var speed: float = table._speed
+	var aimed := aim.angle() - PI
+	var kick := -0.45 if aim.x > 0.0 else 0.45
+	var rest := gun.position
+	_snd("item_death")
+	burst(muzzle, Color("ffd060"), 12, 240.0, 0.18, 0.0)
+	ring(muzzle, Color.WHITE, 6.0, 50.0, 0.15, 5.0)
+	# Over the head of whoever ducked.
+	var hit := there + Vector2(0, -CLOWN_DUCK * 2.0) if ducked else there
+	line(muzzle, hit, Color("ffe9a0"), 5.0, 0.14, 0.04)
+	flash(Color(1.0, 0.95, 0.8, 0.3), 0.12)
+	var recoil := gun.create_tween()
+	recoil.tween_property(gun, "position", rest - aim * 22.0, 0.04 / speed)
+	recoil.parallel().tween_property(gun, "rotation", aimed + kick, 0.04 / speed)
+	recoil.tween_property(gun, "position", rest, 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	recoil.parallel().tween_property(gun, "rotation", aimed, 0.25 / speed)
+	await _wait(0.05)
+	if ducked:
+		table._float(Loc.t("MISSED"), hit, UI.MUTED, 18)
+		table._shake_screen(4.0)
+	else:
+		burst(there, BLOOD, 22, 260.0, 0.55, 520.0)
+		table._shake_screen(12.0)
+	await _wait(0.5)
+
+
+## An empty gun: out of the barrel comes a flag that says so, with confetti
+## and streamers, and the Clown and the table laugh.
+func _gun_party(gun: TextureRect, aim: Vector2, muzzle: Vector2, there: Vector2) -> void:
+	# A low blow under it all, for the weight the shot doesn't have.
+	_snd("fx_clown_thump")
+	_snd("fx_party_blower")
+	var party := ConfettiFx.new(table._speed)
+	add_child(party)
+	party.blast(muzzle, aim, 46, 9)
+	UI.pop(gun, 1.15, 0.12)
+	ring(muzzle, PARTY[0], 6.0, 40.0, 0.25, 3.0)
+	table._shake_screen(4.0)
+	await _wait(0.3)
+	# The Clown laughs first, and then the table with him.
+	_snd("fx_clown_laugh_%d" % randi_range(1, 5))
+	await _wait(0.35)
+	_snd("fx_crowd_laugh")
+	for i in 3:
+		table._float(Loc.t("HA!"), there + Vector2(randf_range(-46.0, 46.0), randf_range(-60.0, -20.0)), PARTY[(i * 2 + 1) % PARTY.size()], 18 + i * 2)
+		await _wait(0.18)
+	await _wait(0.65)
+
+
+## Puts away a gun that never went off.
+func drop_gun() -> void:
+	if _gun != null and is_instance_valid(_gun):
+		var gun := _gun
+		var leave := gun.create_tween()
+		leave.tween_property(gun, "modulate:a", 0.0, 0.2 / table._speed)
+		leave.tween_callback(gun.queue_free)
+	_gun = null
+	_gun_owner = null
+
+
+## The Clown splits his sides, the box shaking with it, and then throws a
+## volley of HA!s (CLOWN_VOLLEY each) at every player he laughs at: each one
+## spins over in an arc and smacks into their box.
+func _fx_clown_laughter(play: Play) -> void:
+	var clown := play.actor
+	var here := _at(clown)
+	_snd("fx_clown_laughter")
+	var box: Control = table._node_of(clown)
+	if box != null:
+		UI.shake(box, 5.0, 0.9 / table._speed)
+	for i in 4:
+		table._float(Loc.t("HA!"), here + Vector2(randf_range(-56.0, 56.0), randf_range(-58.0, -14.0)), PARTY[i], 18 + i * 3)
+		rise(here, PARTY[(i + 2) % PARTY.size()], 3, 46.0)
+		await _wait(0.13)
+	var butts: Array = table.engine.opponents(clown).filter(
+		func(p: PlayerState) -> bool: return not p.statuses.is_empty() or p.coins <= 0)
+	for shot in CLOWN_VOLLEY:
+		for i in butts.size():
+			var ink: Color = PARTY[(i * 3 + shot * 2 + 1) % PARTY.size()]
+			_throw_ha(here, butts[i], ink)
+		await _wait(CLOWN_VOLLEY_GAP)
+	await _wait(CLOWN_HA_FLIGHT + 0.35)
+
+
+## One HA! thrown from `from` at `target`: up in an arc, turning over as it
+## flies, and a smack where it lands.
+func _throw_ha(from: Vector2, target: PlayerState, ink: Color) -> void:
+	var to := _at(target) + Vector2(randf_range(-30.0, 30.0), randf_range(-16.0, 10.0))
+	var word := UI.label(Loc.t("HA!"), 22, ink, true)
+	word.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	word.add_theme_constant_override("outline_size", 6)
+	word.add_theme_color_override("font_outline_color", UI.INK)
+	word.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(word)
+	word.reset_size()
+	word.pivot_offset = word.size / 2.0
+	var start := from + Vector2(randf_range(-20.0, 20.0), -20.0)
+	var height := randf_range(70.0, 130.0)
+	# One whole turn, the way it goes: it lands the right way up.
+	var turns := 1.0 if to.x >= start.x else -1.0
+	_ha_step(0.0, word, start, to, height, turns)
+	var fly := word.create_tween()
+	fly.tween_method(_ha_step.bind(word, start, to, height, turns), 0.0, 1.0, CLOWN_HA_FLIGHT / table._speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	fly.tween_callback(_ha_lands.bind(word, to, target, ink))
+
+
+func _ha_step(k: float, word: Label, start: Vector2, to: Vector2, height: float, turns: float) -> void:
+	if not is_instance_valid(word):
+		return
+	var at := start.lerp(to, k) + Vector2(0, -height * 4.0 * k * (1.0 - k))
+	word.position = at - word.size / 2.0
+	word.rotation = TAU * turns * k
+	word.scale = Vector2.ONE * (0.6 + 0.6 * sin(k * PI) + 0.2 * k)
+
+
+func _ha_lands(word: Label, at: Vector2, target: PlayerState, ink: Color) -> void:
+	_snd("fx_doll_hit")
+	burst(at, ink, 7, 160.0, 0.35, 260.0)
+	ring(at, ink.lightened(0.3), 4.0, 30.0, 0.2, 3.0)
+	var box: Control = table._node_of(target)
+	if box != null:
+		UI.shake(box, 4.0, 0.15 / table._speed)
+	if not is_instance_valid(word):
+		return
+	# Squashed against the box, then gone.
+	var smack := word.create_tween()
+	smack.tween_property(word, "scale", Vector2(1.5, 0.6), 0.05 / table._speed)
+	smack.tween_property(word, "modulate:a", 0.0, 0.25 / table._speed)
+	smack.tween_callback(word.queue_free)
 
 
 # --- the Entity ---------------------------------------------------------------
@@ -6552,3 +6989,236 @@ class SyringeFx extends Control:
 
 	func _b(x: float, y: float, w: float, h: float, ink: Color) -> void:
 		draw_rect(Rect2(x, y, w, h), ink)
+
+
+## The box of whoever carries a cursed doll, as the doll feeds on it: a
+## patch of the screen over the box, drawn again bent out of shape. While the
+## doll sucks (`pull`, 0 to 1) the picture is drawn in towards the doll and
+## twisted round it, rows of it jittering sideways and the colour going
+## purple; when it lets go (`wave`, 0 to 1, fading with `strength`) a ring
+## runs out from the doll pushing the picture outwards, split into colours and
+## glinting. Everything is bent in blocks of 2 pixels, like the rest of the
+## effects. Its own material: it stays out of the look of a borrowed action.
+class WarpFx extends ColorRect:
+	const CODE := "
+shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_nearest;
+uniform vec2 rect_size = vec2(100.0);
+uniform vec2 centre = vec2(50.0);
+uniform float pull = 0.0;
+uniform float wave = 0.0;
+uniform float strength = 0.0;
+uniform float time = 0.0;
+uniform float reach = 120.0;
+uniform float feather = 40.0;
+uniform vec4 tint : source_color = vec4(0.62, 0.38, 0.8, 1.0);
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+void fragment() {
+	vec2 p = UV * rect_size;
+	vec2 q = floor(p / 2.0) * 2.0 + 1.0;
+	vec2 d = q - centre;
+	float dist = length(d);
+	float fall = 1.0 - smoothstep(0.0, reach, dist);
+	// Nothing is bent at the edge of the patch, and less and less on the way
+	// to it: no seam between what is bent and what is not.
+	float edge = min(min(p.x, rect_size.x - p.x), min(p.y, rect_size.y - p.y));
+	float mask = smoothstep(0.0, feather, edge);
+	mask *= mask * (3.0 - 2.0 * mask);
+	float beat = floor(time * 30.0);
+	float row = floor(q.y / 2.0);
+	float k = pull * pull;
+	// Sucked in: what is further out is drawn closer, twisted round the doll.
+	vec2 offset = d * k * 0.55 * fall;
+	float turn = k * 0.9 * fall;
+	offset += vec2(d.x * cos(turn) - d.y * sin(turn), d.x * sin(turn) + d.y * cos(turn)) - d;
+	offset.x += (hash(vec2(row, beat)) - 0.5) * 12.0 * k;
+	offset.y += (hash(vec2(floor(q.x / 4.0), beat + 7.0)) - 0.5) * 4.0 * k;
+	// Let go: a ring running out, pushing the picture before it.
+	float ring = exp(-pow((dist - wave * reach * 1.4) / 22.0, 2.0)) * strength * mask;
+	vec2 way = dist > 0.001 ? d / dist : vec2(0.0);
+	offset -= way * ring * 16.0;
+	offset.x += (hash(vec2(row, beat + 3.0)) - 0.5) * 14.0 * ring;
+	offset *= mask;
+	k *= mask;
+	vec2 per = vec2(dFdx(SCREEN_UV).x / dFdx(UV).x, dFdy(SCREEN_UV).y / dFdy(UV).y) / rect_size;
+	vec4 c = texture(screen_tex, SCREEN_UV + offset * per);
+	float split = ring * 4.0 + k * 3.0;
+	if (split > 0.05) {
+		c.r = texture(screen_tex, SCREEN_UV + (offset + vec2(split, 0.0)) * per).r;
+		c.b = texture(screen_tex, SCREEN_UV + (offset - vec2(split, 0.0)) * per).b;
+	}
+	c.rgb = mix(c.rgb, c.rgb * tint.rgb * 1.35, k * fall * 0.7);
+	float glint = hash(q + beat);
+	if (glint > 0.92 && ring > 0.25) {
+		c.rgb = mix(c.rgb, glint > 0.97 ? vec3(1.0, 0.95, 1.0) : vec3(0.85, 0.65, 1.0), ring);
+	}
+	COLOR = vec4(c.rgb, 1.0);
+}
+"
+	static var _shader: Shader
+
+	var pull := 0.0:
+		set(value):
+			pull = value
+			material.set_shader_parameter("pull", value)
+	var wave := 0.0:
+		set(value):
+			wave = value
+			material.set_shader_parameter("wave", value)
+	var strength := 0.0:
+		set(value):
+			strength = value
+			material.set_shader_parameter("strength", value)
+	var _time := 0.0
+
+	## Over `rect`, on screen, bending round `centre`, also on screen, as far
+	## as `reach`; it eases off over the last `feather` pixels to the edge.
+	func _init(rect: Rect2, centre: Vector2, reach: float, feather: float) -> void:
+		if _shader == null:
+			_shader = Shader.new()
+			_shader.code = CODE
+		material = ShaderMaterial.new()
+		material.shader = _shader
+		position = rect.position
+		size = rect.size
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		material.set_shader_parameter("rect_size", rect.size)
+		material.set_shader_parameter("centre", centre - rect.position)
+		material.set_shader_parameter("reach", reach)
+		material.set_shader_parameter("feather", feather)
+
+	func _process(delta: float) -> void:
+		_time += delta
+		material.set_shader_parameter("time", _time)
+
+
+## Confetti and streamers out of an empty clown gun. Confetti are flat bits of
+## paper that flip over as they flutter down. Streamers are long strips of
+## paper: a chain of points that unrolls out of the barrel behind its head,
+## droops with its weight and falls, curling and twisting as it goes (the
+## back of the strip, darker, shows where it turns over). Everything in blocks
+## of PIXEL, and the node goes once the last bit has.
+class ConfettiFx extends Control:
+	const PIXEL := 2.0
+	const AIR := 2.6  # how fast the air slows them
+	const FALL := 140.0  # what gravity does to a flake
+	const LIFE := 2.2
+	## A streamer: how many links, how far apart, how heavy and how long it lasts.
+	const LINKS := 32
+	const LINK := 4.5
+	const RIBBON_FALL := 230.0
+	const RIBBON_AIR := 1.6
+	const RIBBON_LIFE := 2.6
+	const INKS: Array[Color] = [
+		Color("ff4fa3"), Color("ffd84a"), Color("4fd6ff"), Color("7be04a"), Color("ff7a2a"), Color("b07bff"),
+	]
+
+	var _speed := 1.0
+	var _flakes: Array = []
+	var _ribbons: Array = []
+
+	func _init(speed := 1.0) -> void:
+		_speed = speed
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	## Out of `at`, along `way`: `flakes` bits of confetti and `ribbons`
+	## streamers.
+	func blast(at: Vector2, way: Vector2, flakes: int, ribbons: int) -> void:
+		for i in flakes:
+			var dir := way.rotated(randf_range(-0.6, 0.6))
+			_flakes.append({
+				"p": at, "v": dir * randf_range(180.0, 560.0), "c": INKS[randi() % INKS.size()],
+				"t": 0.0, "life": LIFE * randf_range(0.6, 1.0), "spin": randf_range(6.0, 16.0),
+				"phase": randf() * TAU, "sway": randf_range(14.0, 30.0), "big": randi() % 3 == 0,
+			})
+		for i in ribbons:
+			# Fanned out, some higher than others, so they don't land as one.
+			var dir := way.rotated(lerpf(-0.55, 0.55, (i + randf_range(-0.3, 0.3)) / maxf(ribbons - 1, 1)))
+			var points: Array[Vector2] = []
+			for k in LINKS:
+				points.append(at)
+			_ribbons.append({
+				"p": points, "v": dir * randf_range(420.0, 640.0), "c": INKS[i % INKS.size()],
+				"t": 0.0, "life": RIBBON_LIFE * randf_range(0.85, 1.0),
+				"curl": randf_range(0.35, 0.6), "twist": randf_range(0.3, 0.55), "phase": randf() * TAU,
+			})
+		set_process(true)
+
+	func _process(delta: float) -> void:
+		var dt := delta * _speed
+		for flake: Dictionary in _flakes:
+			flake.t += dt
+			flake.v *= exp(-AIR * dt)
+			flake.v.y += FALL * dt
+			flake.p += flake.v * dt
+		for ribbon: Dictionary in _ribbons:
+			ribbon.t += dt
+			_pull(ribbon, dt)
+		_flakes = _flakes.filter(func(flake: Dictionary) -> bool: return flake.t < flake.life)
+		_ribbons = _ribbons.filter(func(ribbon: Dictionary) -> bool: return ribbon.t < ribbon.life)
+		if _flakes.is_empty() and _ribbons.is_empty():
+			queue_free()
+		queue_redraw()
+
+	## The head flies and falls; every link follows the one before it, never
+	## more than LINK away, and sinks a little on its own: the strip unrolls out
+	## of the barrel and then hangs and drops.
+	func _pull(ribbon: Dictionary, dt: float) -> void:
+		var points: Array[Vector2] = ribbon.p
+		ribbon.v *= exp(-RIBBON_AIR * dt)
+		ribbon.v.y += RIBBON_FALL * dt
+		points[0] += ribbon.v * dt
+		for k in range(1, points.size()):
+			# Paper is light: what is out of the barrel drifts down by itself.
+			if points[k] != points[k - 1]:
+				points[k].y += RIBBON_FALL * 0.25 * dt * minf(ribbon.t * 2.0, 1.0)
+			var gap: Vector2 = points[k] - points[k - 1]
+			if gap.length() > LINK:
+				points[k] = points[k - 1] + gap.normalized() * LINK
+
+	func _draw() -> void:
+		for ribbon: Dictionary in _ribbons:
+			_draw_ribbon(ribbon)
+		for flake: Dictionary in _flakes:
+			var fade := _fade(flake)
+			var turn: float = cos(flake.t * flake.spin + flake.phase)
+			var at: Vector2 = flake.p + Vector2(sin(flake.t * 4.0 + flake.phase) * flake.sway * minf(flake.t, 1.0), 0.0)
+			var across := maxf(1.0, roundf(absf(turn) * (3.0 if flake.big else 2.0)))
+			var tall := 2.0 if flake.big else 1.0
+			var ink: Color = flake.c if turn > 0.0 else flake.c.darkened(0.3)
+			draw_rect(Rect2((at / PIXEL).floor() * PIXEL, Vector2(across, tall) * PIXEL), Color(ink, fade))
+
+	## A strip along the links, curling to either side of them, as wide as
+	## the paper shows where it is: full face on, a thread edge on, its darker
+	## back after it turns over.
+	func _draw_ribbon(ribbon: Dictionary) -> void:
+		var fade := _fade(ribbon)
+		var points: Array[Vector2] = ribbon.p
+		var outline := Color(0.08, 0.04, 0.06, 0.55 * fade)
+		var spots: Array = []
+		for k in range(points.size() - 1):
+			var a := points[k]
+			var b := points[k + 1]
+			if a == b:
+				continue
+			var side := (b - a).orthogonal().normalized()
+			var curl: float = sin(k * ribbon.curl + ribbon.phase + ribbon.t * 4.0) * 5.0
+			var twist: float = cos(k * ribbon.twist + ribbon.phase * 2.0 + ribbon.t * 6.0)
+			var wide := 1 + roundi(absf(twist) * 2.0)
+			var ink: Color = ribbon.c if twist > 0.0 else ribbon.c.darkened(0.4)
+			spots.append([a.lerp(b, 0.5) + side * curl, side, wide, ink])
+		for spot: Array in spots:
+			_strip(spot[0], spot[1], spot[2], outline, PIXEL)
+		for spot: Array in spots:
+			_strip(spot[0], spot[1], spot[2], Color(spot[3], fade), 0.0)
+
+	func _strip(at: Vector2, side: Vector2, wide: int, ink: Color, grow: float) -> void:
+		for w in wide:
+			var cell: Vector2 = ((at + side * (w - (wide - 1) / 2.0) * PIXEL) / PIXEL).floor() * PIXEL
+			draw_rect(Rect2(cell - Vector2(grow, grow) / 2.0, Vector2(PIXEL * 2.0 + grow, PIXEL * 2.0 + grow)), ink)
+
+	func _fade(bit: Dictionary) -> float:
+		return clampf((bit.life - bit.t) / 0.4, 0.0, 1.0)

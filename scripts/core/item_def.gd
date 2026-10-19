@@ -14,6 +14,13 @@ var texture_path := ""
 var kind := Kind.ACTIVE
 ## Always on sale: takes no shop slot, survives rerolls and can't be banned.
 var fixed := false
+## Not an item but something done on the spot (fresh_card.gd): bought, it
+## resolves at once, as a play of the buyer, and nothing goes to the
+## inventory (so a full one doesn't stop it).
+var service := false
+## Takes the entire turn: it can only be bought while nothing else was done
+## this turn, and it ends it (like Ability.fresh_turn + ends_turn).
+var whole_turn := false
 ## A passive item that answers a play aimed at its holder (shield.gd,
 ## mirror.gd). Only one of them acts on a play: see GameEngine.guards().
 var guard := false
@@ -26,6 +33,8 @@ func on_held_event(_event: GameEvent, _holder: PlayerState, _instance: ItemInsta
 
 
 func kind_label() -> String:
+	if service:
+		return Loc.t("Takes the entire turn") if whole_turn else Loc.t("Done on the spot")
 	match kind:
 		Kind.PASSIVE:
 			return Loc.t("Passive")

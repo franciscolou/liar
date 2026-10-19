@@ -23,6 +23,8 @@ const Board := preload("res://scripts/ui/saloon_board.gd")
 const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
+const DollPick := preload("res://scripts/ui/doll_pick.gd")
+const GunPick := preload("res://scripts/ui/gun_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
 const TurnClock := preload("res://scripts/ui/turn_clock.gd")
 const CoinPile := preload("res://scripts/ui/coin_pile.gd")
@@ -61,6 +63,10 @@ const HEX_STAGGER := 0.1
 ## apart for each clink to be heard on its own.
 const COIN_FLIGHT := 0.42
 const COIN_STAGGER := 0.11
+## The Voodooist's dolls at work: see PlayFx.curse_flush.
+const PUPPET_STRINGS := &"voodooist.puppet_strings"
+## The Clown's gun: what it costs stays down until it is shown (_holds_round).
+const CLOWN_BANG := &"clown.bang"
 ## The item whose use is staged as a spin of the cylinder (_anim_roulette).
 const ROULETTE := &"roulette"
 const ROULETTE_CENTRE := Vector2(576, 388)
@@ -98,7 +104,11 @@ const CHALK_RED := Color("e8705c")
 const CHALK_START := 26.0
 const CHALK_END := 12.0
 const SHOP_HEIGHT := 106.0
-const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck
+const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck, at the least
+const SHOP_TAB_COLUMN := 27.0  # folded: from one column of mini icons to the next
+## Folded: the gap between the column of the fixed goods and the others,
+## where a post stands.
+const SHOP_TAB_PARTING := 8.0
 const SHOP_DECK_WIDTH := 62.0
 const SHOP_TAB_ROW := 36.0  # folded: from one row of mini icons to the next
 const SHOP_ITEM_Y := 18.0  # open: the top of the goods
@@ -139,9 +149,6 @@ const TOUCH_SEAT_SCALES := [1.3, 1.3, 1.3, 1.2, 1.1]
 const TOUCH_SEAT_GAP := 40.0
 ## The stage hangs from here, under the row.
 const TOUCH_STAGE_TOP := 230.0
-## Seconds a claim shows its description on the stage before it folds away;
-## a tap on the stage opens it again (and folds it).
-const TOUCH_READ_TIME := 5.0
 ## Touch mode: how dark the table goes around a description the player opened,
 ## and how fast it gets there.
 const TOUCH_READ_DIM := 0.45
@@ -184,6 +191,7 @@ var _shop_reroll_coin: TextureRect
 var _shop_reroll_queasy: ShaderMaterial
 var _shop_hint: Label
 var _shop_width := 0.0
+var _shop_tab_width := SHOP_TAB_WIDTH  # folded: grows with the stock
 var _shop_open := false
 var _shop_pinned := false
 var _shop_tween: Tween
@@ -490,7 +498,7 @@ func _choosing_target() -> bool:
 ## Materialize, the Counterfeit): looking is free, nothing is spent by it.
 func _hanging_pick() -> bool:
 	return _pending != null and _pending.kind == Decision.Kind.PICK and _pending.cancellable \
-			and _pending.context.get("look") in [&"cosmos", &"wand"] and _modal.get_child_count() > 0
+			and _pending.context.get("look") in [&"cosmos", &"wand", &"gun"] and _modal.get_child_count() > 0
 
 
 ## True while the viewer is typing a line to the table.
@@ -562,6 +570,7 @@ func _build() -> void:
 	_turn_label = UI.label("", 16, UI.GOLD, true)
 	_turn_label.position = Vector2(12, 8)
 	add_child(_turn_label)
+	# No tooltip: the word on it says it all.
 	var menu := UI.button("MENU", UI.BORDER, 13)
 	menu.position = Vector2(1072, 8)
 	menu.size = Vector2(70, 28)
@@ -574,7 +583,6 @@ func _build() -> void:
 			var at := Rect2(12, 13 + bar * 8, 20, 3) if big else Rect2(9, 8 + bar * 5, 13, 2)
 			menu.draw_rect(at, UI.GOLD if menu.is_hovered() else UI.CREAM))
 	menu.pressed.connect(_toggle_pause)
-	TipLayer.attach(menu, "Pause, settings and quit (Esc).")
 	add_child(menu)
 	if UI.touch:
 		menu.size = TOUCH_MENU
@@ -664,6 +672,14 @@ func _build_shop_now() -> void:
 	var fixed := engine.fixed_items
 	var stock := fixed.size() + engine.config.shop_slots
 	_shop_width = 24.0 + stock * 80.0 + 72.0 + SHOP_DECK_WIDTH
+	# Folded, the mini icons stand on two shelves: the fixed goods stacked in
+	# the columns on the left, past a post, the others row by row. The tab
+	# widens for every column instead of growing a third shelf.
+	var fixed_columns := ceili(fixed.size() / 2.0)
+	var stock_columns := ceili(engine.config.shop_slots / 2.0)
+	var parted := fixed_columns > 0 and stock_columns > 0
+	var stock_x := 8.0 + fixed_columns * SHOP_TAB_COLUMN + (SHOP_TAB_PARTING if parted else 0.0)
+	_shop_tab_width = maxf(SHOP_TAB_WIDTH, stock_x + 2.0 + stock_columns * SHOP_TAB_COLUMN + SHOP_DECK_WIDTH)
 	_shop = Control.new()
 	_shop.size = Vector2(_shop_width, SHOP_HEIGHT)
 	_shop.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -693,7 +709,7 @@ func _build_shop_now() -> void:
 	_shop.add_child(_deck_label)
 
 	_shop_tab = Control.new()
-	_shop_tab.position = Vector2(_shop_width - SHOP_TAB_WIDTH, 0)
+	_shop_tab.position = Vector2(_shop_width - _shop_tab_width, 0)
 	_shop_tab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_shop.add_child(_shop_tab)
 	var tab_title := UI.label("SHOP", 11, UI.GOLD, true)
@@ -732,7 +748,11 @@ func _build_shop_now() -> void:
 		_shop_body.add_child(coin)
 		var price := _price_tag(Vector2(x + 30, 81))
 		_shop_body.add_child(price)
-		var mini := _shop_icon("", Vector2(8 + (i % 2) * 27, 22 + (i >> 1) * SHOP_TAB_ROW), ItemView.BASE * 0.4)
+		var spot := Vector2(8.0 + (i >> 1) * SHOP_TAB_COLUMN, 22.0 + (i % 2) * SHOP_TAB_ROW)
+		if i >= fixed.size():
+			var j := i - fixed.size()
+			spot = Vector2(stock_x + (j % stock_columns) * SHOP_TAB_COLUMN, 22.0 + floorf(float(j) / stock_columns) * SHOP_TAB_ROW)
+		var mini := _shop_icon("", spot, ItemView.BASE * 0.4)
 		_shop_tab.add_child(mini)
 		_shop_entries.append({
 			"view": view, "price": price, "coin": coin, "mini": mini,
@@ -770,6 +790,11 @@ func _build_shop_now() -> void:
 	_shop_reroll_price.text = str(engine.config.reroll_cost)
 	_shop_reroll_queasy = UI.queasy(_shop_reroll_price.size, stock * 1.9 + 0.8)
 	_shop_body.add_child(_shop_reroll_price)
+	if parted:
+		# Halfway between the last fixed icon and the first of the others, on
+		# the grid of the stall; counted from the right, as the stall is.
+		var post := roundf((stock_x - SHOP_TAB_PARTING + stock_x - (SHOP_TAB_COLUMN - ItemView.BASE.x * 0.4)) / 4.0 - 1.0) * 2.0
+		_shop_bg.posts = [_shop_tab_width - post]
 	_set_shop_open(false, true)
 
 
@@ -809,8 +834,9 @@ func _set_shop_open(open: bool, instant := false) -> void:
 	if not open:
 		shelves = [48.0, 48.0 + SHOP_TAB_ROW]
 	_shop_bg.shelves = shelves
+	_shop_bg.parted = not open
 	_restyle_shop()
-	var width := _shop_width if open else SHOP_TAB_WIDTH
+	var width := _shop_width if open else _shop_tab_width
 	var at := Vector2(_shop_width - width, 0)
 	if _shop_tween != null:
 		_shop_tween.kill()
@@ -1234,8 +1260,6 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 			text += "  ·  " + option.detail
 		# What it costs right now: a status may have raised the price.
 		var cost: int = option.get("cost", ability.cost)
-		if cost > 0:
-			text += "  ·  " + Loc.t("%d coins") % cost
 		var tip := UI.ability_tip(ability)
 		if option.reason != "":
 			tip += "[color=%s]%s[/color]" % [UI.hex(UI.RED), option.reason]
@@ -1245,7 +1269,7 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 			"text": text, "tip": tip, "enabled": option.enabled,
 			"accent": UI.GREEN if option.legit else UI.RED,
 			"action": _answer_turn.bind(option), "reason": option.reason,
-			"note": ability.description,
+			"note": ability.description, "cost": cost,
 		})
 	if options != null:
 		for extra: Dictionary in options.extras:
@@ -1253,7 +1277,7 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 				continue
 			var cost: int = extra.get("cost", 0)
 			rows.append({
-				"text": extra.label + ("  ·  " + Loc.t("%d coins") % cost if cost > 0 else ""),
+				"text": extra.label, "cost": cost,
 				"tip": extra.get("description", ""), "enabled": extra.enabled, "accent": UI.PURPLE,
 				"action": _answer_turn.bind(extra), "reason": extra.get("reason", ""),
 			})
@@ -1311,7 +1335,7 @@ func _reroll_tip() -> String:
 		tip = Loc.t("[b]Reroll[/b]\nOn the house: %d free rerolls left this turn. Each one replaces every item in the shop slots.") % _free_rerolls()
 	var kept := engine.fixed_items.map(func(def): return def.display_name)
 	if not kept.is_empty():
-		tip += " " + Loc.t("%s always stays on sale.") % Loc.t(" and ").join(kept)
+		tip += " " + (Loc.t("%s always stays on sale.") if kept.size() == 1 else Loc.t("%s always stay on sale.")) % Loc.t(" and ").join(kept)
 	var options: Variant = _turn_options()
 	if options == null:
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Only on your turn.")]
@@ -1714,6 +1738,28 @@ func _open_pick(d: Decision) -> void:
 	if holder is PlayerState and _seats.has(holder.id):
 		_seats[holder.id].set_item_pick(true)
 		_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(UI.MUTED), Loc.t("Click one of the highlighted items.")], [])
+		return
+	if d.context.get("look") == &"doll":
+		# The doll hangs over the table on its strings (see doll_pick.gd).
+		UI.clear(_modal)
+		var strings := DollPick.new()
+		strings.setup(d)
+		strings.picked.connect(_answer)
+		strings.refused.connect(_play_sfx.bind("cancel"))
+		_modal.add_child(strings)
+		_offer_aside(strings)
+		_play_sfx("fx_stardust")
+		return
+	if d.context.get("look") in [&"gun", &"duck"]:
+		# The Clown's gun, big, between the two bills (see gun_pick.gd).
+		UI.clear(_modal)
+		var gun := GunPick.new()
+		gun.setup(d)
+		gun.picked.connect(_answer)
+		gun.sounded.connect(_play_sfx)
+		_modal.add_child(gun)
+		_offer_aside(gun)
+		_play_sfx("item_roulette_cock")
 		return
 	if d.context.get("look") == &"cosmos":
 		# Not a window: the options hang in the dark (see cosmos_pick.gd).
@@ -2136,7 +2182,7 @@ func _prompt_middle() -> float:
 	if not UI.touch:
 		return 576.0
 	var left := 100.0
-	var right := _shop.position.x + (_shop_width - SHOP_TAB_WIDTH) * _shop.scale.x - 8.0
+	var right := _shop.position.x + (_shop_width - _shop_tab_width) * _shop.scale.x - 8.0
 	if _prompt.size.x > right - left:
 		return 576.0
 	return (left + right) / 2.0
@@ -2262,6 +2308,8 @@ func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color:
 		b.custom_minimum_size = UI.grown(Vector2(270, 36))
 		b.disabled = not spec.get("enabled", true)
 		b.pressed.connect(spec.action)
+		if spec.get("cost", 0) > 0:
+			UI.price_button(b, spec.cost, 15)
 		if spec.has("tip"):
 			TipLayer.attach(b, spec.tip)
 		box.add_child(b)
@@ -2856,11 +2904,15 @@ func present(e: GameEvent) -> void:
 			_play_sfx("cancel")
 			await _stamp("SILENCED", UI.BLUE)
 		&"claim_resolving":
-			# Nobody called it a lie: what it cost is the bank's now.
-			await _release_reserve(d.play, false)
+			# Nobody called it a lie: what it cost is the bank's now. A Bang!
+			# keeps it down until the gun is shown: an empty one gives it back.
+			if not _holds_round(d.play):
+				await _release_reserve(d.play, false)
 		&"claim_resolved":
-			# Whatever is still set aside for it (the claim was cut short).
-			await _release_reserve(d.play, false)
+			# Whatever is still set aside for it (the claim was cut short),
+			# unless it is the round of an empty gun, on its way back.
+			if not _owes_round(d.play):
+				await _release_reserve(d.play, false)
 			# A claim answering another one (a Silver Tongue caught lying, a
 			# Swindle) ends in the middle of it: what the first left out on
 			# the table is still waiting.
@@ -2876,6 +2928,10 @@ func present(e: GameEvent) -> void:
 			_sync_shop()
 		&"item_bought":
 			await _anim_item_bought(d)
+		&"service_bought":
+			# Off the shelf to the buyer, and then put into play like an item.
+			await _anim_item_bought({"player": d.player, "item": d.item, "slot": -1})
+			await _anim_item_used(d)
 		&"item_gained":
 			await _anim_item_gained(d)
 		&"targeted":
@@ -2900,6 +2956,10 @@ func present(e: GameEvent) -> void:
 		&"shop_rerolled":
 			await _anim_reroll()
 		&"morale_lost":
+			var cause: Variant = d.get("play")
+			if cause != null and cause.source != null and cause.source.id == PUPPET_STRINGS and _play_fx.pulling_strings(d.source):
+				# The doll on them does it: it feeds on them first.
+				await _play_fx.curse_flush(d.target)
 			await _anim_damage(d.target, d.amount)
 		&"morale_spent":
 			await _anim_morale_spent(d)
@@ -2971,12 +3031,19 @@ func present(e: GameEvent) -> void:
 			await _play_fx.cards_binned(d)
 		&"coin_flipped":
 			await _play_fx.coin_flip(d.player, d.heads, d.won)
+		&"gun_fired":
+			await _play_fx.gun_fired(d)
+			# A loaded gun spent the round put down for it.
+			if d.loaded:
+				await _release_reserve(_reserve_for(d.play), false)
 		&"note":
 			_float((Loc.t(d.text) % d.player.name).trim_suffix(".").to_upper(), _anchor(d.player) + Vector2(0, -24),
 					UI.GREEN.lightened(0.25) if d.good else UI.MUTED, 16)
 			if d.get("tag") == &"side_bet" and _play_fx.betting(d.player):
 				# The stake goes back to who laid it, or to the house.
 				await _play_fx.bet_settled(d.player, d.good)
+			elif d.get("tag") == &"doll_awake":
+				await _anim_doll_awake(d.player)
 			else:
 				await _wait(0.45)
 		&"card_peeked":
@@ -2998,10 +3065,13 @@ func present(e: GameEvent) -> void:
 				await _play_fx.hand_found(d.owner)
 		&"turn_ended":
 			_clock_turn = -1
+			_play_fx.cut_strings()
 		&"items_missed":
 			# What an Untraceable took off the table: whatever came for it
 			# finds nothing, and only then are the items back.
-			if d.how == &"steal":
+			if d.how == &"steal" and _play_fx.pulling_strings(d.by):
+				await _play_fx.doll_missed(d.owner, _item_spot(d.owner, 0))
+			elif d.how == &"steal":
 				await _play_fx.rope_missed(d.by, _item_spot(d.owner, 0))
 			elif _play_fx.bombing():
 				# A Demolition: the bomb is thrown all the same, finds nothing
@@ -3452,12 +3522,15 @@ func _render_stage() -> void:
 		item.set_item(play.source)
 		item.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(item)
-		text.add_child(UI.label("YOU USE" if mine else Loc.t("%s USES") % actor, 13, UI.MUTED, true))
+		if play.source is ItemDef and (play.source as ItemDef).service:
+			text.add_child(UI.label("YOU BUY" if mine else Loc.t("%s BUYS") % actor, 13, UI.MUTED, true))
+		else:
+			text.add_child(UI.label("YOU USE" if mine else Loc.t("%s USES") % actor, 13, UI.MUTED, true))
 		text.add_child(UI.label(play.source.display_name.to_upper(), 26, UI.BLUE.lightened(0.2), true))
 	row.add_child(text)
 	if play.is_claim():
-		var cost := "  (%s)" % (Loc.t("%d coins") % play.cost) if play.cost > 0 else ""
-		text.add_child(UI.label(EventText.title(play) + _on_target(play) + cost, 17, UI.CREAM, true))
+		var title := UI.label(EventText.title(play) + _on_target(play), 17, UI.CREAM, true)
+		text.add_child(UI.priced(title, play.cost, 17) if play.cost > 0 else title)
 	elif play.target != null and not _stage_stack.back().get("concealed", false):
 		text.add_child(UI.label(_on_target(play).strip_edges().capitalize(), 17, UI.CREAM, true))
 	if UI.touch:
@@ -3470,17 +3543,10 @@ func _render_stage() -> void:
 
 
 ## Touch mode: there is no room for the description between the row of seats
-## and the prompt, so a new play shows it for TOUCH_READ_TIME seconds, over
-## the prompt, and then folds it into a line that says a tap reads it.
+## and the prompt, so a play comes folded into a line that says a tap reads
+## it; the tap opens it over the prompt (see _on_stage_input).
 func _touch_description(entry: Dictionary, text: VBoxContainer) -> void:
-	if not entry.has("reading"):
-		entry.reading = true
-		get_tree().create_timer(TOUCH_READ_TIME).timeout.connect(func() -> void:
-			if entry.reading and not entry.get("opened", false):
-				entry.reading = false
-				if not _stage_stack.is_empty() and _stage_stack.back() == entry:
-					_render_stage())
-	if entry.reading:
+	if entry.get("reading", false):
 		var description := UI.label(entry.play.source.description, 12, UI.CREAM.darkened(0.1))
 		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		description.custom_minimum_size = UI.grown(Vector2(300, 0))
@@ -3502,7 +3568,6 @@ func _on_stage_input(event: InputEvent) -> void:
 		return
 	var entry: Dictionary = _stage_stack.back()
 	entry.reading = not entry.get("reading", false)
-	entry.opened = true
 	# Opened by hand, it holds the table until a tap anywhere folds it.
 	entry.held = entry.reading
 	_play_sfx("ui_key")
@@ -3647,6 +3712,10 @@ func _anim_coins(d: Dictionary) -> void:
 	if d.reason == &"voodoo" and delta > 0 and d.other != null:
 		await _anim_hex_cut(d)
 		return
+	# What a doll takes leaves with the doll's cut, just after (voodoo).
+	if d.reason == &"hexed" and delta < 0:
+		_float("%+d" % delta, here + Vector2(0, -18), UI.RED, 22)
+		return
 	# A Cash Out pays out of the vault standing open on the table.
 	if d.reason == &"vault" and _play_fx.vault_mouth(p) != Vector2.INF:
 		there = _play_fx.vault_mouth(p)
@@ -3667,6 +3736,10 @@ func _anim_coins(d: Dictionary) -> void:
 		return
 	if d.reason == &"refund" and delta > 0 and _reserves.has(d.get("play")):
 		await _release_reserve(d.play, true)
+		return
+	# The round of an empty gun goes back from where it was put down.
+	if d.reason == &"blank" and delta > 0 and _reserve_for(d.get("play")) != null:
+		await _release_reserve(_reserve_for(d.play), true)
 		return
 	# The chains of an Entropy: what is left of them becomes the coins.
 	if d.reason == &"entropy" and delta > 0 and _play_fx.releasing(p):
@@ -3835,6 +3908,33 @@ func _release_reserve(play: Play, back: bool) -> void:
 	_float("+%d" % total, _coin_anchor(p) + Vector2(0, -18), UI.GOLD, 22)
 
 
+## The claim whose price was put down for `play`: itself, or the Impostor's
+## claim that repeats it. Null if nothing is down for it.
+func _reserve_for(play: Variant) -> Variant:
+	if play == null:
+		return null
+	for claimed: Play in _reserves:
+		if claimed == play or claimed.aimed() == play:
+			return claimed
+	return null
+
+
+## True for a Bang! (clown.gd): what it cost stays down until the gun is
+## shown, loaded or not.
+func _holds_round(play: Play) -> bool:
+	return play.aimed().source.id == CLOWN_BANG
+
+
+## True when the round put down for `play`, an empty gun that was never
+## shown (a Shield, a Silencer), is about to go back to the Clown.
+func _owes_round(play: Play) -> bool:
+	var aimed := play.aimed()
+	if aimed.source.id != CLOWN_BANG or aimed.params.get("loaded", true) or aimed.params.get("settled", false):
+		return false
+	var clown: PlayerState = aimed.params.get("clown")
+	return not play.failed and play.paid > 0 and clown != null and clown.alive and not engine.over
+
+
 ## True while a Materialize of `p` is the claim being played out.
 func _materializing(p: PlayerState) -> bool:
 	if _stage_stack.is_empty():
@@ -3884,6 +3984,12 @@ func _anim_hex_cut(d: Dictionary) -> void:
 	var coins := clampi(total, 1, MAX_COINS_SHOWN)
 	var hex: Color = Content.statuses.get(&"hexed", {}).get("color", UI.PURPLE)
 	_play_sfx("fx_doll_hit")
+	# The doll feeds on them while it lasts.
+	var fed: Variant = box.doll_node() if box != null and box.has_method("doll_node") else null
+	if fed != null:
+		var feed: Tween = fed.create_tween()
+		feed.tween_property(fed, "hunger", 0.8, HEX_GRAB / _speed)
+		feed.tween_property(fed, "hunger", 0.0, (HEX_PAUSE + HEX_FLIGHT) / _speed)
 	_float(Loc.t("THE DOLL TAKES %d") % total, doll + Vector2(0, -52), hex.lightened(0.45), 18)
 	for i in coins:
 		var share := total * (i + 1) / coins - total * i / coins
@@ -3907,6 +4013,25 @@ func _anim_hex_cut(d: Dictionary) -> void:
 	if bar != null:
 		bar.coin_bias = 0
 	_float("%+d" % total, _coin_anchor(owner_player) + Vector2(0, -18), hex.lightened(0.45), 22)
+
+
+## A doll that slept wakes up on whoever carries it: it jerks where it sits,
+## the colour comes back into it and the purple gathers round it again (the
+## doll does it by itself, VoodooDoll.awake, as the table syncs).
+func _anim_doll_awake(p: PlayerState) -> void:
+	_sync()
+	_play_sfx("fx_hex")
+	var box := _node_of(p)
+	var at := _anchor(p)
+	if box != null:
+		var pieces: Array[Vector2] = box.status_pieces(&"hexed")
+		if not pieces.is_empty():
+			at = pieces[0]
+	_play_fx.ring(at, UI.PURPLE.lightened(0.3), 70.0, 8.0, 0.4, 4.0)
+	await _wait(0.45)
+	_play_fx.ring(at, UI.PURPLE.lightened(0.45), 8.0, 60.0, 0.35, 4.0)
+	_play_fx.burst(at, UI.PURPLE.lightened(0.2), 10, 120.0, 0.45, -40.0, 5.0)
+	await _wait(0.7)
 
 
 ## A coin `t` of its way from `from` into the doll at `doll`: round and
@@ -4140,6 +4265,11 @@ func _anim_item_stolen(d: Dictionary) -> void:
 	var caught := func() -> void:
 		if lost != null and is_instance_valid(lost):
 			lost.sync()
+	if _play_fx.pulling_strings(d.thief):
+		# A doll of the thief's drags it over to itself instead.
+		await _play_fx.item_hexed(d.victim, texture, _item_spot(d.victim, d.get("index", 0)),
+				_item_spot(d.thief, d.thief.items.size() - 1), caught)
+		return
 	await _play_fx.item_roped(d.thief, texture, _item_spot(d.victim, d.get("index", 0)),
 			_item_spot(d.thief, d.thief.items.size() - 1), caught)
 

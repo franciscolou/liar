@@ -46,7 +46,7 @@ class PerfectDisguise extends Ability:
 		if reason != "":
 			return reason
 		if last.fresh_turn and player.turn.get("busy", false):
-			return Loc.t("Takes the whole turn")
+			return Loc.t("Takes the entire turn")
 		reason = last.can_use(player, engine)
 		if reason == "" and last.targeting != Targeting.NONE and last.target_candidates(_repeat(player, engine)).is_empty():
 			reason = Loc.t("No valid target")

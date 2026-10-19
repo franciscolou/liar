@@ -113,7 +113,7 @@ const PARTS := [
 	["EMOTES", Rect2(8, 298, 34, 34), "Show the table how you feel! Click to pick a face, or press 1 to 6.", &"emotes"],
 	["CHAT", Rect2(44, 298, 34, 34), "(T) Type a line for the whole table to see.", &"chat"],
 	["LOG", Rect2(8, 334, 232, 136), "Everything that happened in the match, in case you really need to look it up.", &"log"],
-	["SHOP", Rect2(984, 364, 84, 106), "The shop, folded: hover it to see the items and their prices.", &"shop"],
+	["SHOP", Rect2(983, 364, 99, 106), "The shop, folded: hover it to see the items and their prices.", &"shop"],
 	["DECK", Rect2(1070, 364, 74, 106), "The characters nobody holds. A card that proved a claim goes back here.", &"deck"],
 	["YOU", Rect2(0, 478, 228, 62), "Your name, Morale and coins, and the statuses on you.", &"stats"],
 	["YOUR ITEMS", Rect2(0, 542, 228, 106), "Your inventory. On your turn, click an item to use it.", &"items"],
@@ -135,7 +135,7 @@ const TOUCH_PARTS := [
 	["EMOTES", Rect2(8, 382, 40, 40), "Show the table how you feel! Tap to pick a face.", &"emotes"],
 	["CHAT", Rect2(52, 382, 40, 40), "Type a line for the whole table to see.", &"chat"],
 	["LOG", Rect2(8, 426, 84, 44), "Everything that happened in the match, in case you really need to look it up. Tap to open it.", &"log"],
-	["SHOP", Rect2(968, 322, 89, 148), "The shop, folded: tap it to see the items and their prices.", &"shop"],
+	["SHOP", Rect2(919, 322, 139, 148), "The shop, folded: tap it to see the items and their prices.", &"shop"],
 	["DECK", Rect2(1057, 322, 87, 148), "The characters nobody holds. A card that proved a claim goes back here.", &"deck"],
 	["YOU", Rect2(0, 478, 228, 62), "Your name, Morale and coins, and the statuses on you.", &"stats"],
 	["YOUR ITEMS", Rect2(0, 542, 228, 106), "Your inventory. On your turn, tap an item to use it.", &"items"],
@@ -186,6 +186,16 @@ func _init() -> void:
 	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	heading.add_child(Board.plaque("HOW TO PLAY", 24))
 	_panel.add_child(heading)
+	var shut := Button.new()
+	Board.plank(shut, UI.RED)
+	shut.size = Vector2(44, 44) if touch else Vector2(34, 34)
+	shut.position = Vector2(board.x - shut.size.x - 14.0, 10)
+	shut.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	shut.focus_mode = Control.FOCUS_NONE
+	shut.pressed.connect(close)
+	shut.draw.connect(_draw_cross.bind(shut))
+	TipLayer.attach(shut, "Close")
+	_panel.add_child(shut)
 
 	var gap := 6.0
 	var width := floorf((board.x - 48.0 - gap * (LESSONS.size() - 1)) / LESSONS.size())
@@ -246,18 +256,12 @@ func _init() -> void:
 	var buttons_y := board.y - 54.0 if touch else 520.0
 	var middle := stage_at.x + STAGE.size.x / 2.0 + (0.0 if touch else 196.0)
 	previous.size = Vector2(56, 48) if touch else Vector2(46, 44)
-	previous.position = Vector2(middle - 100.0 - 10.0 - previous.size.x, buttons_y)
+	previous.position = Vector2(middle - 6.0 - previous.size.x, buttons_y)
 	previous.pressed.connect(_step.bind(-1))
 	_panel.add_child(previous)
-	var back := UI.button("Back", UI.BORDER, 18)
-	Board.plank(back)
-	back.size = Vector2(200, 48 if touch else 44)
-	back.position = Vector2(middle - 100.0, buttons_y)
-	back.pressed.connect(close)
-	_panel.add_child(back)
 	_next = UI.button(">", UI.BORDER, 18)
 	_next.size = previous.size
-	_next.position = Vector2(middle + 100.0 + 10.0, buttons_y)
+	_next.position = Vector2(middle + 6.0, buttons_y)
 	_next.pressed.connect(_step.bind(1))
 	_panel.add_child(_next)
 	_count = UI.label("", 15, UI.MUTED, true)
@@ -274,6 +278,27 @@ func _ready() -> void:
 	if TipLayer.current == null:
 		add_child(TipLayer.new())
 	_show(0)
+
+
+## The X of the close button: two strokes two blocks thick, stepped one block
+## at a time like the rest of the board's pixel work, cream that lights pink
+## under the mouse (the colours of the text of a red Board.plank).
+func _draw_cross(button: Button) -> void:
+	var cell := 3.0 if UI.touch else 2.0
+	var rows := 8  # the X is rows tall and rows + 1 blocks wide
+	var ink := Color("ffb9a8") if button.is_hovered() else UI.CREAM
+	# The face of a plank sits above its thick bottom edge, and below its
+	# thick top edge once pressed in.
+	var face := button.size.y / 2.0 + (2.0 if button.button_pressed else -2.0)
+	var origin := (Vector2(button.size.x / 2.0, face) - Vector2(rows + 1, rows) * cell / 2.0).round()
+	var blocks: Dictionary = {}
+	for row in rows:
+		for x: int in [row, row + 1, rows - row, rows - 1 - row]:
+			blocks[Vector2i(x, row)] = true
+	for at: Vector2i in blocks:
+		button.draw_rect(Rect2(origin + Vector2(at.x, at.y + 1) * cell, Vector2(cell, cell)), Color(0, 0, 0, 0.45))
+	for at: Vector2i in blocks:
+		button.draw_rect(Rect2(origin + Vector2(at) * cell, Vector2(cell, cell)), ink)
 
 
 func close() -> void:
@@ -469,20 +494,20 @@ func _turn_open(card: CardView, held: bool) -> void:
 	menu.add_child(UI.label("You hold this card: claiming it is the truth." if held else "Not in your hand: claiming it is a bluff.", 13, ink))
 	for ability: Ability in def.abilities:
 		var text := ability.display_name
-		if ability.cost > 0:
-			text += "  ·  " + Loc.t("%d coins") % ability.cost
 		var about := ability.description
 		if ability.on_turn:
 			var b := UI.button(text, ink, 14)
 			b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 			b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			b.pressed.connect(_turn_claim.bind(ability, held))
+			if ability.cost > 0:
+				UI.price_button(b, ability.cost, 14)
 			menu.add_child(b)
 		else:
 			# Not for the turn: it is listed, but there is nothing to press.
 			var line := UI.label("%s  ·  %s" % [text, ability.kind_label()], 14, UI.BLUE, true)
 			line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-			menu.add_child(line)
+			menu.add_child(UI.priced(line, ability.cost, 14) if ability.cost > 0 else line)
 			if ability.trigger_text != "":
 				about = "%s: %s" % [ability.trigger_text, about]
 		var note := UI.label(about, 12, UI.MUTED)

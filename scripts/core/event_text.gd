@@ -13,6 +13,8 @@ static func describe(e: GameEvent) -> String:
 			return _coins(d)
 		&"item_bought":
 			return Loc.t("%s buys %s.") % [d.player.name, _item(d.item)]
+		&"service_bought":
+			return Loc.t("%s buys %s.") % [d.player.name, d.item.def.display_name]
 		&"shop_rerolled":
 			return Loc.t("%s rerolls the shop.") % d.player.name
 		&"item_gained":
@@ -70,6 +72,14 @@ static func describe(e: GameEvent) -> String:
 				Content.character(d.card).display_name, ", ".join(names)]
 		&"hand_redrawn":
 			return Loc.t("%s trades the whole hand for new cards.") % d.player.name
+		&"gun_fired":
+			if d.loaded and d.ducked:
+				return Loc.t("%s's gun was loaded, but %s ducked.") % [d.shooter.name, d.target.name]
+			if d.loaded:
+				return Loc.t("%s's gun was loaded!") % d.shooter.name
+			if d.ducked:
+				return Loc.t("%s's gun was empty: %s ducked for nothing.") % [d.shooter.name, d.target.name]
+			return Loc.t("%s's gun was empty.") % d.shooter.name
 		&"coin_flipped":
 			return Loc.t("%s flips a coin: heads" if d.heads else "%s flips a coin: tails") % d.player.name + ("!" if d.won else ".")
 		&"note":
@@ -107,16 +117,22 @@ static func _coins(d: Dictionary) -> String:
 			return Loc.t("%s pays %d for the wrong call.") % [who, -d.delta]
 		&"doubt_reward":
 			return Loc.t("%s collects %d for the right call.") % [who, d.delta]
-		&"refund":
+		&"refund", &"blank":
 			return Loc.t("%s gets %d coins back.") % [who, d.delta]
+		&"duck":
+			return Loc.t("%s pays %d to duck.") % [who, -d.delta]
+		&"laughter":
+			return Loc.t("%s laughs all the way to %d coins.") % [who, d.delta]
 		&"stolen":
 			return Loc.t("%s loses %d coins to %s.") % [who, -d.delta, d.other.name]
 		&"steal":
 			return ""
 		&"swindle":
 			return Loc.t("%s makes off with %d coins meant for %s.") % [who, d.delta, d.other.name]
+		&"hexed":
+			return Loc.t("%s's doll takes %d coins from %s.") % [d.other.name, -d.delta, who]
 		&"voodoo":
-			return Loc.t("%s's doll siphons %d from %s.") % [who, d.delta, d.other.name]
+			return ""
 	if d.delta > 0:
 		return Loc.t("%s gains %d coins.") % [who, d.delta]
 	return Loc.t("%s pays %d coins.") % [who, -d.delta]

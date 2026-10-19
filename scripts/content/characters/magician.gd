@@ -31,7 +31,7 @@ class HatTrick extends Ability:
 		await engine.give_item(play.actor, hat[engine.rng.randi_range(0, hat.size() - 1)])
 
 	func _hat(engine: GameEngine) -> Array:
-		return engine.fixed_items + engine.item_pool
+		return engine.items_in_match()
 
 	# A bot leaves its last slot for an item it chose: three things out of a
 	# hat can fill an inventory with nothing that ends a match.

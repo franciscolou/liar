@@ -25,7 +25,10 @@ extends Node
 ##     release go on to the screen together, untouched (a double tap keeps
 ##     its `double_click`);
 ##   - a drag (moved more than `SLOP` px): the press goes on, then the moves,
-##     so sliders, the suspect book and the house rules sheet still drag;
+##     so sliders, the suspect book and the house rules sheet still drag. A
+##     drag that starts inside a ScrollContainer of the `SCROLLS` group scrolls
+##     it instead, and the press never goes on (it would pick what is under
+##     the finger: a card of the lobby);
 ##   - a hold (still for `HOLD_MS`): no click at all. The control under the
 ##     finger gets the mouse over it and shows its tooltip until the finger
 ##     lets go (`TipLayer.explain`), and `held` says which control it was, for
@@ -56,6 +59,8 @@ const NOTE_TIME := 1.6
 const HOLD_MS := 450
 ## How far a finger may wander (viewport px) and still be a tap or a hold.
 const SLOP := 10.0
+## The group of ScrollContainers a finger drags (see the gestures above).
+const SCROLLS := &"touch_scroll"
 
 ## A finger held still on `control` (the one under it, or null).
 signal held(control: Control)
@@ -73,6 +78,8 @@ var _pressed_at := 0
 var _holding := false
 ## This node is sending an event on itself: it goes through untouched.
 var _replaying := false
+## The ScrollContainer the finger that is down is dragging, if any.
+var _scrolling: ScrollContainer
 
 
 ## Decides the mode, once. Called by `Settings.ensure_loaded`.
@@ -161,12 +168,24 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			_finger(event)
+	elif event is InputEventMouseMotion and _scrolling != null:
+		get_viewport().set_input_as_handled()
+		if is_instance_valid(_scrolling):
+			_scrolling.scroll_vertical -= int(roundf(event.relative.y))
+			_scrolling.scroll_horizontal -= int(roundf(event.relative.x))
 	elif event is InputEventMouseMotion and (_pending != null or _holding):
 		if _holding:
 			get_viewport().set_input_as_handled()
 		elif event.position.distance_to(_pending.position) > SLOP:
-			# A drag: the press goes on first, then this move.
 			get_viewport().set_input_as_handled()
+			_scrolling = _scroll_at(_pending.position)
+			if _scrolling != null:
+				# Scrolled by what the finger moved since it went down.
+				_scrolling.scroll_vertical -= int(roundf(event.position.y - _pending.position.y))
+				_scrolling.scroll_horizontal -= int(roundf(event.position.x - _pending.position.x))
+				_pending = null
+				return
+			# A drag: the press goes on first, then this move.
 			_send([_pending, event])
 			_pending = null
 
@@ -177,8 +196,12 @@ func _finger(event: InputEventMouseButton) -> void:
 		_pending = event
 		_pressed_at = Time.get_ticks_msec()
 		_holding = false
+		_scrolling = null
 		return
-	if _holding:
+	if _scrolling != null:
+		get_viewport().set_input_as_handled()
+		_scrolling = null
+	elif _holding:
 		get_viewport().set_input_as_handled()
 		_holding = false
 		if TipLayer.current != null:
@@ -201,6 +224,15 @@ func _push(events: Array) -> void:
 	for event: InputEvent in events:
 		get_viewport().push_input(event, true)
 	_replaying = false
+
+
+## The scroll area of the `SCROLLS` group under `at` (viewport px), or null.
+func _scroll_at(at: Vector2) -> ScrollContainer:
+	for node in get_tree().get_nodes_in_group(SCROLLS):
+		var scroll := node as ScrollContainer
+		if scroll != null and scroll.is_visible_in_tree() and scroll.get_global_rect().has_point(get_viewport().get_canvas_transform().affine_inverse() * at):
+			return scroll
+	return null
 
 
 func _hold() -> void:
@@ -231,6 +263,7 @@ func _notification(what: int) -> void:
 func _switch(on: bool) -> void:
 	_pending = null
 	_holding = false
+	_scrolling = null
 	_apply(on)
 	_shape_window(on)
 	_tell("TOUCH MODE" if on else "DESKTOP MODE")

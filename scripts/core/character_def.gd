@@ -32,7 +32,8 @@ func on_event(_event: GameEvent, _engine: GameEngine) -> void:
 ## Extra options for `player`'s turn menu:
 ## [{id, label, description, cost, enabled, reason, run: Callable(player, engine)}]
 ## Optional: ai (chance 0..1 that a bot takes it, default 0.7); priority (the
-## higher ones get the few buttons next to END TURN first, default 0).
+## higher ones get the few buttons next to END TURN first, default 0);
+## ends_turn (the turn is over once it has run, default false).
 func turn_extras(_player: PlayerState, _engine: GameEngine) -> Array:
 	return []
 

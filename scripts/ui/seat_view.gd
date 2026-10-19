@@ -569,6 +569,11 @@ func doll_landed() -> void:
 	_status_fx.doll_landed()
 
 
+## The doll pinned on this player, while it shows (see StatusFx.doll).
+func doll_node() -> Control:
+	return _status_fx.doll()
+
+
 ## Whether status `id` came from a borrowed action (see StatusFx.set_borrowed).
 func status_borrowed(id: StringName, on: bool) -> void:
 	_status_fx.set_borrowed(id, on)

@@ -16,12 +16,17 @@ extends RefCounted
 ##   coins {player, delta, reason, other, play} other = counterpart player or null (bank)
 ##     (reason &"cost": the price of a claim, put down as it is announced;
 ##     &"refund": that price back to a liar who was caught; both carry the
-##     claim in `play`. &"doubt_reward": the coins for calling LIAR! on a lie)
+##     claim in `play`. &"doubt_reward": the coins for calling LIAR! on a lie.
+##     &"stolen"/&"steal": the two halves of a theft, &"hexed"/&"voodoo" when
+##     a Voodoo doll does it; &"duck": ducking a Clown's gun, to the bank;
+##     &"blank": the price of an empty Bang! back to the Clown, with the claim
+##     the coins were put down for in `play`)
 ##   payment_short {player, amount, allowed}    set allowed to let the player go into debt
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
 ##     for coins still on their way to the victim: see bard.gd)
 ##   item_buying {player, item, slot}           before the item is shown in the inventory
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
+##   service_bought {player, item, play}        a service (ItemDef.service) was paid for; it resolves next. `item` is a stand-in, never held
 ##   shop_restocked {slot} / shop_rerolled {player}
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item, index}
 ##   item_discarded {player, item, index}       thrown away by its holder, for nothing
@@ -64,10 +69,13 @@ extends RefCounted
 ##   card_lost {player, index, card}            the hand follows Morale; public
 ##   card_drawn {player, index}
 ##   hand_redrawn {player, count}               the whole hand went back for new cards
+##   gun_fired {play, shooter, target, loaded, ducked}  a Clown's gun is shown (clown.gd):
+##     loaded or empty, and whether the target paid to duck it
 ##   coin_flipped {player, heads, won}          a coin tossed for everyone to see;
 ##     won: it fell on the side the player was hoping for
 ##   note {player, text, good, tag}             news from content that no other event
 ##     carries: `text` is an English key with one %s for the player's name
+##     (tag &"side_bet": a Side Bet settled; &"doll_awake": a Voodoo doll woke up)
 ##   status_added {player, status} / status_removed {player, status, reason}
 ##     (reason: &"" when it just ended, &"wasted" when it was thrown away)
 ##   counter_changed {player, counter, value, delta}  a private counter is its owner's secret

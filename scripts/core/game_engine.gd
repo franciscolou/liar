@@ -506,9 +506,15 @@ func turn_options(player: PlayerState) -> Dictionary:
 func _buy_option(player: PlayerState, def: ItemDef, slot: int) -> Dictionary:
 	var reason := ""
 	var cost := price(player, def.price)
-	if player.items.size() >= config.inventory_limit:
+	if def.service:
+		reason = blocked_reason(player, def.tags)
+		if reason == "" and def.whole_turn and player.turn.get("busy", false):
+			reason = Loc.t("Takes the entire turn")
+		if reason == "":
+			reason = def.can_use(player, self)
+	elif player.items.size() >= config.inventory_limit:
 		reason = Loc.t("Inventory full")
-	elif not can_pay(player, cost):
+	if reason == "" and not can_pay(player, cost):
 		reason = Loc.t("Not enough coins")
 	return {
 		"kind": &"buy", "slot": slot, "item": def, "enabled": reason == "",
@@ -568,7 +574,7 @@ func claim_block_reason(player: PlayerState, ability: Ability) -> String:
 	if reason != "":
 		return reason
 	if ability.fresh_turn and player.turn.get("busy", false):
-		return Loc.t("Takes the whole turn")
+		return Loc.t("Takes the entire turn")
 	var cost := claim_cost(player, ability)
 	if cost > 0 and not can_pay(player, cost):
 		return Loc.t("Not enough coins")
@@ -607,7 +613,9 @@ func _play_turn(p: PlayerState) -> void:
 			break
 		match choice.get("kind", &"end"):
 			&"buy":
-				await buy_item(p, choice.item, choice.slot)
+				var bought := await buy_item(p, choice.item, choice.slot)
+				if bought and choice.item.whole_turn:
+					break
 			&"reroll":
 				await reroll_shop(p)
 			&"use":
@@ -617,6 +625,8 @@ func _play_turn(p: PlayerState) -> void:
 			&"extra":
 				p.turn["busy"] = true
 				await choice.run.call(p, self)
+				if choice.get("ends_turn", false):
+					break
 			&"ability":
 				var play := await claim(p, choice.ability)
 				if play != null and choice.ability.ends_turn:
@@ -793,17 +803,19 @@ func carry_out(play: Play) -> void:
 
 
 ## `slot` is the shop slot holding `def`, or -1 for an item that is always
-## on sale (those never run out and take no slot).
-func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
+## on sale (those never run out and take no slot). False if nothing was bought.
+func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> bool:
 	var stocked := slot >= 0
 	if stocked and (slot >= shop.size() or shop[slot] != def):
-		return
+		return false
 	if not stocked and not fixed_items.has(def):
-		return
+		return false
+	if def != null and def.service:
+		return await _buy_service(player, def)
 	if def == null or player.items.size() >= config.inventory_limit:
-		return
+		return false
 	if not await pay(player, price(player, def.price), &"shop"):
-		return
+		return false
 	player.turn["busy"] = true
 	var instance := ItemInstance.new(def)
 	await fire(&"item_buying", {"player": player, "item": instance, "slot": slot})
@@ -819,6 +831,26 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> void:
 	if stocked and not unseen:
 		shop[slot] = _random_item()
 		await fire(&"shop_restocked", {"slot": slot})
+	return true
+
+
+## A service (ItemDef.service) is paid for and done at once, as a play of the
+## buyer that nobody can doubt: its choices come first (prepare), so backing
+## out costs nothing.
+func _buy_service(player: PlayerState, def: ItemDef) -> bool:
+	var play := Play.new()
+	play.engine = self
+	play.actor = player
+	play.source = def
+	play.item = ItemInstance.new(def)
+	if not await _make_ready(play):
+		return false
+	if not await pay(player, price(player, def.price), &"shop"):
+		return false
+	player.turn["busy"] = true
+	await fire(&"service_bought", {"player": player, "item": play.item, "play": play})
+	await _resolve(play)
+	return true
 
 
 ## Pays to replace everything in the slots. Items always on sale stay.
@@ -1114,8 +1146,10 @@ func gain_coins(player: PlayerState, amount: int, reason: StringName, other: Pla
 		await change_coins(player, gain.data.amount, reason, other)
 
 
-## Returns how many coins actually changed hands.
-func steal_coins(thief: PlayerState, victim: PlayerState, amount: int, play: Play = null) -> int:
+## Returns how many coins actually changed hands. `taken` and `given` are the
+## reasons of the two `coins` events, for a theft the table shows its own way
+## (the doll of a Voodooist: &"hexed" and &"voodoo").
+func steal_coins(thief: PlayerState, victim: PlayerState, amount: int, play: Play = null, taken := &"stolen", given := &"steal") -> int:
 	amount = mini(amount, maxi(victim.coins, 0))
 	if amount <= 0:
 		return 0
@@ -1125,8 +1159,8 @@ func steal_coins(thief: PlayerState, victim: PlayerState, amount: int, play: Pla
 	if steal.cancelled or over:
 		return 0
 	amount = mini(amount, maxi(victim.coins, 0))
-	await change_coins(victim, -amount, &"stolen", thief)
-	await gain_coins(thief, amount, &"steal", victim)
+	await change_coins(victim, -amount, taken, thief)
+	await gain_coins(thief, amount, given, victim)
 	return amount
 
 
@@ -1577,6 +1611,12 @@ func items_on_sale() -> Array:
 		if def != null and not defs.has(def):
 			defs.append(def)
 	return defs
+
+
+## Every item this match has, on the shelf or not; services (ItemDef.service)
+## are not things anyone can hold.
+func items_in_match() -> Array:
+	return (fixed_items + item_pool).filter(func(def: ItemDef) -> bool: return not def.service)
 
 
 func copies_in_play() -> int:

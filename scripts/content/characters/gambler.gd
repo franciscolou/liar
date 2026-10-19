@@ -100,7 +100,7 @@ class DoubleDown extends Ability:
 	func _init() -> void:
 		id = &"gambler.double_down"
 		display_name = "Double Down"
-		describe("Pay %d coins and flip a coin.\n  • Tails: gain %d coins.\n  • Heads: nothing.", [ANTE, JACKPOT])
+		describe("Flip a coin.\n  • Tails: gain %d coins.\n  • Heads: nothing.", [JACKPOT])
 		on_turn = true
 		cost = ANTE
 
@@ -118,7 +118,7 @@ class SideBet extends Ability:
 	func _init() -> void:
 		id = &"gambler.side_bet"
 		display_name = "Side Bet"
-		describe("Pay %d coins and bet on who is right. Call it and gain %d coins. Using Side Bet on a doubt over another Side Bet is not allowed.", [STAKE, PRIZE])
+		describe("Bet on who is right. Call it and gain %d coins. Using Side Bet on a doubt over another Side Bet is not allowed.", [PRIZE])
 		trigger_text = "When someone calls LIAR! on another player"
 		cost = STAKE
 

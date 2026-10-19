@@ -91,7 +91,7 @@ class TimeBomb extends Ability:
 		id = &"bomber.time_bomb"
 		display_name = "Time Bomb"
 		cost = 3
-		describe("Pay %d coins to plant a bomb on a player. It goes off at the end of their next turn, dealing 1 point of damage, unless they pay %d coins to defuse it first.", [cost, DEFUSE_COST])
+		describe("Plant a bomb on a player. It goes off at the end of their next turn, dealing 1 point of damage, unless they pay %d coins to defuse it first.", [DEFUSE_COST])
 		on_turn = true
 		targeting = Targeting.OPPONENT
 		tags = [&"damage"]

@@ -1125,6 +1125,48 @@ def fx_hex():
     return lowpass(out, 5000)
 
 
+def fx_doll_toss():
+    """A rag doll tossed underhand: cloth through the air, nothing more."""
+    out = silence(0.5)
+    swish = bandpass(noise(0.45, 0.15, 0.3, 127), 500, lambda t: 1400 + 2600 * math.sin(math.pi * min(t / 0.45, 1.0)))
+    mix(out, swish, 0.0, 0.8)
+    return out
+
+
+def fx_hex_flush():
+    """A doll feeding on its carrier: a drawn breath of air that will not
+    stop, rising over a sick drone, then let go in a cascade of glass."""
+    out = silence(2.0)
+    # The pull: air rushing in, louder and higher until it lets go at 0.9 s.
+    pull = [x * min(1.0, (i / RATE) / 0.85) ** 2 for i, x in enumerate(noise(0.92, 0.01, 5.0, 141))]
+    mix(out, lowpass(pull, lambda t: 300 + 3200 * (t / 0.92) ** 2), 0.0, 0.9)
+    for freq, gain in ((65.4, 1.0), (92.5, 0.6)):  # C against the tritone
+        mix(out, tone(lambda t, f=freq: f * (1.0 + 0.5 * min(t / 0.9, 1.0)), 0.95, 0.3, 5.0, "tri", vibrato=0.02), 0.0, gain * 0.5)
+    # The release: a thump, and glittering bells running up and away.
+    mix(out, lowpass(noise(0.15, 0.002, 0.08, 143), 600), 0.9, 0.9)
+    mix(out, tone(110, 0.3, 0.002, 0.15, glide=0.5), 0.9, 0.7)
+    for i, freq in enumerate((1046.5, 1244.5, 1480.0, 1760.0, 2093.0, 2489.0, 2960.0)):  # diminished, upwards
+        mix(out, bell(freq, 0.8, 0.5), 0.92 + i * 0.05, 0.22)
+    mix(out, bandpass(noise(0.7, 0.02, 0.5, 145), 4000, 9000), 0.92, 0.12)
+    return lowpass(out, 9000)
+
+
+def fx_hex_lurch():
+    """A doll sick with the effort of dragging something over to itself: a
+    queasy, wobbling groan of strings, four gulps of a pull, and a swallow."""
+    out = silence(1.7)
+    wobble = lambda t: 98.0 * (1.0 + 0.06 * math.sin(TAU * 1.7 * t) + 0.03 * math.sin(TAU * 4.3 * t))
+    mix(out, tone(wobble, 1.6, 0.2, 1.0, "saw"), 0.0, 0.25)
+    mix(out, tone(lambda t: wobble(t) * 1.414, 1.6, 0.3, 0.9, "tri"), 0.0, 0.2)
+    for i, at in enumerate((0.3, 0.58, 0.86, 1.14)):
+        gulp = bandpass(noise(0.16, 0.01, 0.1, 151 + i), 250, lambda t: 1600 - 6000 * t)
+        mix(out, gulp, at, 0.7)
+        mix(out, tone(180 + 25 * i, 0.12, 0.004, 0.06, glide=0.6), at, 0.3)
+    mix(out, tone(240, 0.25, 0.004, 0.12, glide=0.35), 1.38, 0.6)
+    mix(out, lowpass(noise(0.12, 0.002, 0.06, 157), 500), 1.38, 0.6)
+    return lowpass(out, 4000)
+
+
 def fade_out(samples, seconds=0.012):
     """Brings the end of a sound down to silence, so a cut note does not click."""
     n = min(int(seconds * RATE), len(samples))
@@ -1267,6 +1309,17 @@ def fx_boom():
     for i, at in enumerate((0.5, 0.68, 0.8, 0.97)):
         mix(out, bandpass(noise(0.05, 0.001, 0.02, 193 + i), 800, 4000), at, 0.25)
     return drive(out[:int(1.5 * RATE)], 3.5)
+
+
+def fx_clown_thump():
+    """The low blow under an empty clown gun: a deep drum that drops away, with
+    a muffled knock on top. It only weighs the party blower and the laughs
+    down, so it carries no tone of its own above the bass."""
+    out = silence(1.3)
+    mix(out, tone(lambda t: 35.0 + 60.0 * math.exp(-t * 7.0), 1.3, 0.002, 0.75), 0.0, 2.2)
+    mix(out, tone(lambda t: 70.0 + 120.0 * math.exp(-t * 14.0), 0.5, 0.001, 0.18), 0.0, 0.6)
+    mix(out, lowpass(noise(0.25, 0.0005, 0.07, 211), 380), 0.0, 1.1)
+    return drive(out, 1.8)
 
 
 def swell(samples, seconds):
@@ -1696,6 +1749,9 @@ SOUNDS = {
     "fx_tin": fx_tin,
     "fx_scribble": fx_scribble,
     "fx_hex": fx_hex,
+    "fx_doll_toss": fx_doll_toss,
+    "fx_hex_flush": fx_hex_flush,
+    "fx_hex_lurch": fx_hex_lurch,
     "fx_mask": fx_mask,
     "fx_chips": fx_chips,
     "fx_coin_flip": fx_coin_flip,
@@ -1708,6 +1764,7 @@ SOUNDS = {
     "fx_lasso": fx_lasso,
     "fx_fuse": fx_fuse,
     "fx_boom": fx_boom,
+    "fx_clown_thump": fx_clown_thump,
     "fx_entropy": fx_entropy,
     "fx_chains": fx_chains,
     "fx_supernova": fx_supernova,
@@ -1733,10 +1790,10 @@ PEAK = 0.7
 PEAKS = {
     "truth": 0.42, "lie": 0.42, "coin_1": 0.38, "coin_2": 0.38, "coin_3": 0.38, "item_roulette": 0.5,
     "fx_hush": 0.4, "fx_scribble": 0.5, "fx_tin": 0.5, "fx_shimmer": 0.5,
-    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "chalk": 0.28, "fx_serenade": 0.8, "fx_serenade_2": 0.8, "fx_serenade_3": 0.8, "fx_serenade_4": 0.8, "fx_serenade_5": 0.8, "fx_doll_hit": 0.6, "fx_sniper_aim": 0.3, "fx_sniper": 0.95, "fx_hex": 0.75,
+    "fx_lute_flourish": 0.55, "fx_cash": 0.55, "fx_poof": 0.6, "chalk": 0.28, "fx_serenade": 0.8, "fx_serenade_2": 0.8, "fx_serenade_3": 0.8, "fx_serenade_4": 0.8, "fx_serenade_5": 0.8, "fx_doll_hit": 0.6, "fx_sniper_aim": 0.3, "fx_sniper": 0.95, "fx_hex": 0.75, "fx_doll_toss": 0.4, "fx_hex_flush": 0.8, "fx_hex_lurch": 0.6,
     "item_death": 0.9,
     "fx_mask": 0.5, "fx_chips": 0.45, "fx_coin_flip": 0.45, "fx_dig": 0.6, "fx_bell": 0.6, "fx_pour": 0.5,
-    "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_fuse": 0.45, "fx_boom": 0.95,
+    "fx_glint": 0.45, "fx_lasso_spin": 0.45, "fx_lasso": 0.7, "fx_lasso_miss": 0.6, "fx_conjure": 0.55, "fx_fuse": 0.45, "fx_boom": 0.95, "fx_clown_thump": 0.95,
     "fx_scales_chain": 0.4, "fx_scales": 0.9,
     "fx_boot_step": 0.45, "fx_spur": 0.4, "fx_boot_stomp": 0.92,
     "fx_firework_launch": 0.45, "fx_firework_1": 0.88, "fx_firework_2": 0.88, "fx_firework_3": 0.88, "status_break": 0.4, "fx_zap": 0.55,

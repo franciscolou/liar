@@ -9,7 +9,7 @@ extends CharacterDef
 const ENTROPY := &"entropy"
 ## What the chains break into when the next turn starts.
 const ENTROPY_COINS := 3
-## What the Morale is worth to someone who can't take it (full, or hexed).
+## What the Morale is worth to someone who can't take it (full, or blocked from healing).
 const MORALE_WORTH := 2
 ## Why the chains go when they go for nothing (status_removed.reason).
 const WASTED := &"wasted"
@@ -143,7 +143,7 @@ class Materialize extends Ability:
 
 	# Out of nothing: anything this match has, on the shelf or not.
 	func _makeable(engine: GameEngine) -> Array:
-		return engine.fixed_items + engine.item_pool
+		return engine.items_in_match()
 
 	func _affordable(player: PlayerState, engine: GameEngine) -> Array:
 		return _makeable(engine).filter(func(def: ItemDef) -> bool:

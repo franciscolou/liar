@@ -26,6 +26,11 @@ static func run() -> int:
 		"antidote answered in the doubt window": _antidote_early,
 		"antidote let through is not asked again": _antidote_declined,
 		"a doll can't be doubted once pinned": _doll_stands,
+		"a doll wakes when its carrier's turn ends unpaid": _doll_wakes.bind(false),
+		"a sleeping doll is broken for 4 coins": _doll_wakes.bind(true),
+		"puppet strings: every awake doll hurts, and stays": _puppet_strings.bind(&"hurt"),
+		"puppet strings: every awake doll takes 3 coins": _puppet_strings.bind(&"coins"),
+		"puppet strings: every awake doll takes an item": _puppet_strings.bind(&"item"),
 		"a lie under oath costs every coin too": _oath_doubles.bind(false),
 		"the truth under oath costs nothing": _oath_doubles.bind(true),
 		"a spiked drink is free and adds to every price": _groggy_pays_more,
@@ -78,6 +83,17 @@ static func run() -> int:
 		"backing out of a bluffed swindle goes back to the question": _swindle_backed_out,
 		"a proven card the ability already traded is not traded twice": _proven_shed_once,
 		"a choice made before the announcement is private, one made after is not": _private_choices,
+		"a fresh card: the chosen card goes, 5 coins, inventory full or not": _fresh_card,
+		"a fresh card takes the whole turn": _fresh_card_whole_turn,
+		"backing out of a fresh card costs nothing": _fresh_card_backed_out,
+		"a loaded gun hits whoever doesn't duck": _bang.bind(true, false, &""),
+		"ducking a loaded gun costs 4 coins and no Morale": _bang.bind(true, true, &""),
+		"an empty gun costs the clown nothing": _bang.bind(false, false, &""),
+		"ducking an empty gun is 4 coins for nothing": _bang.bind(false, true, &""),
+		"a shield stops a loaded gun, and the round is spent": _bang.bind(true, false, &"shield"),
+		"an empty gun a shield stopped gives its round back": _bang.bind(false, false, &"shield"),
+		"a disguise repeats an empty gun and gets the round back": _bang_disguised,
+		"laughter pays for everyone under an effect or broke": _laughter,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -90,6 +106,64 @@ static func run() -> int:
 
 
 # --- scenes --------------------------------------------------------------------
+
+## The Clown (player 0) aims a gun, `loaded` or not, at player 1, who pays to
+## `duck` it or not and may hold a `defence`.
+static func _bang(loaded: bool, duck: bool, defence: StringName) -> String:
+	var table := Table.new(true, [&"clown"])
+	var engine := table.engine
+	var clown: PlayerState = engine.players[0]
+	var target: PlayerState = engine.players[1]
+	clown.cards = [&"clown", &"judge"]
+	if defence != &"":
+		table.give(1, [defence])
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return target
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0 if loaded else 1
+	table.puppets[1].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0 if duck else 1
+	await engine.claim(clown, table.ability(&"clown.bang"))
+	var blocked := defence != &""
+	var spent := 4 if loaded else 0
+	var ducked := 4 if duck and not blocked else 0
+	if clown.coins != 20 - spent or target.coins != 20 - ducked:
+		return "coins: %d / %d" % [clown.coins, target.coins]
+	var hurt := loaded and not duck and not blocked
+	if target.morale != engine.config.start_morale - (1 if hurt else 0):
+		return "the target has %d Morale" % target.morale
+	if blocked and table.asked(1, Decision.Kind.PICK).size() > 0:
+		return "a shielded target was asked to duck"
+	return "" if table.held(1) == [] else "kept %s" % [table.held(1)]
+
+
+## The Impostor (player 2) repeats an empty Bang! of the Clown: the round she
+## put down comes back to her.
+static func _bang_disguised() -> String:
+	var table := Table.new(true, [&"clown"])
+	var engine := table.engine
+	var clown: PlayerState = engine.players[0]
+	var impostor: PlayerState = engine.players[2]
+	clown.cards = [&"clown", &"judge"]
+	impostor.cards = [&"impostor", &"judge"]
+	for i: int in [0, 2]:
+		table.puppets[i].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[1]
+		table.puppets[i].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	await engine.claim(clown, table.ability(&"clown.bang"))
+	await engine.claim(impostor, table.ability(&"impostor.perfect_disguise"))
+	if clown.coins != 20 or impostor.coins != 20:
+		return "coins: %d / %d" % [clown.coins, impostor.coins]
+	return "" if engine.players[1].morale == engine.config.start_morale else "the target was hurt"
+
+
+## Player 1 is spiked, player 2 is broke: the Clown laughs at both of them.
+static func _laughter() -> String:
+	var table := Table.new(true, [&"clown"])
+	var engine := table.engine
+	var clown: PlayerState = engine.players[0]
+	clown.cards = [&"clown", &"judge"]
+	await engine.add_status(engine.players[1], GROGGY, {"expires": &"never", "by": clown.id})
+	engine.players[2].coins = 0
+	await engine.claim(clown, table.ability(&"clown.laughter"))
+	return "" if clown.coins == 26 else "the clown has %d coins" % clown.coins
+
 
 static func _mirror_meets_mirror() -> String:
 	var table := Table.new()
@@ -384,9 +458,101 @@ static func _doll_stands() -> String:
 		return "no doll pinned"
 	for p: PlayerState in engine.players:
 		for extra: Dictionary in engine.turn_options(p).extras:
-			if extra.id != &"voodooist.break":
+			if extra.id != &"voodooist.break" and extra.id != &"voodooist.puppet_strings":
 				return "%s is offered %s" % [p.name, extra.id]
 	return ""
+
+
+## Player 0 pins a doll on player 1. It sleeps through the turn it was pinned
+## in; at the end of player 1's next turn it wakes, unless they `paid` to
+## break it, and awake it can still be broken.
+static func _doll_wakes(paid: bool) -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var victim: PlayerState = engine.players[1]
+	await _pin_doll(table, 1)
+	if not victim.has_status(&"hexed"):
+		return "no doll pinned"
+	if victim.statuses[&"hexed"].get("awake", false):
+		return "awake as it is pinned"
+	if paid:
+		for extra: Dictionary in engine.turn_options(victim).extras:
+			if extra.id == &"voodooist.break":
+				await extra.run.call(victim, engine)
+		if victim.has_status(&"hexed"):
+			return "still carries the doll"
+		return "" if victim.coins == 16 else "paid %d" % (20 - victim.coins)
+	await engine.fire(&"turn_ended", {"player": victim})
+	if not victim.statuses.get(&"hexed", {}).get("awake", false):
+		return "still asleep"
+	if not engine.turn_options(victim).extras.any(func(extra: Dictionary) -> bool: return extra.id == &"voodooist.break"):
+		return "an awake doll can't be broken"
+	return ""
+
+
+## Player 0 pins a doll on players 1 and 2, both dolls wake, and Puppet
+## Strings makes each one do `does` (&"hurt", &"coins" or &"item").
+static func _puppet_strings(does: StringName) -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var witch: PlayerState = engine.players[0]
+	await _pin_doll(table, 1)
+	await _pin_doll(table, 2)
+	# Given after the dolls are pinned: a shield would have stopped one.
+	table.give(1, [&"shield"])
+	table.give(2, [&"potion"])
+	for p: PlayerState in [engine.players[1], engine.players[2]]:
+		await engine.fire(&"turn_ended", {"player": p})
+	table.puppets[0].answers[Decision.Kind.PICK] = func(d: Decision) -> int:
+		if d.context.has("held_by"):
+			return 0
+		for i: int in d.options.size():
+			if d.options[i].get("does") == does:
+				return i
+		return -1
+	# No claim: a turn extra nobody is asked to doubt.
+	var pull: Variant = null
+	for extra: Dictionary in engine.turn_options(witch).extras:
+		if extra.id == &"voodooist.puppet_strings" and extra.enabled:
+			pull = extra
+	if pull == null:
+		return "can't pull the strings"
+	var doubts := func() -> int:
+		return table.asked(1, Decision.Kind.DOUBT).size() + table.asked(2, Decision.Kind.DOUBT).size()
+	var doubted_before: int = doubts.call()
+	await pull.run.call(witch, engine)
+	if doubts.call() != doubted_before:
+		return "someone was asked to doubt the strings"
+	for p: PlayerState in [engine.players[1], engine.players[2]]:
+		if not p.statuses.get(&"hexed", {}).get("awake", false):
+			return "%s's doll is gone, or asleep" % p.name
+		match does:
+			&"hurt":
+				if p.morale != 2:
+					return "%s is on %d Morale" % [p.name, p.morale]
+			&"coins":
+				if p.coins != 17:
+					return "%s has %d coins" % [p.name, p.coins]
+			&"item":
+				if not p.items.is_empty():
+					return "%s kept %s" % [p.name, table.held(p.id)]
+	if does == &"coins" and witch.coins != 26:
+		return "the Voodooist has %d coins" % witch.coins
+	if does == &"item" and table.held(0) != [&"shield", &"potion"]:
+		return "the Voodooist has %s" % [table.held(0)]
+	if not engine.turn_options(witch).extras.any(func(extra: Dictionary) -> bool:
+			return extra.id == &"voodooist.puppet_strings" and extra.enabled):
+		return "the strings can't be pulled again"
+	return ""
+
+
+## Player 0, the Voodooist, pins a doll on player `on`; then a turn goes by.
+static func _pin_doll(table: Table, on: int) -> void:
+	var engine := table.engine
+	engine.players[0].cards = [&"voodooist", &"judge"]
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[on]
+	await engine.claim(engine.players[0], table.ability(&"voodooist.hex"))
+	engine.turn_count += 1
 
 
 ## Under Oath anyone may still lie and anyone may still call it: a lie caught
@@ -716,6 +882,57 @@ static func _swindle_race(bots: bool) -> String:
 	if bots:
 		return "" if hauls == [4, 0] or hauls == [0, 4] else "hauls: %s" % [hauls]
 	return "" if hauls == [0, 4] else "hauls: %s" % [hauls]
+
+
+## Player 0 (bartender, judge), inventory full, buys a Fresh Card and gives
+## up the bartender: it goes back to the deck, 5 coins go, nothing is held.
+static func _fresh_card() -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	var def: ItemDef = Content.items[&"fresh_card"]
+	table.give(0, [&"shield", &"shield", &"shield", &"shield", &"shield", &"shield"].slice(0, engine.config.inventory_limit))
+	var option: Dictionary = engine._buy_option(p, def, -1)
+	if not option.enabled:
+		return "not on sale: %s" % option.reason
+	table.puppets[0].answers[Decision.Kind.PICK] = func(d: Decision) -> int: return _names(d, &"bartender")
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var deck_before := engine.deck.size()
+	if not await engine.buy_item(p, def, -1):
+		return "not bought"
+	if p.coins != 15:
+		return "paid %d" % (20 - p.coins)
+	if p.cards.size() != 2 or p.cards[1] != &"judge" or engine.deck.size() != deck_before:
+		return "hand: %s" % [p.cards]
+	if not engine.deck.has(&"bartender"):
+		return "the bartender did not go back to the deck"
+	if table.held(0).size() != engine.config.inventory_limit or table.held(0).has(&"fresh_card"):
+		return "inventory: %s" % [table.held(0)]
+	if seen.of(&"service_bought").size() != 1 or seen.of(&"cards_changed").size() != 1:
+		return "the table was not told"
+	return ""
+
+
+static func _fresh_card_whole_turn() -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	var def: ItemDef = Content.items[&"fresh_card"]
+	p.turn["busy"] = true
+	return "" if not engine._buy_option(p, def, -1).enabled else "offered after something else"
+
+
+static func _fresh_card_backed_out() -> String:
+	var table := Table.new()
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	var hand := p.cards.duplicate()
+	if await engine.buy_item(p, Content.items[&"fresh_card"], -1):
+		return "bought without choosing a card"
+	if p.coins != 20 or p.cards != hand or p.turn.get("busy", false):
+		return "something changed"
+	return ""
 
 
 ## The option of a card pick that shows `card`, -1 if there is none.

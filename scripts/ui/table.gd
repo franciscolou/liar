@@ -25,6 +25,7 @@ const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const DollPick := preload("res://scripts/ui/doll_pick.gd")
 const GunPick := preload("res://scripts/ui/gun_pick.gd")
+const GuardPick := preload("res://scripts/ui/guard_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
 const TurnClock := preload("res://scripts/ui/turn_clock.gd")
 const CoinPile := preload("res://scripts/ui/coin_pile.gd")
@@ -112,8 +113,10 @@ const SHOP_TAB_PARTING := 8.0
 const SHOP_DECK_WIDTH := 62.0
 const SHOP_TAB_ROW := 36.0  # folded: from one row of mini icons to the next
 const SHOP_ITEM_Y := 18.0  # open: the top of the goods
-## How far the goods of a reroll travel off their shelf and onto it.
-const REROLL_TRAVEL := 34.0
+## How far the goods of a reroll travel through their window: its height.
+const REROLL_TRAVEL := 58.0
+## How long it takes an item to flash past in a spinning reel of the reroll.
+const REEL_TURN := 0.075
 const LOG_SIZE := Vector2(232, 136)
 const LOG_HEADER := 18.0  # the strip with the fold button
 const LOG_FOLDED := Vector2(24, 24)  # just the button
@@ -184,11 +187,13 @@ var _shop: Control
 var _shop_bg: ShopStall
 var _shop_tab: Control  # what shows while folded
 var _shop_body: Control  # what shows while open
-var _shop_entries: Array = []  # {view, price, coin, mini, slot, def}; slot -1 = always on sale
-var _shop_reroll: Button
+var _shop_entries: Array = []  # {view, window, price, coin, mini, slot, def}; slot -1 = always on sale
+var _shop_reroll: ShopStall.Lever
 var _shop_reroll_price: Label
 var _shop_reroll_coin: TextureRect
 var _shop_reroll_queasy: ShaderMaterial
+## The posts of the case, open and folded.
+var _shop_posts: Array = [[], []]
 var _shop_hint: Label
 var _shop_width := 0.0
 var _shop_tab_width := SHOP_TAB_WIDTH  # folded: grows with the stock
@@ -686,6 +691,7 @@ func _build_shop_now() -> void:
 	_table.add_child(_shop)
 	_shop_bg = ShopStall.new()
 	_shop_bg.tray = SHOP_DECK_WIDTH
+	_shop_bg.span = _shop_width
 	_shop_bg.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_shop_bg.mouse_entered.connect(_hover_shop)
 	_shop_bg.gui_input.connect(_on_shop_bg_input)
@@ -712,9 +718,6 @@ func _build_shop_now() -> void:
 	_shop_tab.position = Vector2(_shop_width - _shop_tab_width, 0)
 	_shop_tab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_shop.add_child(_shop_tab)
-	var tab_title := UI.label("SHOP", 11, UI.GOLD, true)
-	tab_title.position = Vector2(8, 3)
-	_shop_tab.add_child(tab_title)
 
 	_shop_body = Control.new()
 	_shop_body.size = _shop.size
@@ -724,12 +727,8 @@ func _build_shop_now() -> void:
 		var always := UI.label("FIXED", 11, UI.GOLD, true)
 		always.position = Vector2(12, 3)
 		_shop_body.add_child(always)
-		var divider := ColorRect.new()
-		divider.color = UI.BORDER.darkened(0.3)
-		divider.position = Vector2(12 + fixed.size() * 80 - 14, 16)
-		divider.size = Vector2(2, 80)
-		divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_shop_body.add_child(divider)
+		# A post parts what is always on sale from the rest.
+		_shop_posts[0].append(_shop_width - (12.0 + fixed.size() * 80.0 - 16.0))
 	var title := UI.label("SHOP", 11, UI.MUTED, true)
 	title.position = Vector2(12 + fixed.size() * 80, 3)
 	_shop_body.add_child(title)
@@ -739,11 +738,19 @@ func _build_shop_now() -> void:
 
 	for i in stock:
 		var x := 12.0 + i * 80.0
+		# Each item stands in a window the size of its place on the shelf,
+		# which its reel is seen through when the shop is rerolled (`_spin_reel`).
+		var niche := Rect2(x - 4.0, 16.0, 62.0, 58.0)
+		var window := Control.new()
+		window.position = niche.position
+		window.size = niche.size
+		window.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_shop_body.add_child(window)
 		var view := ItemView.new(0.9)
-		view.position = Vector2(x, SHOP_ITEM_Y)
+		view.position = Vector2(x, SHOP_ITEM_Y) - niche.position
 		view.clicked.connect(_on_shop_clicked.bind(i))
 		view.picked.connect(_buy_now.bind(i))
-		_shop_body.add_child(view)
+		window.add_child(view)
 		var coin := _shop_icon("res://assets/ui/coin.png", Vector2(x + 10, 82), Vector2(16, 16))
 		_shop_body.add_child(coin)
 		var price := _price_tag(Vector2(x + 30, 81))
@@ -755,29 +762,18 @@ func _build_shop_now() -> void:
 		var mini := _shop_icon("", spot, ItemView.BASE * 0.4)
 		_shop_tab.add_child(mini)
 		_shop_entries.append({
-			"view": view, "price": price, "coin": coin, "mini": mini,
+			"view": view, "window": window, "price": price, "coin": coin, "mini": mini, "mini_y": spot.y,
 			"slot": i - fixed.size() if i >= fixed.size() else -1,
 			"def": fixed[i] if i < fixed.size() else null,
 			# How each part looks to a groggy viewer: item, mini icon, price.
 			"queasy": [UI.queasy(view.size, i * 1.9, 1.5), UI.queasy(mini.size, i * 1.9, 1.0), UI.queasy(price.size, i * 1.9 + 0.8)],
 		})
 
-	# The reroll is not one of the goods: it stands apart, past a divider.
+	# The reroll is not one of the goods: a lever, apart from them past a post.
 	var reroll_x := 12.0 + stock * 80.0
-	var apart := ColorRect.new()
-	apart.color = UI.BORDER.darkened(0.3)
-	apart.position = Vector2(reroll_x - 6, 16)
-	apart.size = Vector2(2, 80)
-	apart.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_shop_body.add_child(apart)
-	_shop_reroll = Button.new()
-	for state: String in ["normal", "hover", "pressed", "disabled", "focus"]:
-		_shop_reroll.add_theme_stylebox_override(state, StyleBoxEmpty.new())
-	_shop_reroll.position = Vector2(reroll_x + 10, 24)
-	_shop_reroll.size = Vector2(48, 48)
-	_shop_reroll.pivot_offset = _shop_reroll.size / 2.0
-	_shop_reroll.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	_shop_reroll.draw.connect(_draw_reroll)
+	_shop_posts[0].append(_shop_width - (reroll_x - 8.0))
+	_shop_reroll = ShopStall.Lever.new()
+	_shop_reroll.position = Vector2(reroll_x + 6, 24)
 	_shop_reroll.pressed.connect(_on_reroll_pressed)
 	_shop_reroll.gui_input.connect(func(event: InputEvent):
 		if _shop_reroll.disabled and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -794,7 +790,10 @@ func _build_shop_now() -> void:
 		# Halfway between the last fixed icon and the first of the others, on
 		# the grid of the stall; counted from the right, as the stall is.
 		var post := roundf((stock_x - SHOP_TAB_PARTING + stock_x - (SHOP_TAB_COLUMN - ItemView.BASE.x * 0.4)) / 4.0 - 1.0) * 2.0
-		_shop_bg.posts = [_shop_tab_width - post]
+		_shop_posts[1] = [_shop_tab_width - post]
+
+	# In front of it all: the sign over the case.
+	_shop.add_child(ShopStall.Sign.new(_shop_bg, "SHOP"))
 	_set_shop_open(false, true)
 
 
@@ -805,11 +804,6 @@ func _price_tag(at: Vector2) -> Label:
 	price.size = Vector2(30, 16)
 	price.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	return price
-
-
-## The reroll button: two arrows chasing each other, in the blocks of the stall.
-func _draw_reroll() -> void:
-	UI.draw_reroll(_shop_reroll)
 
 
 func _shop_icon(path: String, at: Vector2, icon_size: Vector2) -> TextureRect:
@@ -834,7 +828,7 @@ func _set_shop_open(open: bool, instant := false) -> void:
 	if not open:
 		shelves = [48.0, 48.0 + SHOP_TAB_ROW]
 	_shop_bg.shelves = shelves
-	_shop_bg.parted = not open
+	_shop_bg.posts = _shop_posts[0 if open else 1]
 	_restyle_shop()
 	var width := _shop_width if open else _shop_tab_width
 	var at := Vector2(_shop_width - width, 0)
@@ -1760,6 +1754,17 @@ func _open_pick(d: Decision) -> void:
 		_modal.add_child(gun)
 		_offer_aside(gun)
 		_play_sfx("item_roulette_cock")
+		return
+	if d.context.get("look") == &"guard":
+		# The guards stand under what is coming (see guard_pick.gd).
+		UI.clear(_modal)
+		var guards := GuardPick.new()
+		guards.setup(d)
+		guards.picked.connect(_answer)
+		guards.sounded.connect(_play_sfx)
+		_modal.add_child(guards)
+		_offer_aside(guards)
+		_play_sfx("ui_lock")
 		return
 	if d.context.get("look") == &"cosmos":
 		# Not a window: the options hang in the dark (see cosmos_pick.gd).
@@ -3212,50 +3217,62 @@ func _sync_shop() -> void:
 	_deck_label.text = "x%d" % engine.deck.size()
 
 
-## The goods of the slots leave their shelf, each one up or down, and the new
-## ones come in the same way: the shelf is being rearranged, not repainted.
+## The lever is pulled and every slot spins like the reel of a slot machine:
+## the old item drops out of its place, a few others flash past, and the new
+## one lands, each reel a little after the one on its left, with a click and a
+## pop of its price. Only drawing: what flashes past is picked with the global
+## randf, and the dice of the match stay out of it.
 func _anim_reroll() -> void:
-	var spin := _shop_reroll.create_tween()
-	_shop_reroll.rotation = 0.0
-	spin.tween_property(_shop_reroll, "rotation", TAU, 0.55 / _speed).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	spin.tween_callback(_shop_reroll.set.bind("rotation", 0.0))
-	_play_sfx("card_draw")
-	var moved: Array = []  # {node, home, way, travel, delay}
+	_shop_reroll.pull(_speed)
+	_play_sfx("shop_lever")
+	await _wait(0.2)
+	_play_sfx("shop_reels")
+	var pool: Array = engine.item_pool
 	var order := 0
 	for entry: Dictionary in _shop_entries:
 		if entry.slot < 0:
 			continue
-		# Only drawing: the dice of the match stay out of it.
-		var way := -1.0 if randf() < 0.5 else 1.0
-		var delay := order * 0.05
-		for part: Array in [[entry.view, SHOP_ITEM_Y, REROLL_TRAVEL], [entry.mini, entry.mini.position.y, 16.0]]:
-			var node: Control = part[0]
-			var home: float = part[1]
-			var travel: float = part[2]
-			moved.append({"node": node, "home": home, "way": way, "travel": travel, "delay": delay})
-			var out := node.create_tween().set_parallel()
-			out.tween_property(node, "position:y", home + way * travel, 0.16 / _speed) \
-					.set_delay(delay / _speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-			out.tween_property(node, "modulate:a", 0.0, 0.16 / _speed).set_delay(delay / _speed)
-		for tag: Control in [entry.price, entry.coin]:
-			tag.create_tween().tween_property(tag, "modulate:a", 0.0, 0.12 / _speed)
+		_spin_reel(entry, _entry_def(entry), 2 + order, pool, order * 0.03)
 		order += 1
-	await _wait(0.16 + order * 0.05)
+	await _wait(0.4 + order * 0.03 + (order + 1) * REEL_TURN)
 	_sync_shop()
-	_play_sfx("card_draw")
-	for move: Dictionary in moved:
-		var node: Control = move.node
-		# It comes in from the side the old one did not leave by.
-		node.position.y = move.home - move.way * move.travel
-		var back := node.create_tween().set_parallel()
-		back.tween_property(node, "position:y", move.home, 0.22 / _speed) \
-				.set_delay(move.delay / _speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		back.tween_property(node, "modulate:a", 1.0, 0.14 / _speed).set_delay(move.delay / _speed)
-	for entry: Dictionary in _shop_entries:
-		if entry.slot >= 0:
-			for tag: Control in [entry.price, entry.coin]:
-				tag.create_tween().tween_property(tag, "modulate:a", 1.0, 0.2 / _speed).set_delay(0.1 / _speed)
-	await _wait(0.3 + order * 0.05)
+
+
+func _spin_reel(entry: Dictionary, def: ItemDef, turns: int, pool: Array, delay: float) -> void:
+	var reel := create_tween()
+	# Seen through its window while it spins, and only then: an item that is
+	# pointed at grows out of it.
+	entry.window.clip_contents = true
+	reel.tween_interval(delay / _speed)
+	reel.tween_method(_reel_at.bind(entry, 1.0), 0.0, 1.0, 0.1 / _speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	for turn in turns:
+		reel.tween_callback(_reel_show.bind(entry, pool.pick_random() if not pool.is_empty() else def))
+		reel.tween_method(_reel_at.bind(entry, 0.65), -1.0, 1.0, REEL_TURN / _speed)
+	reel.tween_callback(_reel_show.bind(entry, def))
+	reel.tween_method(_reel_at.bind(entry, 1.0), -1.0, 0.0, 0.24 / _speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	reel.tween_callback(_reel_stop.bind(entry, def))
+	reel.tween_callback(entry.window.set.bind("clip_contents", false))
+
+
+## Where a reel is: 0 in its place, -1 above it and 1 below, out of sight.
+## It fades towards the edges of its window, and is never brighter than `peak`.
+func _reel_at(offset: float, entry: Dictionary, peak: float) -> void:
+	var seen := clampf(1.0 - absf(offset), 0.0, 1.0) * peak
+	entry.view.position.y = SHOP_ITEM_Y - entry.window.position.y + offset * REROLL_TRAVEL
+	entry.mini.position.y = entry.mini_y + offset * 16.0
+	for node: Control in [entry.view, entry.mini]:
+		node.modulate.a = seen
+
+
+func _reel_show(entry: Dictionary, def: ItemDef) -> void:
+	entry.view.set_item(def)
+	entry.mini.texture = UI.tex(def.texture_path)
+
+
+func _reel_stop(entry: Dictionary, def: ItemDef) -> void:
+	_play_sfx("item_roulette_tick")
+	entry.price.text = str(_price(def.price))
+	UI.pop(entry.price, 1.3, 0.2)
 
 
 func _pop_shop_slot(slot: int) -> void:

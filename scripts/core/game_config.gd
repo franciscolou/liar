@@ -21,7 +21,7 @@ var item_ids: Array = []  # empty = every registered item
 var hand_size := 2
 var start_morale := 3
 var start_coins := 2
-var income := 1
+var income := 2
 var doubt_cost := 4
 ## Coins for whoever calls LIAR! on a lie.
 var doubt_reward := 3

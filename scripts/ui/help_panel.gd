@@ -792,6 +792,7 @@ func _lesson_shop() -> void:
 	stall.size = Vector2(24 + shelf.size() * 80 + 72, 106)
 	stall.shelves = [75.0]
 	stall.pinned = true
+	stall.posts = [stall.size.x - (4.0 + shelf.size() * 80.0)]
 	_stage.add_child(stall)
 	var title := UI.label("SHOP", 11, UI.GOLD, true)
 	title.position = Vector2(12, 3)
@@ -813,23 +814,13 @@ func _lesson_shop() -> void:
 		_s.views.append(view)
 		_s.prices.append(price)
 	var reroll_x := 12.0 + shelf.size() * 80.0
-	var apart := ColorRect.new()
-	apart.color = UI.BORDER.darkened(0.3)
-	apart.position = Vector2(reroll_x - 6, 16)
-	apart.size = Vector2(2, 80)
-	stall.add_child(apart)
-	# The same button as on the table: just the two arrows.
-	var reroll := Button.new()
-	for state: String in ["normal", "hover", "pressed", "disabled", "focus"]:
-		reroll.add_theme_stylebox_override(state, StyleBoxEmpty.new())
-	reroll.position = Vector2(reroll_x + 10, 24)
-	reroll.size = Vector2(48, 48)
-	reroll.pivot_offset = reroll.size / 2.0
-	reroll.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	reroll.draw.connect(UI.draw_reroll.bind(reroll))
+	# The same lever as on the table.
+	var reroll := Stall.Lever.new()
+	reroll.position = Vector2(reroll_x + 6, 24)
 	reroll.pressed.connect(_shop_reroll)
 	TipLayer.attach(reroll, "Replaces every item on the shelf.")
 	stall.add_child(reroll)
+	_s.lever = reroll
 	stall.add_child(_coin(Vector2(reroll_x + 16, 82)))
 	var cost := UI.label(str(REROLL), 15, UI.GOLD, true)
 	cost.position = Vector2(reroll_x + 36, 81)
@@ -932,6 +923,7 @@ func _shop_buy(slot: int) -> void:
 func _shop_reroll() -> void:
 	if not _shop_pay(REROLL, _s.views[0].get_parent()):
 		return
+	_s.lever.pull()
 	var fresh: Array = []
 	for i: int in _s.shelf.size():
 		fresh.append(_shop_fresh())

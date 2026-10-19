@@ -29,7 +29,7 @@ class Untraceable extends Ability:
 		id = &"spy.untraceable"
 		display_name = "Untraceable"
 		description = "Your cards and items can't be seen or manipulated."
-		trigger_text = "When another player is about to see or mess with your cards or your items"
+		trigger_text = "When another player is about to see or mess with your cards or your items, or your own Last Call calls in your cards"
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		# Their hand (GameEngine.reach_hand) or what they hold (reach_items).

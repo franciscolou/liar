@@ -21,8 +21,11 @@ class CoverStory extends Ability:
 		describe("Shuffle your whole hand into the deck, draw as many new cards and gain %d coins.", [PAY])
 		on_turn = true
 
+	# The whole hand is new: a proven Impostor is known to nobody any more,
+	# so there is no second trade (see GameEngine.claim).
 	func resolve(play: Play) -> void:
 		await play.engine.redraw_hand(play.actor)
+		play.shed = true
 		await play.engine.gain_coins(play.actor, PAY, &"cover_story")
 
 	func ai_weight(player: PlayerState, _engine: GameEngine) -> float:
@@ -94,6 +97,8 @@ class PerfectDisguise extends Ability:
 		repeat.engine = engine
 		repeat.actor = player
 		repeat.source = engine.last_action
+		# "This card" of a repeated action is the disguise's own.
+		repeat.params["card"] = character_id
 		return repeat
 
 	func ai_weight(player: PlayerState, engine: GameEngine) -> float:

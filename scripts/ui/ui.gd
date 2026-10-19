@@ -27,22 +27,6 @@ const COIN_ICON := "res://assets/ui/coin.png"
 ## in assets/cards/ (cut from assets/cards/portraits/ by
 ## tools/gen_proto_cards.py).
 const CARD_ART_DIR := ""
-## The reroll of the shop: two arrows chasing each other (see draw_reroll).
-const REROLL_ICON := [
-	"....#####....",
-	"..#########..",
-	".###.....###.",
-	".##.......##.",
-	"........#####",
-	".........###.",
-	"..#.......#..",
-	".###.........",
-	"#####........",
-	".##.......##.",
-	".###.....###.",
-	"..#########..",
-	"....#####....",
-]
 ## Transparent pixels at each end of the first rows of a card: the rounded
 ## corners of the card back.
 const CARD_CORNER := [3, 2, 1]
@@ -364,31 +348,6 @@ static func art_button(b: Button, text: String, fill: Color, border: Color, ink:
 	b.add_theme_stylebox_override("pressed", box(Color(0, 0, 0, 0.25) if painted else fill.darkened(0.25), GOLD, 4, 4, 0))
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
-
-## Draws the reroll icon in the middle of `b`, in blocks like the shop's
-## stall. Connect it to the button's `draw`; the button needs no text or box.
-static func draw_reroll(b: Button) -> void:
-	var ink := GOLD
-	if b.disabled:
-		ink = MUTED.darkened(0.35)
-	elif b.is_hovered():
-		ink = GOLD.lightened(0.4)
-	var block := 3.0
-	var at := ((b.size - Vector2(REROLL_ICON[0].length(), REROLL_ICON.size()) * block) / 2.0).floor()
-	if b.is_pressed():
-		at.y += block
-	for layer in 2:
-		for row in REROLL_ICON.size():
-			var line: String = REROLL_ICON[row]
-			for column in line.length():
-				if line[column] != "#":
-					continue
-				var cell := at + Vector2(column, row) * block
-				if layer == 0:
-					# The dark edge under and to the right of every block.
-					b.draw_rect(Rect2(cell + Vector2(block, block), Vector2(block, block)), Color(INK, 0.9))
-				else:
-					b.draw_rect(Rect2(cell, Vector2(block, block)), ink if row < 7 else ink.darkened(0.18))
 
 
 ## Hover feedback for any control: a quick scale-up around its centre.

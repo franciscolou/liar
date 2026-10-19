@@ -898,6 +898,45 @@ def fx_gavel():
     return drive(out, 1.6)
 
 
+def shop_lever():
+    """The lever of the shop's reroll, pulled like a slot machine's: the
+    ratchet clicking faster and faster on the way down, the clunk of the stop
+    at the bottom, and the spring hauling it back up with a rattle. The clunk
+    lands at 0.2 s, when the lever reaches the bottom (ShopStall.Lever.pull)."""
+    out = silence(0.95)
+    clicks = (0.0, 0.07, 0.12, 0.155, 0.18)
+    for k, at in enumerate(clicks):
+        mix(out, steel_click(0.9 + k * 0.05, 131 + k), at, 0.35 + k * 0.08)
+    # The stop: brass on wood, heavy.
+    mix(out, fx_gavel(), 0.2, 0.9)
+    mix(out, tone(78, 0.3, 0.001, 0.12, glide=0.75), 0.2, 0.9)
+    mix(out, lowpass(noise(0.12, 0.0005, 0.04, 137), 900), 0.2, 0.6)
+    # The spring, and the ratchet running back the other way.
+    mix(out, tone(lambda t: 260 + 90 * math.sin(t * 42.0) * math.exp(-t * 6.0), 0.5, 0.004, 0.22, "tri"), 0.32, 0.12)
+    for k in range(6):
+        mix(out, steel_click(1.3, 141 + k), 0.33 + k * 0.035 + k * k * 0.004, 0.22 - k * 0.025)
+    return drive(out, 1.8)
+
+
+def shop_reels():
+    """The reels of the reroll spinning: a fast rattle of the drums going
+    round, slowing as one reel after another stops (each stop has its own
+    click, item_roulette_tick), over a soft whirr."""
+    seconds = 0.75
+    out = silence(seconds)
+    t = 0.0
+    k = 0
+    while t < seconds - 0.08:
+        rate = 34.0 - 22.0 * (t / seconds)
+        mix(out, bandpass(noise(0.012, 0.0003, 0.004, 151 + k % 7), 1400, 4200), t, 0.35 * (1.0 - 0.6 * t / seconds))
+        t += 1.0 / rate
+        k += 1
+    whirr = lowpass(noise(seconds, 0.03, 0.5, 163), 600)
+    mix(out, whirr, 0.0, 0.5)
+    mix(out, tone(lambda t: 120 - 50 * t, seconds, 0.03, 0.45, "tri"), 0.0, 0.25)
+    return out
+
+
 def fx_seal():
     """A seal pressed into hot wax: a soft, close thud, the wax squeezed out
     round the die, and the small ring of the brass as it is lifted off."""
@@ -1687,6 +1726,8 @@ def ui_strike():
 
 
 SOUNDS = {
+    "shop_lever": shop_lever,
+    "shop_reels": shop_reels,
     "fx_creep": fx_creep,
     "fx_snatch": fx_snatch,
     "fx_puzzled": fx_puzzled,
@@ -1804,6 +1845,7 @@ PEAKS = {
     "fx_creep": 0.22, "fx_snatch": 0.5, "fx_puzzled": 0.4, "fx_bills": 0.5, "fx_syringe": 0.6,
     "fx_entropy": 0.6, "fx_chains": 0.7, "fx_supernova": 0.97, "fx_stardust": 0.45, "fx_singularity": 0.65,
     "fx_spaghettify": 0.8, "fx_materialize": 0.85,
+    "shop_lever": 0.6, "shop_reels": 0.32,
 }
 
 

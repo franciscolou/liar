@@ -21,7 +21,7 @@ extends RefCounted
 ##     a Voodoo doll does it; &"duck": ducking a Clown's gun, to the bank;
 ##     &"blank": the price of an empty Bang! back to the Clown, with the claim
 ##     the coins were put down for in `play`)
-##   payment_short {player, amount, allowed}    set allowed to let the player go into debt
+##   payment_short {player, amount, allowed, play}  set allowed to let the player go into debt; play = the claim being paid for, if any
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
 ##     for coins still on their way to the victim: see bard.gd)
 ##   item_buying {player, item, slot}           before the item is shown in the inventory
@@ -60,8 +60,8 @@ extends RefCounted
 ##   card_peeked {viewer, owner, index, card}   private to the viewer
 ##   before_hand_reach {owner, by, how}         cancellable: `by` is about to see,
 ##     take or replace cards of `owner` (how: &"peek", &"swap", &"recall";
-##     see GameEngine.reach_hand). A recall asks every hand, copy or not, and
-##     adds `card`, the character named
+##     see GameEngine.reach_hand). A recall asks every hand, copy or not (the
+##     caller's own too, where `owner` is `by`), and adds `card`, the character named
 ##   hand_missed {owner, by, how[, card]}       it was cancelled: the hand stays as it is
 ##   before_item_reach {owner, by, how}         cancellable: `by` is about to take or
 ##     destroy an item of `owner` (how: &"steal", &"break"; see GameEngine.reach_items)

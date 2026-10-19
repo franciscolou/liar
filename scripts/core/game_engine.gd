@@ -670,7 +670,8 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null, para
 	var doubter: PlayerState = null
 	var stake := STAKE_COINS
 	var proven := false
-	if not play.failed and not over and actor.alive:
+	var host := _host_claim(play)
+	if not play.failed and not over and actor.alive and host == null:
 		var doubt := await _doubt_window(play)
 		doubter = doubt.get("player")
 		stake = doubt.get("stake", STAKE_COINS)
@@ -699,12 +700,29 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null, para
 	# A proven card is traded so that nobody keeps knowing it. One the ability
 	# itself already traded is known to nobody: it is not traded twice (not
 	# even when what was drawn in its place is the same character again).
-	if proven and not play.stand_in and not play.shed and actor.cards.count(ability.character_id) >= copies:
+	var shed := play.shed or play.aimed().shed
+	if proven and not play.stand_in and not shed and actor.cards.count(ability.character_id) >= copies:
 		await renew_proven_card(actor, ability.character_id)
 	await fire(&"claim_resolved", {"play": play})
-	if not play.truthful and doubter == null and not play.failed and not over and actor.alive:
+	# Riding on its host, the lie is the host's: it stands or falls with it.
+	if not play.truthful and doubter == null and not play.failed and not over and actor.alive and host == null:
 		await fire(&"lie_succeeded", {"play": play, "player": actor})
 	return play
+
+
+## The claim `play` is paying for, when `play` claims the same character
+## (the On the Cuff a Street Bargain needs, see vagabond.gd): a LIAR! is about
+## the card, not the ability, so the two are one claim to the table. `play`
+## gets no doubt window of its own: the host's answers for both, and a liar
+## caught there loses one Morale for the pair.
+func _host_claim(play: Play) -> Play:
+	var event := play.event
+	if event == null or event.type != &"payment_short":
+		return null
+	var host: Play = event.data.get("play")
+	if host == null or host == play or host.actor != play.actor or not host.is_claim():
+		return null
+	return host if host.ability().character_id == play.ability().character_id else null
 
 
 ## A claim made in answer to `event` outside its reaction window (a hook that
@@ -1098,6 +1116,7 @@ func _choose_guard(holder: PlayerState, play: Play) -> ItemInstance:
 	})
 	d.context = {
 		"play": play,
+		"look": &"guard",
 		"weights": held.map(func(instance: ItemInstance) -> float: return instance.def.ai_guard_weight(play, holder)),
 	}
 	var index: int = await ask(d)
@@ -1119,7 +1138,7 @@ func pay(player: PlayerState, amount: int, reason: StringName = &"cost", play: P
 		return true
 	if player.coins < amount:
 		var short := await fire(&"payment_short", {
-			"player": player, "amount": amount, "allowed": false, "auto": player,
+			"player": player, "amount": amount, "allowed": false, "auto": player, "play": play,
 		})
 		if not short.data.allowed or over or not player.alive:
 			return false
@@ -1366,12 +1385,12 @@ func renew_proven_card(player: PlayerState, character_id: StringName) -> void:
 ## `by` calls `card` in: every copy of it, in whatever hand it is (their own
 ## too), goes back to the deck, and each of those places gets a new card.
 func recall_cards(by: PlayerState, card: StringName) -> void:
-	# Somebody else's hand: they may keep it out of this (see reach_hand).
-	# Every hand is asked, copy or not: asking only those who hold one would
-	# tell whoever called it who does.
+	# Any hand may be kept out of this (see reach_hand), the caller's own
+	# too. Every hand is asked, copy or not: asking only those who hold one
+	# would tell whoever called it who does.
 	var kept: Array = []
 	for p: PlayerState in seat_order(by):
-		if p != by and not await reach_hand(by, p, &"recall", card):
+		if not await reach_hand(by, p, &"recall", card):
 			kept.append(p)
 	if over:
 		return
@@ -1400,9 +1419,10 @@ func recall_cards(by: PlayerState, card: StringName) -> void:
 ## Before `by` sees, takes or replaces cards in the hand of `owner` (`how`:
 ## &"peek", &"swap", &"recall"): false when the hand was kept out of reach
 ## (before_hand_reach cancelled, see spy.gd), and then hand_missed says so.
-## `card` is the character a recall named.
+## `card` is the character a recall named. Their own hand is out of this,
+## but for a recall: a Last Call may be kept off the caller's own cards too.
 func reach_hand(by: PlayerState, owner: PlayerState, how: StringName, card := &"") -> bool:
-	if by == owner or not owner.alive:
+	if (by == owner and how != &"recall") or not owner.alive:
 		return true
 	var data := {"owner": owner, "by": by, "how": how}
 	if how == &"recall":
@@ -1485,7 +1505,7 @@ func pick_hidden_card(player: PlayerState, owner: PlayerState, prompt: String) -
 ## from the truth by a choice made afterwards. False if they backed out.
 func choose_card_to_shed(play: Play) -> bool:
 	var actor := play.actor
-	var character_id := play.ability().character_id
+	var character_id := _own_card(play)
 	if actor.has_character(character_id) or actor.cards.size() <= 1:
 		return true
 	var d := Decision.new(Decision.Kind.PICK, actor)
@@ -1506,13 +1526,20 @@ func choose_card_to_shed(play: Play) -> bool:
 ## character if the actor holds it, otherwise what choose_card_to_shed() kept.
 func shed_card(play: Play, reason: StringName) -> void:
 	var actor := play.actor
-	var index := actor.cards.find(play.ability().character_id)
+	var index := actor.cards.find(_own_card(play))
 	if index == -1:
 		index = actor.cards.find(play.params.get("shed", &""))
 	if index == -1:
 		index = random_card_index(actor)
 	play.shed = true
 	await replace_card(actor, index, reason)
+
+
+## The character that "this card" of `play` is: the one claimed, or the one
+## whose claim carries it out (params.card: an action the Impostor repeats
+## sends the Impostor away, not the card of whoever did it first).
+func _own_card(play: Play) -> StringName:
+	return play.params.get("card", play.ability().character_id)
 
 
 ## Lets `player` choose one of the cards in their hand: its index, a random

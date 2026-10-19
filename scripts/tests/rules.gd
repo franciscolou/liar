@@ -63,6 +63,7 @@ static func run() -> int:
 		"a last call asks a hand with no copy too, and it may vanish": _untraceable_no_copy.bind(true),
 		"a last call asks a hand with no copy too, and it may stay": _untraceable_no_copy.bind(false),
 		"nobody is untraceable from themselves": _untraceable_own,
+		"untraceable from their own last call": _untraceable_own_recall,
 		"an item thrown away costs nothing and takes no turn": _discard,
 		"two swindles: the human is heard before the bot": _swindle_race.bind(false),
 		"two swindles: only one of them takes the coins": _swindle_race.bind(true),
@@ -94,6 +95,10 @@ static func run() -> int:
 		"an empty gun a shield stopped gives its round back": _bang.bind(false, false, &"shield"),
 		"a disguise repeats an empty gun and gets the round back": _bang_disguised,
 		"laughter pays for everyone under an effect or broke": _laughter,
+		"a street bargain on the cuff is doubted once (truth)": _bargain_on_cuff.bind(true),
+		"a street bargain on the cuff is doubted once (lie)": _bargain_on_cuff.bind(false),
+		"a proven cover story is not traded again": _cover_story_proven,
+		"a disguised sold out trades the impostor, once": _disguised_sold_out,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -831,7 +836,7 @@ static func _untraceable_no_copy(vanish: bool) -> String:
 	return ""
 
 
-## Their own Soul Swap and their own Last Call still go through their hand.
+## Their own Soul Swap still goes through their hand.
 static func _untraceable_own() -> String:
 	var table := Table.new(true, [&"spy"])
 	var engine := table.engine
@@ -842,6 +847,29 @@ static func _untraceable_own() -> String:
 	if spy.cards[0] != &"bartender":
 		return "their own swap missed"
 	return "" if table.asked(1, Decision.Kind.REACT).is_empty() else "asked about their own swap"
+
+
+## Player 0 calls a Last Call on a card they hold and keeps their own hand
+## out of it with an Untraceable; the other copies still go.
+static func _untraceable_own_recall() -> String:
+	var table := Table.new(true, [&"spy"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var me: PlayerState = engine.players[0]
+	me.cards = [&"spy", &"judge"]
+	table.puppets[0].answers[Decision.Kind.REACT] = _vanishes
+	table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"judge")
+	await engine.claim(me, table.ability(LAST_CALL))
+	if me.cards != [&"spy", &"judge"]:
+		return "the hand became %s" % [me.cards]
+	var missed: Array = seen.of(&"hand_missed")
+	if missed.size() != 1 or missed[0].data.owner != me or missed[0].data.by != me:
+		return "missed %d times" % missed.size()
+	var recalled: Array = seen.of(&"cards_recalled")
+	if recalled.size() != 1 or recalled[0].data.hands.any(func(hand: Dictionary) -> bool: return hand.player == me):
+		return "the wrong hands were recalled"
+	return ""
 
 
 ## Player 0 throws one of two items away: any of them may go, the purse stays
@@ -1221,6 +1249,81 @@ static func _bargain_caution() -> String:
 		return "no warning for a bluff"
 	engine.players[1].cards = [&"vagabond", &"judge"]
 	return "" if engine.ability_option(engine.players[1], bargain).caution == "" else "a warning for the truth"
+
+
+## Player 1, 2 coins short of a Street Bargain, claims it on the cuff when
+## player 0 hits them, and player 2 calls LIAR!: one claim to the table, one
+## doubt window, one reveal.
+static func _bargain_on_cuff(truthful: bool) -> String:
+	var table := Table.new(true, [&"vagabond"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var target: PlayerState = engine.players[1]
+	target.coins = 2
+	if truthful:
+		target.cards = [&"vagabond", &"judge"]
+	table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		for option: Dictionary in d.options:
+			if option.kind == &"ability" and option.ability.id == &"vagabond.street_bargain":
+				return option
+		return null
+	table.puppets[2].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if not d.options.is_empty() else false
+	await engine.deal_damage(engine.players[0], target)
+	if seen.of(&"claim_declared").size() != 2:
+		return "%d claims" % seen.of(&"claim_declared").size()
+	if table.asked(2, Decision.Kind.DOUBT).size() != 1 or table.asked(0, Decision.Kind.DOUBT).size() != 1:
+		return "asked to doubt %d / %d times" % [table.asked(0, Decision.Kind.DOUBT).size(), table.asked(2, Decision.Kind.DOUBT).size()]
+	if seen.of(&"doubt_revealed").size() != 1:
+		return "revealed %d times" % seen.of(&"doubt_revealed").size()
+	if truthful:
+		if target.morale != engine.config.start_morale or target.coins != -4:
+			return "Morale %d, %d coins" % [target.morale, target.coins]
+		return ""
+	# The lie and the blow it failed to stop; the price comes back.
+	if target.morale != engine.config.start_morale - 2 or target.coins != 2:
+		return "Morale %d, %d coins" % [target.morale, target.coins]
+	return "" if seen.of(&"lie_succeeded").is_empty() else "a lie went through"
+
+
+## The Impostor's Cover Story is doubted and proven: the new hand is known to
+## nobody, even if it holds the Impostor again.
+static func _cover_story_proven() -> String:
+	var table := Table.new(true)
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var impostor: PlayerState = engine.players[0]
+	impostor.cards = [&"impostor", &"judge"]
+	engine.deck = [&"impostor", &"impostor", &"impostor", &"impostor"]
+	table.puppets[1].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if not d.options.is_empty() else false
+	await engine.claim(impostor, table.ability(&"impostor.cover_story"))
+	if seen.of(&"hand_redrawn").size() != 1:
+		return "redrawn %d times" % seen.of(&"hand_redrawn").size()
+	return "" if seen.of(&"cards_changed").is_empty() else "traded again after the redraw"
+
+
+## The Impostor repeats a Sold Out and is doubted: her own card goes, once.
+static func _disguised_sold_out() -> String:
+	var table := Table.new(true, [&"heir"])
+	var engine := table.engine
+	var seen := Witness.new()
+	var heir: PlayerState = engine.players[0]
+	var impostor: PlayerState = engine.players[2]
+	heir.cards = [&"heir", &"judge"]
+	impostor.cards = [&"impostor", &"judge"]
+	await engine.claim(heir, table.ability(&"heir.sold_out"))
+	engine.observers.append(seen)
+	engine.deck = [&"doctor", &"doctor", &"doctor"]
+	table.puppets[1].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if not d.options.is_empty() else false
+	await engine.claim(impostor, table.ability(&"impostor.perfect_disguise"))
+	var traded: Array = seen.of(&"cards_changed")
+	if traded.size() != 1 or traded[0].data.reason != &"sold_out":
+		return "traded %d times" % traded.size()
+	return "" if impostor.cards.has(&"judge") and not impostor.cards.has(&"impostor") else "hand %s" % [impostor.cards]
 
 
 static func _vanishes(d: Decision) -> Variant:

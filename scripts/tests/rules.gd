@@ -1378,7 +1378,13 @@ static func _all_is_color() -> String:
 	var restocked: Array = seen.of(&"shop_restocked")
 	if restocked.size() != 1 or seen.events.find(restocked[0]) < seen.events.find(seen.of(&"item_bought")[0]):
 		return "restocked %d times" % restocked.size()
-	return "" if engine.shop[0] != null else "the slot stayed empty"
+	if engine.shop[0] == null:
+		return "the slot stayed empty"
+	# It leaves the turn going (the shield can be used now), once per turn.
+	var colors := table.ability(&"painter.all_is_color")
+	if colors.ends_turn:
+		return "it ends the turn"
+	return "" if engine.claim_block_reason(painter, colors) != "" else "offered twice in a turn"
 
 
 ## What the Painter bought in a go is not offered for sale in it.

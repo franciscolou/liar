@@ -4,9 +4,10 @@ extends CharacterDef
 ## All Is Color is a turn action: for as long as it lasts the Painter turns
 ## the items he holds back into coins, at what the shop asks for them, and
 ## buys from the shop with whatever he has (two Russian Roulettes and a few
-## coins are a Death). So that it is no free way to go through the whole
-## shop, nothing bought in it can be sold again in the same go, and a slot
-## emptied in it is only restocked once he is done.
+## coins are a Death). It does not end his turn, so what he bought can be
+## used at once. So that it is no free way to go through the whole shop, it
+## is once per turn, nothing bought in it can be sold again in the same go,
+## and a slot emptied in it is only restocked once he is done.
 ##
 ## Monochrome paints two players (he may be one of them) the same colour.
 ## During their own turns they are only to deal with each other: anything a
@@ -133,11 +134,23 @@ class AllIsColor extends Ability:
 	func _init() -> void:
 		id = &"painter.all_is_color"
 		display_name = "All Is Color"
-		description = "Trade with the shop using your items as coins, at their price: turn them into coins and buy whatever you can pay for, as many times as you like. What you buy here can't be turned back into coins in the same go, and the shelves are only restocked once you are done."
+		description = "Trade with the shop using your items as coins, at their price: turn them into coins and buy whatever you can pay for, as many times as you like. What you buy here can't be turned back into coins in the same go, and the shelves are only restocked once you are done. Once per turn; it does not consume the turn, so what you bought can be used right away."
 		on_turn = true
+		# What he bought is for using in the same turn.
+		ends_turn = false
+		# Not the action of a turn: there is nothing in it for a disguise.
+		repeatable = false
 
 	func can_use(player: PlayerState, _engine: GameEngine) -> String:
+		if player.turn.get("all_is_color", false):
+			return Loc.t("Once per turn")
 		return Loc.t("You have no items to paint with") if player.items.is_empty() else ""
+
+	# Once per turn, whatever becomes of the claim: no going round the shop
+	# claim after claim.
+	func prepare(play: Play) -> bool:
+		play.actor.turn["all_is_color"] = true
+		return true
 
 	func resolve(play: Play) -> void:
 		var engine := play.engine

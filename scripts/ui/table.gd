@@ -20,7 +20,8 @@ const REPLAY_BATCH := 40
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const ShopStall := preload("res://scripts/ui/shop_stall.gd")
 const Board := preload("res://scripts/ui/saloon_board.gd")
-const ChalkFx := preload("res://scripts/ui/chalk_fx.gd")
+const ChevronFx := preload("res://scripts/ui/chevron_fx.gd")
+const LogView := preload("res://scripts/ui/log_view.gd")
 const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const DollPick := preload("res://scripts/ui/doll_pick.gd")
@@ -97,15 +98,12 @@ const PEEK_SHEAR := 0.18
 ## Where, and how large, a card is shown when the table stops to look at it.
 const SHOWN_SCALE := 2.5
 const SHOWN_CENTRE := Vector2(576, 236)
-## The chalk a play is marked on the table with, and how far from the box of
-## its actor and of its target the mark starts and ends.
 ## The characters shown to an eliminated viewer: how big, and how wide a row.
 const ONLOOKER_SCALE := 0.62
 const ONLOOKER_WIDTH := 760.0
-const CHALK_WHITE := Color("efe9dc")
-const CHALK_RED := Color("e8705c")
-const CHALK_START := 26.0
-const CHALK_END := 12.0
+## How far past the edge of a box the chevron of a play rests, and strikes.
+const CHEVRON_REST := 20.0
+const CHEVRON_STRIKE := 20.0
 const SHOP_HEIGHT := 106.0
 const SHOP_TAB_WIDTH := 126.0  # folded: mini icons + deck, at the least
 const SHOP_TAB_COLUMN := 27.0  # folded: from one column of mini icons to the next
@@ -216,7 +214,9 @@ var _prompt: PanelContainer
 var _popup: Control
 var _modal: Control
 var _read_veil: Control  # touch mode: the table dimmed around a description being read
-var _log: RichTextLabel
+var _log: ScrollContainer  # log_view.gd
+## The chevron of each player who made a play this turn, by player id.
+var _chevrons: Dictionary = {}
 var _log_panel: Control
 var _log_box: PanelContainer
 var _log_toggle: Button
@@ -966,11 +966,9 @@ func _build_log() -> void:
 	_log_box = PanelContainer.new()
 	_log_box.add_theme_stylebox_override("panel", style)
 	_log_panel.add_child(_log_box)
-	_log = RichTextLabel.new()
-	_log.bbcode_enabled = true
-	_log.scroll_following = true
-	_log.add_theme_font_size_override("normal_font_size", UI.grow(14))
-	_log.add_theme_font_size_override("bold_font_size", UI.grow(14))
+	_log = LogView.new()
+	_log.engine = engine
+	_log.viewer = viewer
 	_log.custom_minimum_size = _log_size() - Vector2(16, _log_header() + 10)
 	_log_box.add_child(_log)
 	# Discreet on purpose: no frame, and nothing changes under the mouse.
@@ -2958,7 +2956,7 @@ func present(e: GameEvent) -> void:
 	# The roulette names its victim only once the cylinder has stopped.
 	var held_line: bool = e.type == &"item_used" and d.play.source.id == ROULETTE
 	if line != "" and not held_line:
-		_log_line(line, e.type)
+		_log.add_event(e, line)
 	if _last_blow(e):
 		_slow_time()
 	match e.type:
@@ -2966,6 +2964,7 @@ func present(e: GameEvent) -> void:
 			_sync()
 			await _banner("WELCOME TO CARCAJ", "The last one standing takes the crown", UI.GOLD, 1.4)
 		&"turn_started":
+			_clear_chevrons()
 			_drop_transient_stage()
 			_play_fx.drop_bets()
 			_play_fx.drop_vanished()
@@ -3034,7 +3033,7 @@ func present(e: GameEvent) -> void:
 		&"item_used":
 			await _anim_item_used(d)
 			if held_line:
-				_log_line(line, e.type)
+				_log.add_event(e, line)
 		&"item_broken":
 			await _anim_item_broken(d)
 		&"item_discarded":
@@ -3217,7 +3216,7 @@ func present(e: GameEvent) -> void:
 func _skim(e: GameEvent) -> void:
 	var line := EventText.describe(e)
 	if line != "":
-		_log_line(line, e.type)
+		_log.add_event(e, line)
 	var d := e.data
 	match e.type:
 		&"claim_declared":
@@ -3396,7 +3395,7 @@ func _log_line(line: String, type: StringName) -> void:
 			color = UI.BLUE.lightened(0.3)
 		&"coins":
 			color = UI.MUTED
-	_log.append_text("[color=%s]%s[/color]\n" % [UI.hex(color), line])
+	_log.add_line(line, color)
 
 
 # --- the stage: what is being played right now --------------------------------
@@ -3530,35 +3529,40 @@ func _push_stage(entry: Dictionary) -> void:
 	UI.pop(_stage, 1.12, 0.22)
 
 
-## The chalk mark from the actor of `play` to its target, null if there is
-## none to draw. It runs on the table between the two boxes, not over them.
+## The chevron of `play`: set against the box of its actor, cast at whoever
+## it is aimed at and back (ChevronFx), and left there, pointing, until the
+## turn is over. Null if it is aimed at nobody else. A player's new play
+## takes the place of their last chevron.
 func _stage_arrow(play: Play) -> Control:
 	play = play.aimed()
 	var whom := play.whom()
-	if whom == null or whom == play.actor:
+	if whom == null or whom == play.actor or _node_of(play.actor) == null:
 		return null
 	var from := _anchor(play.actor)
 	var to := _anchor(whom)
-	var arrow := ChalkFx.new()
-	arrow.set_anchors_preset(Control.PRESET_FULL_RECT)
-	arrow.from = _clear_of(_node_of(play.actor), from, to, CHALK_START)
-	arrow.to = _clear_of(_node_of(whom), to, from, CHALK_END)
-	if UI.touch and _node_of(play.actor) is SeatView and _node_of(whom) is SeatView:
-		# Side by side in the row along the top, with little table between
-		# them: the mark runs under the boxes, from the foot of one to the
-		# foot of the other.
-		var under := Vector2(0, 6)
-		arrow.from = _seat_rect(_node_of(play.actor)).get_center() * Vector2(1, 0) + Vector2(0, _seat_rect(_node_of(play.actor)).end.y) + under
-		arrow.to = _seat_rect(_node_of(whom)).get_center() * Vector2(1, 0) + Vector2(0, _seat_rect(_node_of(whom)).end.y) + under
-	elif (arrow.to - arrow.from).dot(to - from) <= 0.0 or arrow.from.distance_to(arrow.to) < 24.0:
-		# The two boxes all but touch: there is no table between them.
-		arrow.from = from
-		arrow.to = to
-	arrow.color = CHALK_RED if play.source.tags.has(&"damage") or play.source.tags.has(&"steal") else CHALK_WHITE
-	_arrows.add_child(arrow)
-	arrow.create_tween().tween_property(arrow, "progress", 1.0, 0.35 / _speed)
-	_play_sfx("chalk")
-	return arrow
+	var chevron := ChevronFx.new()
+	chevron.rest = _clear_of(_node_of(play.actor), from, to, CHEVRON_REST)
+	chevron.strike = _clear_of(_node_of(whom), to, from, CHEVRON_STRIKE)
+	if (chevron.strike - chevron.rest).dot(to - from) <= 0.0 or chevron.rest.distance_to(chevron.strike) < 24.0:
+		# The two boxes all but touch: it strikes the box itself.
+		chevron.strike = to
+	chevron.hostile = play.source.tags.has(&"damage") or play.source.tags.has(&"steal")
+	var old: Variant = _chevrons.get(play.actor.id)
+	if old != null and is_instance_valid(old):
+		old.dismiss(_speed)
+	_chevrons[play.actor.id] = chevron
+	_fx.add_child(chevron)
+	chevron.cast(_speed)
+	_play_sfx("chevron")
+	return chevron
+
+
+## The chevrons of the turn that ended go.
+func _clear_chevrons() -> void:
+	for chevron: Variant in _chevrons.values():
+		if is_instance_valid(chevron):
+			chevron.dismiss(_speed)
+	_chevrons.clear()
 
 
 ## The point on the way from `from` to `to` that is `gap` past the edge of
@@ -3591,19 +3595,14 @@ func _drop_transient_stage() -> void:
 	_render_stage()
 
 
+## The chevron of the play stays against its box until the turn is over.
 func _remove_stage_entry(entry: Dictionary) -> void:
 	_stage_stack.erase(entry)
-	if entry.arrow != null and is_instance_valid(entry.arrow):
-		entry.arrow.wipe(0.3 / _speed)
 
 
 func _render_stage() -> void:
 	UI.clear(_stage)
 	_stage.visible = not _stage_stack.is_empty()
-	for i in _stage_stack.size():
-		var arrow: Variant = _stage_stack[i].arrow
-		if arrow != null and is_instance_valid(arrow):
-			arrow.visible = i == _stage_stack.size() - 1
 	if _stage_stack.is_empty():
 		if UI.touch:
 			_shield_prompt()

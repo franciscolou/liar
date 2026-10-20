@@ -20,7 +20,9 @@ extends RefCounted
 ##     &"stolen"/&"steal": the two halves of a theft, &"hexed"/&"voodoo" when
 ##     a Voodoo doll does it; &"duck": ducking a Clown's gun, to the bank;
 ##     &"blank": the price of an empty Bang! back to the Clown, with the claim
-##     the coins were put down for in `play`)
+##     the coins were put down for in `play`; &"sold": an item turned into
+##     coins; &"paint_toll"/&"paint": what a painted player pays for reaching
+##     outside the paint, and what the Painter gets for it, see painter.gd)
 ##   payment_short {player, amount, allowed, play}  set allowed to let the player go into debt; play = the claim being paid for, if any
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
 ##     for coins still on their way to the victim: see bard.gd)
@@ -28,6 +30,8 @@ extends RefCounted
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
 ##   service_bought {player, item, play}        a service (ItemDef.service) was paid for; it resolves next. `item` is a stand-in, never held
 ##   shop_restocked {slot} / shop_rerolled {player}
+##   item_sold {player, item, index, amount}    turned into `amount` coins by its holder
+##     (All Is Color, painter.gd); the coins follow, with reason &"sold"
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item, index}
 ##   item_discarded {player, item, index}       thrown away by its holder, for nothing
 ##     (see GameEngine.discard_item)
@@ -75,9 +79,11 @@ extends RefCounted
 ##     won: it fell on the side the player was hoping for
 ##   note {player, text, good, tag}             news from content that no other event
 ##     carries: `text` is an English key with one %s for the player's name
-##     (tag &"side_bet": a Side Bet settled; &"doll_awake": a Voodoo doll woke up)
-##   status_added {player, status} / status_removed {player, status, reason}
-##     (reason: &"" when it just ended, &"wasted" when it was thrown away)
+##     (tag &"side_bet": a Side Bet settled; &"doll_awake": a Voodoo doll woke up;
+##     &"paint_toll": a painted player reached outside the paint)
+##   status_added {player, status} / status_removed {player, status, reason, was}
+##     (reason: &"" when it just ended, &"wasted" when it was thrown away;
+##     was: what the status held, now that the player has it no more)
 ##   counter_changed {player, counter, value, delta}  a private counter is its owner's secret
 
 var type: StringName

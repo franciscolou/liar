@@ -100,6 +100,11 @@ static func run() -> int:
 		"a street bargain on the cuff is doubted once (lie)": _bargain_on_cuff.bind(false),
 		"a proven cover story is not traded again": _cover_story_proven,
 		"a disguised sold out trades the impostor, once": _disguised_sold_out,
+		"all is color: items sold, one bought, the shelf restocked after": _all_is_color,
+		"all is color: what was bought can't be sold in the same go": _all_is_color_fresh,
+		"monochrome: reaching outside the paint pays the painter": _monochrome.bind(false),
+		"monochrome: dealing with the partner costs nothing": _monochrome.bind(true),
+		"monochrome: the paint comes off after the wearer's next turn": _monochrome_wears_off,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -1341,6 +1346,117 @@ static func _vanishes(d: Decision) -> Variant:
 		if option.kind == &"ability" and option.ability.id == &"spy.untraceable":
 			return option
 	return null
+
+
+## The Painter (player 0) holds two Russian Roulettes and 3 coins: he sells
+## both and buys a Shield with the 7 coins, and the slot he bought out of the
+## shelf is restocked only once he is done.
+static func _all_is_color() -> String:
+	var table := Table.new(true, [&"painter"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var painter: PlayerState = engine.players[0]
+	painter.cards = [&"painter", &"judge"]
+	painter.coins = 3
+	table.give(0, [&"roulette", &"roulette"])
+	engine.shop[0] = Content.items[&"shield"]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(d: Decision) -> int:
+		for i: int in d.options.size():
+			if d.options[i].does == &"sell":
+				return i
+		for i: int in d.options.size():
+			if d.options[i].does == &"buy" and d.options[i].item.id == &"shield" and not d.options[i].get("disabled", false):
+				return i
+		return -1
+	await engine.claim(painter, table.ability(&"painter.all_is_color"))
+	if table.held(0) != [&"shield"] or painter.coins != 2:
+		return "holds %s with %d coins" % [table.held(0), painter.coins]
+	var sold: Array = seen.of(&"item_sold")
+	if sold.size() != 2:
+		return "sold %d items" % sold.size()
+	var restocked: Array = seen.of(&"shop_restocked")
+	if restocked.size() != 1 or seen.events.find(restocked[0]) < seen.events.find(seen.of(&"item_bought")[0]):
+		return "restocked %d times" % restocked.size()
+	return "" if engine.shop[0] != null else "the slot stayed empty"
+
+
+## What the Painter bought in a go is not offered for sale in it.
+static func _all_is_color_fresh() -> String:
+	var table := Table.new(true, [&"painter"])
+	var engine := table.engine
+	var painter: PlayerState = engine.players[0]
+	painter.cards = [&"painter", &"judge"]
+	painter.coins = 10
+	table.give(0, [&"roulette"])
+	engine.shop[0] = Content.items[&"silencer"]
+	var asked := [0]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(d: Decision) -> int:
+		asked[0] += 1
+		if asked[0] == 1:
+			for i: int in d.options.size():
+				if d.options[i].does == &"buy" and d.options[i].item.id == &"silencer":
+					return i
+		if asked[0] == 2:
+			# Only the roulette is for sale: the silencer was just bought.
+			var sells: Array = d.options.filter(func(o: Dictionary) -> bool: return o.does == &"sell")
+			if sells.size() != 1 or sells[0].item.id != &"roulette":
+				asked[0] = 100
+		return -1
+	await engine.claim(painter, table.ability(&"painter.all_is_color"))
+	if asked[0] != 2:
+		return "the bought item was for sale" if asked[0] >= 100 else "asked %d times" % asked[0]
+	return "" if table.held(0) == [&"roulette", &"silencer"] and painter.coins == 7 else "holds %s, %d coins" % [table.held(0), painter.coins]
+
+
+## The Painter (player 0) paints players 1 and 2. On their turn, player 1
+## spikes player 0 (outside the paint: 4 coins to the Painter) or player 2
+## (`partner`: nothing).
+static func _monochrome(partner: bool) -> String:
+	var table := Table.new(true, [&"painter"])
+	var engine := table.engine
+	var painter: PlayerState = engine.players[0]
+	var one: PlayerState = engine.players[1]
+	painter.cards = [&"painter", &"judge"]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	await engine.claim(painter, table.ability(&"painter.monochrome"))
+	if not one.has_status(&"painted") or not engine.players[2].has_status(&"painted"):
+		return "nobody was painted"
+	if one.statuses[&"painted"].partner != 2 or painter.has_status(&"painted"):
+		return "painted the wrong pair"
+	engine.current = one
+	one.turn = {}
+	var aim: PlayerState = engine.players[2] if partner else painter
+	table.puppets[1].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return aim
+	await engine.claim(one, table.ability(MICKEY_FINN))
+	var toll := 0 if partner else 4
+	if one.coins != 20 - toll or painter.coins != 20 + toll:
+		return "coins: %d / %d" % [one.coins, painter.coins]
+	return "" if one.has_status(&"painted") else "the paint came off"
+
+
+static func _monochrome_wears_off() -> String:
+	var table := Table.new(true, [&"painter"])
+	var engine := table.engine
+	var painter: PlayerState = engine.players[0]
+	painter.cards = [&"painter", &"judge"]
+	engine.turn_count = 5
+	# Himself and player 1, on his own turn.
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0
+	await engine.claim(painter, table.ability(&"painter.monochrome"))
+	if not painter.has_status(&"painted") or not engine.players[1].has_status(&"painted"):
+		return "nobody was painted"
+	# The turn it was put on does not count.
+	await engine.fire(&"turn_ended", {"player": painter})
+	if not painter.has_status(&"painted"):
+		return "came off in the turn it was put on"
+	engine.turn_count = 6
+	await engine.fire(&"turn_ended", {"player": engine.players[1]})
+	if engine.players[1].has_status(&"painted"):
+		return "stayed on after the wearer's turn"
+	engine.turn_count = 8
+	await engine.fire(&"turn_ended", {"player": painter})
+	return "" if not painter.has_status(&"painted") else "stayed on the painter"
 
 
 # --- the stage ------------------------------------------------------------------

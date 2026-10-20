@@ -2,7 +2,8 @@ extends Control
 ## What a player's statuses look like on their box: stars circling someone
 ## groggy, the Voodooist's doll slumped in a corner, a bundle of dynamite with
 ## its fuse lit, the chains of the Entity wound about the box, the wax seal of
-## the court on somebody under oath. The chips next to the player still name every status and
+## the court on somebody under oath, the Painter's paint running down the
+## box. The chips next to the player still name every status and
 ## explain it; this is the part that can be read from across the table.
 ##
 ## Everything is drawn in small pixels and moves by itself for as long as the
@@ -22,7 +23,8 @@ const HEXED := &"hexed"
 const TICKING := &"ticking"
 const ENTROPY := &"entropy"
 const SWORN := &"truth_bound"
-const LOOKS: Array[StringName] = [GROGGY, HEXED, TICKING, ENTROPY, SWORN]
+const PAINTED := &"painted"
+const LOOKS: Array[StringName] = [GROGGY, HEXED, TICKING, ENTROPY, SWORN, PAINTED]
 
 const CELL := 2.0
 ## The ring a groggy player's stars fly on: radians per second, and how much
@@ -48,7 +50,12 @@ const SEAL_JOLT := 0.4
 const WAKE := 1.1
 ## Seconds each look takes to come apart once the player is out (see die).
 ## The chains keep their own time (ChainsFx.snap).
-const DEATH := {GROGGY: 0.75, HEXED: 0.75, TICKING: 0.95, SWORN: 0.65}
+const DEATH := {GROGGY: 0.75, HEXED: 0.75, TICKING: 0.95, SWORN: 0.65, PAINTED: 0.8}
+## The paint along the top of the box: how many runs hang from it, how long
+## the longest gets and how long one takes to grow its drop and let it go.
+const RUNS := 7
+const RUN_REACH := 15.0
+const RUN_CYCLE := 3.2
 const FALL := 520.0
 const SMOKE := Color("b9b2a6")
 const OUTLINE := Color("1a100c")
@@ -178,6 +185,8 @@ var _chains: ChainsFx
 var _bomb: Control
 var _near: Control
 var _seal: Control
+var _paint: Control
+var _paint_tint := Color.WHITE
 ## Whether the player is under oath, as of the last sync, and the seconds a
 ## seal pressed before that still waits for it.
 var _sworn := false
@@ -218,6 +227,7 @@ func _init() -> void:
 	_bomb = _canvas(_draw_bomb)
 	_near = _canvas(_draw_near_side)
 	_seal = _canvas(_draw_seal)
+	_paint = _canvas(_draw_paint)
 	_seal.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_doll = VoodooDoll.new()
 	_doll.level = 0.0
@@ -253,6 +263,8 @@ func sync(player: PlayerState, engine: GameEngine) -> void:
 		_chains.bound = 0.0
 		_chains.doomed = 0.0
 		_threat.erase(ENTROPY)
+	if _wanted[PAINTED]:
+		_paint_tint = player.statuses[PAINTED].get("tint", Content.statuses.get(PAINTED, {}).get("color", Color.WHITE))
 	_sworn = _wanted[SWORN]
 	if _sworn and _level.get(SWORN, 0.0) <= 0.0:
 		# Nobody pressed it: it sets by itself as it shows.
@@ -313,7 +325,7 @@ func set_borrowed(id: StringName, on: bool) -> void:
 		_spoiled = ShaderMaterial.new()
 		_spoiled.shader = _spoiled_shader
 		_spoil()
-	for id_and_canvas: Array in [[GROGGY, _near], [GROGGY, back], [HEXED, _doll], [TICKING, _bomb], [ENTROPY, _chains], [SWORN, _seal]]:
+	for id_and_canvas: Array in [[GROGGY, _near], [GROGGY, back], [HEXED, _doll], [TICKING, _bomb], [ENTROPY, _chains], [SWORN, _seal], [PAINTED, _paint]]:
 		var canvas: CanvasItem = id_and_canvas[1]
 		canvas.material = _spoiled if _borrowed.get(id_and_canvas[0], false) else null
 
@@ -366,6 +378,9 @@ func pieces(id: StringName) -> Array[Vector2]:
 			out = _chains.links()
 		SWORN:
 			out.append(onto * seal_at)
+		PAINTED:
+			for i: int in RUNS:
+				out.append(onto * (chain_box.position + Vector2(chain_box.size.x * (i + 0.5) / RUNS, 4.0)))
 	return out
 
 
@@ -455,6 +470,7 @@ func _process(delta: float) -> void:
 	_bomb.queue_redraw()
 	_near.queue_redraw()
 	_seal.queue_redraw()
+	_paint.queue_redraw()
 	back.queue_redraw()
 
 
@@ -767,6 +783,53 @@ static func _seal_raised(from: Vector2) -> bool:
 	if cell.y >= 0 and cell.y < SEAL_EMBLEM.size() and cell.x >= 0 and cell.x < 11:
 		return String(SEAL_EMBLEM[cell.y])[cell.x] == "#"
 	return false
+
+
+# --- painted --------------------------------------------------------------------
+
+## A coat of paint poured along the top of the box, in the colour shared with
+## whoever was painted with them: a thick lip over the edge and runs hanging
+## from it, each swelling into a drop that lets go and falls, and starts again.
+## Out of the match, the whole coat slides off and drips away.
+func _draw_paint() -> void:
+	var level: float = _level.get(PAINTED, 0.0)
+	var out: float = _dying.get(PAINTED, -1.0)
+	var slide := 0.0
+	if out >= 0.0:
+		level = 1.0 - smoothstep(0.3, DEATH[PAINTED], out)
+		slide = out * out * 120.0
+	if level <= 0.0 or chain_box.size.x <= 0.0:
+		return
+	var dark := _paint_tint.darkened(0.35)
+	var light := _paint_tint.lightened(0.3)
+	var top := chain_box.position + Vector2(0, slide)
+	var width := chain_box.size.x
+	# The lip: a band over the top edge, thicker here and there.
+	var x := 0.0
+	while x < width:
+		var thick := 4.0 + 2.0 * floorf(1.5 + sin(x * 0.11 + 1.3) + 0.6 * sin(x * 0.37))
+		var cell := (top + Vector2(x, -2)).snapped(Vector2(CELL, CELL))
+		_paint.draw_rect(Rect2(cell, Vector2(CELL, thick)), Color(_paint_tint, level))
+		_paint.draw_rect(Rect2(cell, Vector2(CELL, CELL)), Color(light, level))
+		_paint.draw_rect(Rect2(cell + Vector2(0, thick - CELL), Vector2(CELL, CELL)), Color(dark, level))
+		x += CELL
+	# The runs: each its own length and pace, never in step with another.
+	for i: int in RUNS:
+		var along := width * (i + 0.5) / RUNS + 6.0 * sin(i * 2.3)
+		var phase := fposmod(_time / (RUN_CYCLE + 0.37 * i) + i * 0.29, 1.0)
+		var reach := RUN_REACH * (0.45 + 0.55 * absf(sin(i * 1.7)))
+		var grown := reach * smoothstep(0.0, 0.7, phase)
+		var head := (top + Vector2(along, 4.0)).snapped(Vector2(CELL, CELL))
+		_paint.draw_rect(Rect2(head, Vector2(CELL, grown)), Color(_paint_tint, level))
+		_paint.draw_rect(Rect2(head + Vector2(-CELL, 0), Vector2(CELL, grown * 0.4)), Color(_paint_tint, level))
+		# The drop at its end swells, then falls away.
+		var swell := CELL * (1.0 + smoothstep(0.4, 0.7, phase))
+		var drop := head + Vector2(-swell / 2.0 + CELL / 2.0, grown)
+		if phase > 0.7:
+			drop.y += 90.0 * pow((phase - 0.7) / 0.3, 2.0)
+		var fade := level * (1.0 - smoothstep(0.85, 1.0, phase))
+		_paint.draw_rect(Rect2(drop.snapped(Vector2(CELL, CELL)), Vector2(swell, swell + CELL)), Color(_paint_tint, fade))
+		_paint.draw_rect(Rect2(drop.snapped(Vector2(CELL, CELL)), Vector2(CELL, CELL)), Color(light, fade))
 
 
 # --- pixels ---------------------------------------------------------------------

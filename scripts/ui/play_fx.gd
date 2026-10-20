@@ -28,6 +28,10 @@ const POT := Vector2(576, 322)
 ## How far past a cursed box the bending of a curse_flush reaches, easing off.
 const WARP_FEATHER := 48.0
 const VoodooDoll := preload("res://scripts/ui/voodoo_doll.gd")
+const Painter := preload("res://scripts/content/characters/painter.gd")
+## Monochrome: how long the brush takes from box to box, and along each one.
+const BRUSH_HOP := 0.38
+const BRUSH_SWEEP := 0.42
 const COIN_ART := "res://assets/ui/coin.png"
 const HEART_ART := "res://assets/ui/heart.png"
 ## The potion going down: how many steps, over how long, and what is left
@@ -4003,6 +4007,86 @@ func _fx_silencer(play: Play) -> void:
 	await _wait(0.3)
 
 
+## All Is Color: the Painter's three paints whirl out round his box and
+## settle, and the palette is set down (see PalettePick).
+func _fx_painter_all_is_color(play: Play) -> void:
+	var here := _at(play.actor)
+	_snd("fx_brush")
+	for i: int in Painter.PAINTS.size():
+		var paint: Color = Painter.PAINTS[i]
+		ring(here, paint, 8.0 + 6.0 * i, 70.0 + 14.0 * i, 0.5, 5.0)
+		burst(here, paint, 8, 170.0, 0.5, 260.0, 6.0)
+		await _wait(0.1)
+	await _wait(0.25)
+
+
+## Monochrome: the brush is dipped and laid along the top of one box and then
+## of the other, the same colour on both, and goes home. The paint that stays
+## is the status's (StatusFx), which takes over from the strokes.
+func _fx_painter_monochrome(play: Play) -> void:
+	var engine := play.engine
+	var paint: Color = Painter.PAINTS[engine.turn_count % Painter.PAINTS.size()]
+	var pair: Array = []
+	for id: int in play.params.get("pair", []):
+		var p := engine.player_by_id(id)
+		if p != null and p.alive and table._node_of(p) != null:
+			pair.append(p)
+	if pair.is_empty():
+		return
+	dim(0.3, 0.8 + pair.size() * (BRUSH_HOP + BRUSH_SWEEP))
+	var brush := BrushFx.new()
+	brush.tint = paint
+	brush.position = _at(play.actor)
+	brush.scale = Vector2.ONE * 1.7
+	brush.modulate.a = 0.0
+	add_child(brush)
+	brush.create_tween().tween_property(brush, "modulate:a", 1.0, 0.15 / table._speed)
+	ring(brush.position, paint, 6.0, 40.0, 0.3, 4.0)
+	await _wait(0.2)
+	for p: PlayerState in pair:
+		var box: Rect2 = table._node_of(p).get_global_rect()
+		var start := box.position + Vector2(-6, 2)
+		var end := box.position + Vector2(box.size.x + 6, 2)
+		var hop := brush.create_tween()
+		hop.tween_property(brush, "position", start, BRUSH_HOP / table._speed) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		hop.parallel().tween_property(brush, "rotation", -0.5, BRUSH_HOP / table._speed)
+		await _wait(BRUSH_HOP)
+		var stroke := StrokeFx.new()
+		stroke.tint = paint
+		stroke.from = start
+		stroke.to = end
+		add_child(stroke)
+		move_child(stroke, brush.get_index())
+		_snd("fx_brush")
+		var sweep := brush.create_tween().set_parallel()
+		sweep.tween_property(brush, "position", end, BRUSH_SWEEP / table._speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		sweep.tween_property(brush, "rotation", 0.25, BRUSH_SWEEP / table._speed)
+		sweep.tween_property(stroke, "progress", 1.0, BRUSH_SWEEP / table._speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		await _wait(BRUSH_SWEEP)
+		_snd("fx_splat")
+		burst(end, paint, 10, 150.0, 0.45, 420.0, 6.0)
+		var dry := stroke.create_tween()
+		dry.tween_interval(0.5 / table._speed)
+		dry.tween_property(stroke, "modulate:a", 0.0, 0.4 / table._speed)
+		dry.tween_callback(stroke.queue_free)
+	var home := brush.create_tween().set_parallel()
+	home.tween_property(brush, "position", _at(play.actor), BRUSH_HOP / table._speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	home.tween_property(brush, "modulate:a", 0.0, BRUSH_HOP / table._speed).set_delay(BRUSH_HOP * 0.4 / table._speed)
+	home.chain().tween_callback(brush.queue_free)
+	await _wait(0.2)
+
+
+## A painted player reached past the paint: a gob of their colour splashes
+## off their box.
+func paint_splash(who: PlayerState, paint: Color) -> void:
+	var here := _at(who)
+	_snd("fx_splat")
+	burst(here + Vector2(0, -20), paint, 16, 220.0, 0.55, 480.0, 6.0)
+	ring(here, paint, 10.0, 60.0, 0.3, 5.0)
+	await _wait(0.45)
+
+
 ## Two souls change places over the table.
 func _fx_soul_swap(play: Play) -> void:
 	var here := _at(play.actor)
@@ -7222,3 +7306,82 @@ class ConfettiFx extends Control:
 
 	func _fade(bit: Dictionary) -> float:
 		return clampf((bit.life - bit.t) / 0.4, 0.0, 1.0)
+
+
+## The Painter's brush: a long wooden handle, a brass ferrule and the bristles
+## loaded with `tint`, in cells. Its origin is the tip of the bristles, and the
+## handle goes up and to the right from it.
+class BrushFx extends Control:
+	const CELL := 2.0
+	const HANDLE := Color("6a2e1c")
+	const HANDLE_LIGHT := Color("94482a")
+	const FERRULE := Color("b8b8c0")
+	const FERRULE_DARK := Color("6c6c74")
+	const OUTLINE := Color("1b0f14")
+
+	var tint := Color.WHITE
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(_delta: float) -> void:
+		queue_redraw()
+
+	func _draw() -> void:
+		# Along the brush, from the tip (0) up the handle.
+		var way := Vector2(0.55, -0.83)
+		var side := way.orthogonal()
+		for i: int in 34:
+			var along := i * CELL
+			var half := 3 if i < 8 else (2 if i < 13 else 1)
+			for w: int in range(-half, half + 1):
+				var at := (way * along + side * w * CELL).snapped(Vector2(CELL, CELL))
+				var ink: Color
+				if i < 8:
+					ink = tint.lightened(0.3) if w < 0 else (tint.darkened(0.3) if w == half else tint)
+					if i < 2 and absi(w) == half:
+						continue
+				elif i < 13:
+					ink = FERRULE if w <= 0 else FERRULE_DARK
+				else:
+					ink = HANDLE_LIGHT if w < 0 else HANDLE
+				if absi(w) == half and i >= 8:
+					ink = OUTLINE
+				draw_rect(Rect2(at, Vector2(CELL, CELL)), ink)
+
+
+## A stroke of paint laid along a line as `progress` goes from 0 to 1: a band
+## with ragged edges and the streaks of the bristles in it.
+class StrokeFx extends Control:
+	const CELL := 2.0
+	const THICK := 10.0
+
+	var tint := Color.WHITE
+	var from := Vector2.ZERO
+	var to := Vector2.ZERO
+	var progress := 0.0:
+		set(value):
+			progress = value
+			queue_redraw()
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	func _draw() -> void:
+		var length := from.distance_to(to) * progress
+		var way := (to - from).normalized()
+		var side := way.orthogonal()
+		var along := 0.0
+		while along < length:
+			var ragged := 2.0 * floorf(1.5 * sin(along * 0.21) + 0.8 * sin(along * 0.57))
+			var top := -THICK / 2.0 + ragged * 0.5
+			var bottom := THICK / 2.0 + ragged
+			var across := top
+			while across < bottom:
+				var at := (from + way * along + side * across).snapped(Vector2(CELL, CELL))
+				var streak := fposmod(across + 3.0 * sin(along * 0.05), 6.0) < 2.0
+				var ink := tint.lightened(0.25) if across < top + CELL else (tint.darkened(0.25) if streak else tint)
+				draw_rect(Rect2(at, Vector2(CELL, CELL)), ink)
+				across += CELL
+			along += CELL

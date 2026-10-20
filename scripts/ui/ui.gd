@@ -437,6 +437,15 @@ static func ability_tip(ability: Ability) -> String:
 	return "%s\n%s\n" % [head, body]
 
 
+## The colour of status `status_id` on `player`: its own (a `tint` of the
+## status, the Painter's paint) or the one every status of its kind has.
+static func status_color(player: PlayerState, status_id: StringName) -> Color:
+	var tint: Variant = player.statuses.get(status_id, {}).get("tint") if player != null else null
+	if tint is Color:
+		return tint
+	return Content.statuses.get(status_id, {}).get("color", MUTED)
+
+
 static func item_tip(def: ItemDef, note := "") -> String:
 	var text := "[b][color=%s]%s[/color][/b]  [color=%s]%s · %s[/color]\n%s" % [
 		hex(GOLD), def.display_name.to_upper(), hex(MUTED), coins_bb(def.price), def.kind_label(), def.description]

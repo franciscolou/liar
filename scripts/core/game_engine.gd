@@ -822,7 +822,8 @@ func carry_out(play: Play) -> void:
 
 ## `slot` is the shop slot holding `def`, or -1 for an item that is always
 ## on sale (those never run out and take no slot). False if nothing was bought.
-func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> bool:
+## Without `restock` the slot stays empty until restock_slot() (painter.gd).
+func buy_item(player: PlayerState, def: ItemDef, slot := -1, restock := true) -> bool:
 	var stocked := slot >= 0
 	if stocked and (slot >= shop.size() or shop[slot] != def):
 		return false
@@ -846,10 +847,30 @@ func buy_item(player: PlayerState, def: ItemDef, slot := -1) -> bool:
 	if player.alive:
 		player.items.append(instance)
 		await fire(&"item_bought", {"player": player, "item": instance, "slot": slot})
-	if stocked and not unseen:
-		shop[slot] = _random_item()
-		await fire(&"shop_restocked", {"slot": slot})
+	if stocked and not unseen and restock:
+		await restock_slot(slot)
 	return true
+
+
+## Puts something new on an empty shelf.
+func restock_slot(slot: int) -> void:
+	if slot < 0 or slot >= shop.size() or shop[slot] != null:
+		return
+	shop[slot] = _random_item()
+	await fire(&"shop_restocked", {"slot": slot})
+
+
+## `player` turns a held item into `amount` coins (painter.gd). It is the item
+## changing form, not a gain: nothing takes the coins on their way.
+func sell_item(player: PlayerState, instance: ItemInstance, amount: int) -> void:
+	var index := player.items.find(instance)
+	if index == -1:
+		return
+	player.items.erase(instance)
+	player.turn["busy"] = true
+	instance.hidden = false
+	await fire(&"item_sold", {"player": player, "item": instance, "index": index, "amount": amount})
+	await change_coins(player, amount, &"sold")
 
 
 ## A service (ItemDef.service) is paid for and done at once, as a play of the
@@ -1580,8 +1601,9 @@ func add_status(player: PlayerState, status_id: StringName, options: Dictionary 
 ## `reason` says why, when it is not just over: &"wasted" for one that was
 ## thrown away with nothing for it (see entity.gd).
 func remove_status(player: PlayerState, status_id: StringName, reason := &"") -> void:
+	var was: Dictionary = player.statuses.get(status_id, {})
 	if player.statuses.erase(status_id):
-		await fire(&"status_removed", {"player": player, "status": status_id, "reason": reason})
+		await fire(&"status_removed", {"player": player, "status": status_id, "reason": reason, "was": was})
 
 
 ## "" if nothing stops `player` from using something with these tags.

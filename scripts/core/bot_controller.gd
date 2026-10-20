@@ -108,7 +108,21 @@ func _target(d: Decision) -> Variant:
 	var weights := {}
 	for candidate: PlayerState in d.options:
 		weights[candidate] = play.source.ai_target_weight(play, candidate) if play != null else 1.0
+		weights[candidate] *= _stray(candidate)
 	return _weighted(weights)
+
+
+## What a status of the bot makes of aiming at `candidate` on its own turn
+## (`ai_stray` of a status that ties it to a `partner`: painter.gd).
+func _stray(candidate: PlayerState) -> float:
+	if engine.current != player or candidate == player:
+		return 1.0
+	var factor := 1.0
+	for status_id: StringName in player.statuses:
+		var def: Dictionary = Content.statuses.get(status_id, {})
+		if def.has("ai_stray") and player.statuses[status_id].get("partner", -1) != candidate.id:
+			factor *= float(def.ai_stray)
+	return factor
 
 
 ## The stake to call LIAR! with, or false to let the claim pass.

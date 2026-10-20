@@ -1573,6 +1573,51 @@ def fx_snatch():
     return out
 
 
+def fx_brush():
+    """A loaded brush dragged across a board: a wet swish that thins out."""
+    rng = random.Random(611)
+    out = bandpass(noise(0.42, 0.05, 0.45, 613), 400, lambda t: 2600 - 3000 * t)
+    # The bristles drag in little bursts.
+    grip = [rng.uniform(0.5, 1.0) for _ in range(60)]
+    out = [s * grip[int(i / RATE * 140) % 60] for i, s in enumerate(out)]
+    mix(out, lowpass(noise(0.12, 0.002, 0.08, 617), 500), 0.0, 0.6)
+    return out
+
+
+def fx_splat():
+    """A gob of paint landing: a soft wet thump and a few drops after it."""
+    out = silence(0.5)
+    mix(out, lowpass(noise(0.16, 0.001, 0.08, 621), 900), 0.0, 1.0)
+    mix(out, tone(lambda t: 160 - 260 * t, 0.12, 0.001, 0.07), 0.0, 0.8)
+    for i, at in enumerate((0.11, 0.17, 0.26)):
+        mix(out, tone(900 + 260 * i, 0.05, 0.001, 0.025, glide=1.6), at, 0.25)
+        mix(out, lowpass(noise(0.03, 0.001, 0.015, 623 + i), 1500), at, 0.3)
+    return out
+
+
+def fx_palette():
+    """Something held turned into paint, and the paint into coins: three dabs
+    on the palette and the coins falling out of it."""
+    out = silence(0.8)
+    for i, at in enumerate((0.0, 0.08, 0.16)):
+        mix(out, lowpass(noise(0.07, 0.002, 0.05, 631 + i), 1100 + 300 * i), at, 0.7)
+        mix(out, tone(330 * (1.25 ** i), 0.2, 0.004, 0.12, shape="tri"), at, 0.3)
+    mix(out, coin(((0.0, 1.0), (0.07, 0.5), (0.13, 0.25)), 0.6, 637), 0.28, 0.7)
+    return out
+
+
+def chevron():
+    """The golden chevron shot from a box at its mark and back: an airy
+    whoosh, a bright ting where it points and the click of it settling."""
+    out = silence(0.75)
+    mix(out, bandpass(noise(0.32, 0.12, 0.25, 641), 700, lambda t: 1500 + 9000 * t), 0.0, 0.7)
+    mix(out, bell(1568, 0.5, 0.35), 0.24, 0.35)
+    mix(out, bell(2349, 0.4, 0.25), 0.27, 0.2)
+    mix(out, highpass(noise(0.02, 0.0005, 0.008, 643), 3000), 0.52, 0.5)
+    mix(out, tone(880, 0.05, 0.001, 0.03), 0.52, 0.2)
+    return out
+
+
 def fx_puzzled():
     """A shadow that found no card where one ought to be: three small
     questions, each ending upwards, one for each mark over its hat."""
@@ -1785,6 +1830,10 @@ SOUNDS = {
     "fx_serenade_5": fx_serenade_5,
     "fx_doll_hit": fx_doll_hit,
     "chalk": chalk,
+    "chevron": chevron,
+    "fx_brush": fx_brush,
+    "fx_splat": fx_splat,
+    "fx_palette": fx_palette,
     "fx_sniper": fx_sniper,
     "fx_hush": fx_hush,
     "fx_tin": fx_tin,
@@ -1846,6 +1895,7 @@ PEAKS = {
     "fx_entropy": 0.6, "fx_chains": 0.7, "fx_supernova": 0.97, "fx_stardust": 0.45, "fx_singularity": 0.65,
     "fx_spaghettify": 0.8, "fx_materialize": 0.85,
     "shop_lever": 0.6, "shop_reels": 0.32,
+    "chevron": 0.32, "fx_brush": 0.5, "fx_splat": 0.6, "fx_palette": 0.5,
 }
 
 

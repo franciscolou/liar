@@ -26,6 +26,7 @@ const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const DollPick := preload("res://scripts/ui/doll_pick.gd")
 const GunPick := preload("res://scripts/ui/gun_pick.gd")
 const GuardPick := preload("res://scripts/ui/guard_pick.gd")
+const PalettePick := preload("res://scripts/ui/palette_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
 const TurnClock := preload("res://scripts/ui/turn_clock.gd")
 const CoinPile := preload("res://scripts/ui/coin_pile.gd")
@@ -33,6 +34,7 @@ const SuspectBook := preload("res://scripts/ui/suspect_book.gd")
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
+const Painter := preload("res://scripts/content/characters/painter.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
 ## How slow time runs while the blow that ends the match lands (see
@@ -1835,6 +1837,18 @@ func _open_pick(d: Decision) -> void:
 		_offer_aside(guards)
 		_play_sfx("ui_lock")
 		return
+	if d.context.get("look") == &"palette":
+		# The Painter's palette between what he holds and the shelf (see palette_pick.gd).
+		UI.clear(_modal)
+		var palette := PalettePick.new()
+		palette.setup(d)
+		palette.picked.connect(_answer)
+		palette.sounded.connect(_play_sfx)
+		_modal.add_child(palette)
+		_offer_aside(palette)
+		if not d.context.get("again", false):
+			_play_sfx("fx_brush")
+		return
 	if d.context.get("look") == &"cosmos":
 		# Not a window: the options hang in the dark (see cosmos_pick.gd).
 		UI.clear(_modal)
@@ -3025,6 +3039,8 @@ func present(e: GameEvent) -> void:
 			await _anim_item_broken(d)
 		&"item_discarded":
 			await _anim_item_discarded(d)
+		&"item_sold":
+			await _anim_item_sold(d)
 		&"item_stolen":
 			await _anim_item_stolen(d)
 		&"item_missed":
@@ -3123,6 +3139,9 @@ func present(e: GameEvent) -> void:
 				await _play_fx.bet_settled(d.player, d.good)
 			elif d.get("tag") == &"doll_awake":
 				await _anim_doll_awake(d.player)
+			elif d.get("tag") == &"paint_toll":
+				# A painted player reached past the paint: it splashes.
+				await _play_fx.paint_splash(d.player, UI.status_color(d.player, Painter.PAINTED))
 			else:
 				await _wait(0.45)
 		&"card_peeked":
@@ -3175,7 +3194,7 @@ func present(e: GameEvent) -> void:
 				_sync()
 				_play_sfx("fx_chains")
 			var def: Dictionary = Content.statuses.get(d.status, {})
-			_float(Loc.t(def.get("name", String(d.status))).to_upper(), _anchor(d.player), def.get("color", UI.PURPLE).lightened(0.35), 20)
+			_float(Loc.t(def.get("name", String(d.status))).to_upper(), _anchor(d.player), UI.status_color(d.player, d.status).lightened(0.35), 20)
 			await _wait(0.65 if d.status == &"entropy" else 0.4)
 		&"status_removed":
 			await _anim_status_broken(d)
@@ -4345,6 +4364,29 @@ func _anim_item_discarded(d: Dictionary) -> void:
 	await _wait(0.45)
 
 
+## An item the Painter turned into coins: it goes up off its slot, melts into
+## a splash of paint in his three colours, and the coins come out of it.
+func _anim_item_sold(d: Dictionary) -> void:
+	var at := _item_spot(d.player, d.get("index", 0))
+	var held: Variant = _node_of(d.player)
+	if held != null:
+		held.sync()
+	var icon := _sprite(UI.tex(d.item.def.texture_path), at, ItemView.BASE * (0.8 if d.player == viewer else 0.4))
+	icon.pivot_offset = icon.size / 2.0
+	_play_sfx("fx_palette")
+	var melt := icon.create_tween()
+	melt.tween_property(icon, "position:y", icon.position.y - 18.0, 0.2 / _speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	melt.parallel().tween_property(icon, "scale", Vector2(1.2, 0.8), 0.2 / _speed)
+	melt.tween_property(icon, "scale", Vector2(1.6, 0.1), 0.18 / _speed)
+	melt.parallel().tween_property(icon, "modulate", Color(1, 1, 1, 0), 0.18 / _speed)
+	melt.tween_callback(icon.queue_free)
+	await _wait(0.36)
+	for paint: Color in Painter.PAINTS:
+		_play_fx.burst(at + Vector2(0, -18), paint, 6, 130.0, 0.45, 420.0, 6.0)
+	_float("%s → +%d" % [d.item.def.display_name.to_upper(), d.amount], at + Vector2(0, -30), UI.GOLD, 16)
+	await _wait(0.2)
+
+
 ## An item taken from one inventory into another, at the end of a rope. Only
 ## the two of them see what it is if it was hidden.
 func _anim_item_stolen(d: Dictionary) -> void:
@@ -4866,7 +4908,8 @@ func _anim_status_broken(d: Dictionary) -> void:
 	var box: Variant = _node_of(d.player)
 	if box == null:
 		return
-	var color: Color = Content.statuses.get(d.status, {}).get("color", UI.MUTED)
+	var tint: Variant = d.get("was", {}).get("tint")
+	var color: Color = tint if tint is Color else Content.statuses.get(d.status, {}).get("color", UI.MUTED)
 	var chip: Control = box.status_chip(d.status)
 	if chip != null:
 		var rect := chip.get_global_rect()

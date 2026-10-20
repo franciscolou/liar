@@ -15,9 +15,15 @@ extends Node
 ## one the host kicks them out, and they are turned away when they try to come
 ## back. Then the host itself walks away twice in the middle of a match: the
 ## room passes to one of the others and the match goes on there. The first
-## time the new host has a bot play the seat; the second time the old host
+## time the new host has a bot play the seat; then the host walks away only
+## once it has been eliminated, and nobody has to do anything about the seat;
+## the last time the old host
 ## comes back, by the key of their seat, typing only the address: the room is
 ## on another port by then, which they have to find.
+##
+## In the first match two machines with no seat in it join halfway and ask to
+## watch: the host turns one away and lets the other in, which has to replay
+## the match up to where the others are and end in the same one.
 
 const Room := preload("res://scripts/net/room.gd")
 # Past the ports real rooms take, so a game open on this computer is no bother.
@@ -28,6 +34,7 @@ const TIME_LIMIT := 90.0
 var _rooms: Array = []  # host first
 var _rng := RandomNumberGenerator.new()
 var _split := false
+var _watcher: Node  # the machine watching the match being played, if any
 
 
 func _ready() -> void:
@@ -60,8 +67,8 @@ func _ready() -> void:
 		if full != "":
 			_out("FAILED  ", full)
 			failed += 1
-		for m in [MATCHES, MATCHES + 1]:
-			var outcome: Variant = await _hand_over_match(m, m == MATCHES + 1)
+		for m in [MATCHES, MATCHES + 2, MATCHES + 1]:
+			var outcome: Variant = await _hand_over_match(m, m == MATCHES + 1, m == MATCHES + 2)
 			problem = outcome if outcome is String else "it stopped on a script error"
 			_out("%s  match %d (the host leaves)%s" % ["ok    " if problem == "" else "FAILED", m, "" if problem == "" else ": " + problem])
 			if problem != "":
@@ -239,7 +246,18 @@ func _play(m: int) -> String:
 				return "came back to another seat"
 			tables.append(again)
 			again.engine.run()
+	if m == 0:
+		var watched := await _watch(tables)
+		if watched != "":
+			return watched
 	var ended := await _finish(tables)
+	if _watcher != null:
+		_rooms.erase(_watcher)
+		_watcher.leave()
+		_watcher = null
+		var gone := await _until(func() -> bool: return host.watchers.is_empty(), "the host never saw the watcher leave")
+		if gone != "":
+			return gone
 	if ended != "":
 		return ended
 	if someone_left and host.seats.size() != _rooms.size() + 1:
@@ -249,6 +267,43 @@ func _play(m: int) -> String:
 		var gone: PlayerState = first.engine.players[first.engine.players.size() - 1]
 		var fate := "still in" if gone.alive else ("kicked" if gone.left.is_empty() else "eliminated")
 		_out("        the one who left: %s" % fate)
+	return ""
+
+
+## Two machines with no seat in the match join it halfway: the host turns the
+## first away and lets the second watch (`_watcher`), which plays the match
+## from the deal through every answer given so far and then goes on with it.
+func _watch(tables: Array) -> String:
+	var host: Node = _rooms[0]
+	var under_way := await _until(func() -> bool: return host_table(tables).engine.turn_count >= 4 or host_table(tables).engine.over, "never got to turn 4")
+	if under_way != "":
+		return under_way
+	for allowed: bool in [false, true]:
+		Room.notice = ""
+		var guest := _join(40 + int(allowed), "Onlooker", PORT)
+		# Only the room this machine is in tells why it was turned away.
+		Room.current = guest
+		var asked := await _until(func() -> bool: return host.asking.size() == 1, "the host was never asked to let them watch")
+		if asked != "":
+			return asked
+		var peer: int = host.asking.keys()[0]
+		host.let_watch(peer, allowed)
+		if not allowed:
+			var turned := await _until(func() -> bool: return Room.notice != "", "the one turned away was let in")
+			_rooms.erase(guest)
+			if turned != "":
+				return turned
+			continue
+		var watching := await _until(func() -> bool: return guest.in_match and guest.watching, "the watcher never got the match")
+		if watching != "":
+			return watching
+		if guest.my_match_seat() >= 0 or host.seats.size() != tables.size() + 1:
+			return "the watcher got a seat"
+		_watcher = guest
+		var table := _sit(guest, GameConfig.from_wire(guest._dealt))
+		tables.append(table)
+		table.engine.run()
+		_out("        watched from turn %d" % host_table(tables).engine.turn_count)
 	return ""
 
 
@@ -292,7 +347,7 @@ func _stuck(tables: Array) -> String:
 ## of the others, in one piece, and the match go on there. With `comes_back`
 ## the old host comes back to the new one later, from another machine and by
 ## the key of their seat; without, the new host has a bot play the seat.
-func _hand_over_match(m: int, comes_back: bool) -> String:
+func _hand_over_match(m: int, comes_back: bool, dead := false) -> String:
 	var heard := await _until(func() -> bool: return _rooms.slice(1).all(func(room: Node) -> bool: return not room._succession.is_empty()),
 			"the guests never heard who would take the room over")
 	if heard != "":
@@ -300,10 +355,17 @@ func _hand_over_match(m: int, comes_back: bool) -> String:
 	var host: Node = _rooms[0]
 	var tables := _deal(m)
 	var leaver: Machine = tables[0]
-	var under_way := await _until(func() -> bool: return leaver.engine.turn_count >= 6 or leaver.engine.over, "never got to turn 6")
+	var left_seat: int = host.my_match_seat()
+	var under_way := await _until(func() -> bool:
+		if dead:
+			return not leaver.engine.players[left_seat].alive or leaver.engine.over
+		return leaver.engine.turn_count >= 6 or leaver.engine.over, "never got to turn 6")
 	if under_way != "":
 		return under_way
-	var left_seat: int = host.my_match_seat()
+	if dead:
+		if leaver.engine.over:
+			return "the host was never eliminated before the end"
+		_out("        the host leaves eliminated, on turn %d" % leaver.engine.turn_count)
 	leaver.engine.abort()
 	tables.erase(leaver)
 	leaver.queue_free()
@@ -349,7 +411,7 @@ func _hand_over_match(m: int, comes_back: bool) -> String:
 			return "the old host came back to another seat"
 		tables.append(again)
 		again.engine.run()
-	else:
+	elif not dead:
 		heir.set_away(left_seat, &"bot")
 	return await _finish(tables)
 
@@ -430,7 +492,9 @@ class Machine extends Node:
 			_asked = null
 
 	func present(event: GameEvent) -> void:
-		person.observe(event)
+		# A machine that only watches has nobody sitting at it.
+		if person != null:
+			person.observe(event)
 		if rng.randf() < 0.06 and not engine.aborted:
 			await get_tree().create_timer(rng.randf() * 0.03).timeout
 

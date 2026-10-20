@@ -202,6 +202,9 @@ var _shop_pinned := false
 var _shop_tween: Tween
 ## What takes the place of the viewer's panel once they are out (see _clear_hud).
 var _onlooker: Control
+## Host: the requests to watch the match, top centre, peer -> panel.
+var _watch_asks: VBoxContainer
+var _watch_rows: Dictionary = {}
 var _deck_label: Label
 var _stage: PanelContainer
 ## Claims declared and not over yet: one made in answer to another is nested.
@@ -316,6 +319,9 @@ func _ready() -> void:
 		_room.out_of_step.connect(_on_out_of_step)
 		_room.passing.connect(_on_passing)
 		_room.host_changed.connect(_on_host_changed)
+		_room.watcher.connect(_on_watcher)
+		_room.watch_asked.connect(_on_watch_asked)
+		_room.watch_settled.connect(_on_watch_settled)
 		if _room.catching_up:
 			_replaying = true
 			engine.hurry = true
@@ -330,7 +336,11 @@ func _ready() -> void:
 	_layout_seats()
 	_sync()
 	if _replaying:
-		_log_line(Loc.t("You are back. Catching up with the match..."), &"turn_started")
+		var catching := "You are watching. Catching up with the match..." if _room.watching else "You are back. Catching up with the match..."
+		_log_line(Loc.t(catching), &"turn_started")
+	if _room != null:
+		for peer: int in _room.asking:
+			_on_watch_asked(peer, _room.asking[peer].name)
 	engine.run.call_deferred()
 
 
@@ -391,6 +401,58 @@ func _on_host_changed() -> void:
 
 func _on_seat_back(seat: int) -> void:
 	_log_line(Loc.t("%s reconnected.") % engine.players[seat].name, &"coins")
+
+
+## Someone came to watch the match, or stopped.
+func _on_watcher(who: String, on: bool) -> void:
+	_log_line(Loc.t("%s is watching the match." if on else "%s stopped watching the match.") % who, &"coins")
+
+
+## Host: `who` asks to watch the match. The table goes on meanwhile: the
+## request waits at the top of the screen until the host answers it.
+func _on_watch_asked(peer: int, who: String) -> void:
+	if _watch_rows.has(peer):
+		return
+	if _watch_asks == null:
+		_watch_asks = VBoxContainer.new()
+		_watch_asks.add_theme_constant_override("separation", 6)
+		_watch_asks.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_watch_asks.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_watch_asks.position.y = 8
+		_overlay.add_child(_watch_asks)
+	var panel := PanelContainer.new()
+	Board.frame(panel, UI.GOLD, 12)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	panel.add_child(row)
+	var text := UI.label(Loc.t("%s wants to watch the match.") % who, 15, UI.CREAM)
+	text.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	text.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(text)
+	var refuse := UI.button("Refuse", UI.RED, 14)
+	Board.plank(refuse, UI.RED)
+	refuse.custom_minimum_size = UI.grown(Vector2(90, 30))
+	refuse.pressed.connect(_room.let_watch.bind(peer, false))
+	row.add_child(refuse)
+	var allow := UI.button("Let them watch", UI.GOLD, 14)
+	Board.plank(allow, UI.GOLD)
+	allow.custom_minimum_size = UI.grown(Vector2(130, 30))
+	allow.pressed.connect(_room.let_watch.bind(peer, true))
+	TipLayer.attach(allow, "They see the whole match, every hand included, without a seat in it. Back in the lobby they get a seat like anyone joining.")
+	row.add_child(allow)
+	_watch_asks.add_child(panel)
+	_watch_rows[peer] = panel
+	_watch_asks.reset_size()
+	UI.pop(panel, 1.06, 0.15)
+	_play_sfx("ui_unlock")
+
+
+func _on_watch_settled(peer: int) -> void:
+	var panel: Control = _watch_rows.get(peer)
+	_watch_rows.erase(peer)
+	if panel != null and is_instance_valid(panel):
+		panel.queue_free()
+		_watch_asks.reset_size.call_deferred()
 
 
 func _on_out_of_step(turn: int) -> void:
@@ -1492,7 +1554,12 @@ func _clear_hud() -> void:
 ## Whether the player at this screen was eliminated and may see the hands of
 ## the others. It changes nothing in the match: the faces are only drawn here.
 func _looking_on() -> bool:
-	return viewer != null and not viewer.alive
+	return (viewer != null and not viewer.alive) or _watching()
+
+
+## Whether this machine watches the match from the room, without a seat in it.
+func _watching() -> bool:
+	return viewer == null and _room != null
 
 
 func _peekable_seats() -> Array:
@@ -1534,6 +1601,8 @@ func _draw_peek_all() -> void:
 func _peek_all_tip() -> String:
 	if _all_hands_shown():
 		return Loc.t("[b]Hide all hands[/b]\nTurns every hand face down again.")
+	if _watching():
+		return Loc.t("[b]Show all hands[/b]\nYou are watching: click a player to see their hand, or this eye to see them all.")
 	return Loc.t("[b]Show all hands[/b]\nYou are out of the match: click a player to see their hand, or this eye to see them all.")
 
 
@@ -2654,8 +2723,12 @@ func _toggle_pause() -> void:
 	var asks := "Leave the match and go back to the menu?"
 	if _room != null and _room.hosting:
 		asks = "Leave the match and go back to the menu? Another player takes the room over."
+	elif _watching():
+		asks = "Stop watching and go back to the menu?"
 	quit.pressed.connect(_confirm.bind(asks, "Quit to menu", leave))
-	if _room != null:
+	if _watching():
+		TipLayer.attach(quit, "Leaves the room. You were only watching: the match goes on without you.")
+	elif _room != null:
 		TipLayer.attach(quit, "Leaves the room, which passes to another player. Your seat waits for you, unless the new host gives it to a bot or kicks you out." if _room.hosting else "Leaves the room. Your seat waits for you, unless the host gives it to a bot or kicks you out.")
 	box.add_child(quit)
 	if UI.touch:
@@ -3161,7 +3234,7 @@ func _end_replay() -> void:
 	_skimmed_plays.clear()
 	for seat: int in _seats:
 		_on_away_changed(seat)
-	_log_line(Loc.t("You are back at the table."), &"turn_started")
+	_log_line(Loc.t("You are watching the match." if _room.watching else "You are back at the table."), &"turn_started")
 	if viewer != null and not viewer.alive:
 		_clear_hud()
 

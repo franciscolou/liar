@@ -72,6 +72,11 @@ func _ready() -> void:
 		again_button.disabled = true
 		again_button.mouse_default_cursor_shape = Control.CURSOR_ARROW
 		var waiting := UI.label("Only the host can deal again.", 15, PLATE_INK)
+		if room.watching:
+			# A watcher has no seat to wait in: the host takes them along.
+			waiting.text = "You are watching: the host takes the room to the lobby."
+			lobby_button.disabled = true
+			lobby_button.mouse_default_cursor_shape = Control.CURSOR_ARROW
 		waiting.position = Vector2(686, 356) if _mirror == null else _row() - Vector2(0, 30)
 		waiting.size = Vector2(329, 22) if _mirror == null else Vector2(_row_plate().x, 26)
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -148,7 +153,8 @@ func _relabel() -> void:
 			b.add_theme_stylebox_override("pressed", UI.box(PLATE.darkened(0.25), UI.GOLD, 4, 4, 0))
 		for b: Button in [again_button, lobby_button, back_button]:
 			b.add_theme_font_size_override("font_size", UI.px(22))
-	again_button.add_theme_stylebox_override("disabled", UI.box(Color(0, 0, 0, 0.55), Color(0, 0, 0, 0), 0, 4, 0))
+	for b: Button in [again_button, lobby_button]:
+		b.add_theme_stylebox_override("disabled", UI.box(Color(0, 0, 0, 0.55), Color(0, 0, 0, 0), 0, 4, 0))
 
 
 ## A new match with the rules of the last one.

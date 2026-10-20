@@ -5,7 +5,7 @@ func _init() -> void:
 	id = &"soul_swap"
 	display_name = "Soul Swap"
 	description = "Trade a card of your choice for a random card of a chosen opponent."
-	price = 2
+	price = 4
 	texture_path = "res://assets/items/soul_swap.png"
 	targeting = Targeting.OPPONENT
 

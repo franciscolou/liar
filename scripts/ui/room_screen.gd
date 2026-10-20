@@ -233,6 +233,9 @@ func _on_join() -> void:
 		_tell(problem)
 		return
 	_tell("Knocking on the door...", Desk.INK_FADED)
+	# A match is on in there: the host is asked to let this machine watch it.
+	Room.current.watch_pending.connect(func() -> void:
+		_tell("A match is being played in that room. Waiting for the host to let you watch it...", Desk.INK_FADED))
 	_create.disabled = true
 	_join.disabled = true
 	_name.editable = false

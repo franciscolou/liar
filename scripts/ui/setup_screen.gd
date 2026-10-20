@@ -838,7 +838,9 @@ func _build_players(parent: Control, rect: Rect2) -> void:
 		remove.custom_minimum_size = Vector2(44, 28) if UI.touch else Vector2(26, 22)
 		remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		remove.pressed.connect(_cross_off.bind(i))
-		TipLayer.attach(remove, "Take this bot out of the room.")
+		TipLayer.attach(remove, func() -> String:
+			var bot: bool = i < _room.seats.size() and _room.seats[i].bot
+			return Loc.t("Take this bot out of the room." if bot else "Take this player out of the room."))
 		row.add_child(remove)
 		list.add_child(row)
 		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove})
@@ -1629,7 +1631,7 @@ func _redraw_seats() -> void:
 		edit.mouse_filter = Control.MOUSE_FILTER_STOP if mine else Control.MOUSE_FILTER_IGNORE
 		row.tag.text = "BOT" if seat.bot else ("YOU" if seat.peer == me else ("HOST" if seat.peer == 1 else ""))
 		row.tag.add_theme_color_override("font_color", Desk.INK_RED if seat.peer == me else Desk.INK_FADED)
-		row.remove.visible = _host and seat.bot
+		row.remove.visible = _host and (seat.bot or seat.peer > 1)
 
 
 func _redraw() -> void:
@@ -1819,10 +1821,10 @@ func _input(event: InputEvent) -> void:
 			edit.release_focus()
 
 
-## The host takes a bot out of the room, with the scratch of the pen.
+## The host takes a bot or a guest out of the room, with the scratch of the pen.
 func _cross_off(i: int) -> void:
 	_play_sfx("ui_strike")
-	_room.remove_bot(i)
+	_room.remove_seat(i)
 
 
 func _play_sfx(sound: String) -> void:

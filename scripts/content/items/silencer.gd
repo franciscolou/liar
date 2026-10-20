@@ -5,7 +5,7 @@ func _init() -> void:
 	id = &"silencer"
 	display_name = "Silencer"
 	description = "Use it the moment an opponent's ability is about to take effect: the ability is cancelled."
-	price = 6
+	price = 3
 	texture_path = "res://assets/items/silencer.png"
 	kind = Kind.REACTION
 	contested = true

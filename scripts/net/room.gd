@@ -45,6 +45,13 @@ extends Node
 ## is behind, and only then sends on the answers that were lost on the way and
 ## any new ones. Whoever does not come back in time (`HANDOVER_GRACE`) has
 ## left, as if they had dropped out, and the old host's seat waits for them.
+##
+## Someone who joins while a match is being played (and holds no key to a seat
+## of it) asks to watch it (`asking`): the host lets them in or sends them away.
+## A watcher gets the match the way someone coming back does, and then every
+## answer, but sits nowhere and answers nothing (`watchers`, `watching`). Back
+## in the lobby they get a seat like anyone joining. A watcher does not take
+## the room over: if the host leaves, so do they.
 
 signal changed
 ## A player left in the middle of a match; the host answers for that seat.
@@ -71,6 +78,15 @@ signal host_changed
 ## the room over (see `reachable`). Only said when someone on another computer
 ## tried.
 signal reach_checked(ok: bool)
+## Host: `peer`, named `who`, asks to watch the match (see `asking`).
+signal watch_asked(peer: int, who: String)
+## Host: the request of `peer` to watch was answered, or they left.
+signal watch_settled(peer: int)
+## `who` came to watch the match (`on`), or stopped watching it.
+signal watcher(who: String, on: bool)
+## Guest: the room has a match on, and its host was asked to let this machine
+## watch it.
+signal watch_pending
 signal _tail_came
 
 const Transition := preload("res://scripts/ui/transition.gd")
@@ -89,7 +105,7 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 26
+const PROTOCOL := 29
 const JOIN_TIMEOUT := 8.0
 ## Joining with no port given: how long each port of the range is tried, past
 ## the first, before the next one (the room may have passed to someone who
@@ -151,6 +167,12 @@ var catching_up := false
 ## and its player may not come back). Kept on every machine, for the table to
 ## show; only the host acts on it.
 var away: Dictionary = {}
+## Host: who asked to watch the match being played and waits for an answer,
+## and who watches it: peer -> {name, mark}.
+var asking: Dictionary = {}
+var watchers: Dictionary = {}
+## This machine watches the match being played, without a seat in it.
+var watching := false
 ## Whether the room changes scenes on its own when the network says so. The
 ## tests, which have no scenes, turn it off.
 var scenes := true
@@ -167,6 +189,8 @@ var _try := 0
 ## Guest: where this machine reached the room ("address" or "address:port"):
 ## kept as the last address when it walks out, the room may have moved.
 var _where := ""
+## Guest: the host was asked to let this machine watch: no hurry to get in.
+var _waiting := false
 var _tickets: Dictionary = {}  # number -> Ticket still open
 var _settled: Dictionary = {}  # number -> true
 var _next_ticket := 0
@@ -407,7 +431,7 @@ func _fail(reason: String) -> void:
 
 
 func _on_join_timeout(attempt: int) -> void:
-	if not _joined and not handing_over and attempt == _try:
+	if not _joined and not _waiting and not handing_over and attempt == _try:
 		_knock_next()
 
 
@@ -460,6 +484,15 @@ func _on_peer_disconnected(peer: int) -> void:
 		# It was to hand over the answers it had: there are none to wait for.
 		_resumes.erase(peer)
 		_tail_came.emit()
+	if asking.erase(peer):
+		watch_settled.emit(peer)
+		return
+	if watchers.has(peer):
+		var who: String = watchers[peer].name
+		watchers.erase(peer)
+		_send(_watcher_down, [who, false])
+		_watcher_down(who, false)
+		return
 	var seat := _seat_of(peer)
 	if seat < 0:
 		return
@@ -533,10 +566,18 @@ func add_bot() -> void:
 	_push()
 
 
-func remove_bot(seat: int) -> void:
-	if hosting and seat >= 0 and seat < seats.size() and seats[seat].bot:
-		seats.remove_at(seat)
-		_push()
+## Host, in the lobby: takes a seat out of the room, a bot or a guest (who is
+## sent back to the room screen, told why). The host's own seat stays.
+func remove_seat(seat: int) -> void:
+	if not hosting or in_match or seat < 0 or seat >= seats.size():
+		return
+	var peer: int = seats[seat].peer
+	if not seats[seat].bot and peer <= 1:
+		return
+	seats.remove_at(seat)
+	if peer > 1:
+		_refused.rpc_id(peer, "The host removed you from the room.")
+	_push()
 
 
 ## The host changed `config` (or the seats): everyone gets to see it.
@@ -550,11 +591,14 @@ func _push() -> void:
 	changed.emit()
 
 
-## Calls an rpc on every other machine that has a seat in the room.
+## Calls an rpc on every other machine that has a seat in the room, or
+## watches the match.
 func _send(method: Callable, arguments: Array) -> void:
 	for seat: Dictionary in seats:
 		if seat.peer > 1:
 			callv(&"rpc_id", [seat.peer, method.get_method()] + arguments)
+	for peer: int in watchers:
+		callv(&"rpc_id", [peer, method.get_method()] + arguments)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -565,31 +609,41 @@ func _hello(player_name: String, build: int, keys: Array, mark: String) -> void:
 
 ## Host: `peer` asks to come in.
 func _greet(peer: int, player_name: String, build: int, keys: Array, mark: String) -> void:
-	if _seat_of(peer) >= 0:
+	if _seat_of(peer) >= 0 or asking.has(peer) or watchers.has(peer):
 		return
-	var bots := seats.filter(func(seat: Dictionary) -> bool: return seat.bot)
 	var seat_name := clean_name(player_name)
-	var why := ""
+	if seat_name == "":
+		seat_name = "Player"
 	if build != _build():
-		why = "That room is running another version of the game."
-	elif in_match:
+		_refused.rpc_id(peer, "That room is running another version of the game.")
+		return
+	if in_match:
 		var back := _seat_with_key(keys)
 		if back >= 0 and away.get(back) == &"kick":
-			why = "You were removed from the match being played in that room. Try again when it ends."
+			_refused.rpc_id(peer, "You were removed from the match being played in that room. Try again when it ends.")
 		elif back >= 0:
 			_take_back(peer, back, mark)
-			return
 		else:
-			why = "A match is being played in that room. Try again when it ends."
-	elif seats.size() >= MAX_SEATS and bots.is_empty():
-		why = "That room is full."
-	if why != "":
-		_refused.rpc_id(peer, why)
+			# No seat of theirs in it: they may watch it, if the host says so.
+			asking[peer] = {"name": seat_name, "mark": mark}
+			_watch_wait.rpc_id(peer)
+			watch_asked.emit(peer, seat_name)
 		return
+	if _sit(peer, seat_name, mark):
+		_push()
+
+
+## Host: seats `peer` in the lobby, in the place of a bot if the room is full.
+## Returns false, and sends them away, if there is no place for them.
+func _sit(peer: int, seat_name: String, mark: String) -> bool:
+	var bots := seats.filter(func(seat: Dictionary) -> bool: return seat.bot)
+	if seats.size() >= MAX_SEATS and bots.is_empty():
+		_refused.rpc_id(peer, "That room is full.")
+		return false
 	if seats.size() >= MAX_SEATS:
 		seats.erase(bots.back())
-	seats.append({"name": seat_name if seat_name != "" else "Player", "bot": false, "peer": peer, "mark": mark})
-	_push()
+	seats.append({"name": seat_name, "bot": false, "peer": peer, "mark": mark})
+	return true
 
 
 ## Host: the empty seat of the match whose key is among `keys`, or -1.
@@ -632,7 +686,14 @@ func _take_back(peer: int, seat: int, mark: String) -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func _back(id: int, dealt: Dictionary, peers: Array, history: Array, empty: Dictionary, state: Dictionary) -> void:
+	_catch_up(id, dealt, peers, history, empty, state)
+
+
+## Takes this machine into the match being played, which it plays again from
+## the deal through every answer given so far (see catching_up).
+func _catch_up(id: int, dealt: Dictionary, peers: Array, history: Array, empty: Dictionary, state: Dictionary) -> void:
 	_joined = true
+	_waiting = false
 	handing_over = false
 	seats = state.seats
 	config = GameConfig.from_wire(state.config)
@@ -665,6 +726,44 @@ func _refused(why: String) -> void:
 	_fail(why)
 
 
+## Guest: the room has a match on, and the host is asked to let this machine
+## watch it. It waits for as long as the host takes.
+@rpc("authority", "call_remote", "reliable")
+func _watch_wait() -> void:
+	_waiting = true
+	watch_pending.emit()
+
+
+## Host: lets `peer`, who asked, watch the match (`yes`), or sends them away.
+func let_watch(peer: int, yes: bool) -> void:
+	if not hosting or not asking.has(peer):
+		return
+	var who: Dictionary = asking[peer]
+	asking.erase(peer)
+	watch_settled.emit(peer)
+	if not yes or not in_match:
+		_refused.rpc_id(peer, "The host did not let you watch the match.")
+		return
+	watchers[peer] = who
+	var state := _state()
+	state.hashes = _key_hashes
+	# Before any answer that comes after: the rpcs keep their order.
+	_watch.rpc_id(peer, _match_id, _dealt, match_peers, _history, away, state)
+	_send(_watcher_down, [who.name, true])
+	_watcher_down(who.name, true)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _watch(id: int, dealt: Dictionary, peers: Array, history: Array, empty: Dictionary, state: Dictionary) -> void:
+	watching = true
+	_catch_up(id, dealt, peers, history, empty, state)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _watcher_down(who: String, on: bool) -> void:
+	watcher.emit(who, on)
+
+
 @rpc("any_peer", "call_remote", "reliable")
 func _rename(text: String) -> void:
 	var seat := _seat_of(multiplayer.get_remote_sender_id())
@@ -684,6 +783,7 @@ func _lobby(state: Dictionary) -> void:
 		host_changed.emit()
 	if not _joined:
 		_joined = true
+		_waiting = false
 		_show(LOBBY, Transition.DESK)
 	changed.emit()
 	_announce()
@@ -714,6 +814,9 @@ func start() -> void:
 	for i in peers.size():
 		if peers[i] > 1:
 			_start.rpc_id(peers[i], _match_id + 1, dealt.to_wire(), peers, keys[i], hashes)
+	# Whoever watched the last match watches this one.
+	for peer: int in watchers:
+		_start.rpc_id(peer, _match_id + 1, dealt.to_wire(), peers, "", hashes)
 	_start(_match_id + 1, dealt.to_wire(), peers, keys[peers.find(1)], hashes)
 
 
@@ -724,6 +827,15 @@ func to_lobby() -> void:
 		return
 	_send(_to_lobby, [])
 	_to_lobby()
+	# Whoever watched, or asked to, gets a seat like anyone joining the lobby.
+	var guests := watchers.duplicate()
+	guests.merge(asking)
+	for peer: int in asking:
+		watch_settled.emit(peer)
+	watchers.clear()
+	asking.clear()
+	for peer: int in guests:
+		_sit(peer, guests[peer].name, guests[peer].mark)
 	_push()
 
 
@@ -767,6 +879,7 @@ func _begin(id: int, peers: Array, dealt: Dictionary = {}) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _to_lobby() -> void:
 	in_match = false
+	watching = false
 	_show(LOBBY, Transition.GATHER)
 
 
@@ -1089,7 +1202,7 @@ func host_name() -> String:
 ## Guest: listens for the test packets, on a port of the room's range (the
 ## room may be opened on it one day), and tells the host where.
 func _announce() -> void:
-	if hosting or not _unannounced:
+	if hosting or watching or not _unannounced:
 		return
 	if _probe == null:
 		_probe = PacketPeerUDP.new()
@@ -1286,6 +1399,10 @@ func _succession_down(entries: Array, machines: Dictionary) -> void:
 ## can be reached; this machine takes it if that is itself.
 func _on_host_gone() -> void:
 	if _leaving or hosting:
+		return
+	if watching or _waiting:
+		# Only those with a seat take the room over.
+		_fail("The host closed the room.")
 		return
 	if handing_over:
 		# The one taking the room over left too, or was never there.

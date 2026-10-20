@@ -2004,9 +2004,10 @@ func _open_card_pick(d: Decision) -> void:
 				origin.modulate.a = 1.0)
 
 	if d.cancellable:
-		var cancel := UI.button("Cancel", UI.BORDER, 14)
-		cancel.position = Vector2(526, 470)
+		# A pick where choosing none is a move of its own names it (context.cancel).
+		var cancel := UI.button(d.context.get("cancel", "Cancel"), UI.BORDER, 14)
 		cancel.custom_minimum_size = UI.grown(Vector2(100, 32))
+		cancel.position = Vector2(576.0 - cancel.get_combined_minimum_size().x / 2.0, 470)
 		cancel.modulate.a = 0.0
 		cancel.pressed.connect(_close_card_pick.bind(veil, cards, -1))
 		veil.add_child(cancel)

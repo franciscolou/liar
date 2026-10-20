@@ -36,7 +36,7 @@ class Bang extends Ability:
 	func _init() -> void:
 		id = &"clown.bang"
 		display_name = "Bang!"
-		describe("Load the circus gun or leave it empty, in secret, and aim it at a player. They may pay %d coins to duck. Loaded, it costs you %d coins and they lose 1 Morale if they did not duck; empty, it costs you nothing.", [ROUND, ROUND])
+		describe("In secret, load the gun or leave it empty and aim it at a player. They may pay %d coins to duck and dodge the shot, or take their chances.\n\nIf it is loaded: you pay %d coins and the target loses 1 Morale unless they ducked.\nIf it is empty: you pay nothing.", [ROUND, ROUND])
 		on_turn = true
 		# Put down whether the gun is loaded or not: what is on the table
 		# must not tell. An empty gun gives it back once it is shown.

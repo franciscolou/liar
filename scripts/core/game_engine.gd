@@ -1385,9 +1385,9 @@ func renew_proven_card(player: PlayerState, character_id: StringName) -> void:
 ## `by` calls `card` in: every copy of it, in whatever hand it is (their own
 ## too), goes back to the deck, and each of those places gets a new card.
 func recall_cards(by: PlayerState, card: StringName) -> void:
-	# Any hand may be kept out of this (see reach_hand), the caller's own
-	# too. Every hand is asked, copy or not: asking only those who hold one
-	# would tell whoever called it who does.
+	# Any other hand may be kept out of this (see reach_hand). Every hand is
+	# asked, copy or not: asking only those who hold one would tell whoever
+	# called it who does.
 	var kept: Array = []
 	for p: PlayerState in seat_order(by):
 		if not await reach_hand(by, p, &"recall", card):
@@ -1420,9 +1420,9 @@ func recall_cards(by: PlayerState, card: StringName) -> void:
 ## &"peek", &"swap", &"recall"): false when the hand was kept out of reach
 ## (before_hand_reach cancelled, see spy.gd), and then hand_missed says so.
 ## `card` is the character a recall named. Their own hand is out of this,
-## but for a recall: a Last Call may be kept off the caller's own cards too.
+## a Last Call's caller's included: nobody slips out of their own call.
 func reach_hand(by: PlayerState, owner: PlayerState, how: StringName, card := &"") -> bool:
-	if (by == owner and how != &"recall") or not owner.alive:
+	if by == owner or not owner.alive:
 		return true
 	var data := {"owner": owner, "by": by, "how": how}
 	if how == &"recall":
@@ -1466,18 +1466,20 @@ func swap_cards(a: PlayerState, a_index: int, b: PlayerState, b_index: int, reac
 
 
 ## `viewer` looks at one card of `owner`, of their choosing: the cards are
-## face down to them, so what they choose is a place in the hand.
-func peek_card(viewer: PlayerState, owner: PlayerState) -> void:
+## face down to them, so what they choose is a place in the hand. Returns
+## where the card lies, -1 if nothing was seen.
+func peek_card(viewer: PlayerState, owner: PlayerState) -> int:
 	if owner.cards.is_empty():
-		return
+		return -1
 	if not await reach_hand(viewer, owner, &"peek") or over or owner.cards.is_empty():
-		return
+		return -1
 	var index := await pick_hidden_card(viewer, owner, Loc.t("Which of %s's cards do you look at?") % owner.name)
 	if over or index < 0 or index >= owner.cards.size():
-		return
+		return -1
 	await fire(&"card_peeked", {
 		"viewer": viewer, "owner": owner, "index": index, "card": owner.cards[index],
 	})
+	return index
 
 
 ## Lets `player` choose one of the cards `owner` holds without seeing them,

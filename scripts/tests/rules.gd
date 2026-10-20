@@ -63,20 +63,21 @@ static func run() -> int:
 		"a last call asks a hand with no copy too, and it may vanish": _untraceable_no_copy.bind(true),
 		"a last call asks a hand with no copy too, and it may stay": _untraceable_no_copy.bind(false),
 		"nobody is untraceable from themselves": _untraceable_own,
-		"untraceable from their own last call": _untraceable_own_recall,
+		"nobody slips out of their own last call": _untraceable_own_recall,
 		"an item thrown away costs nothing and takes no turn": _discard,
 		"two swindles: the human is heard before the bot": _swindle_race.bind(false),
 		"two swindles: only one of them takes the coins": _swindle_race.bind(true),
 		"a claim is paid for as it is announced; a liar caught gets it back": _paid_up_front.bind(false),
 		"a claim paid for up front stays paid when it is true": _paid_up_front.bind(true),
-		"soul swap: the user says which card they hand over": _soul_swap.bind(false),
-		"soul swap off a mirror: the holder says which card they hand over": _soul_swap.bind(true),
+		"soul swap: a random card for a random card, nobody chooses": _soul_swap.bind(false),
+		"soul swap off a mirror: still nobody chooses": _soul_swap.bind(true),
 		"untraceable items can't be seized": _untraceable_items.bind(&"sheriff.confiscate"),
 		"untraceable items can't be blown up": _untraceable_items.bind(&"bomber.demolition"),
 		"side bets are placed at once and claimed after": _side_bets.bind(true),
 		"nobody bets on the doubt of a side bet": _side_bets.bind(false),
 		"a party: ten free rerolls, and the turn goes on": _party,
-		"a spy looks at the card they choose": _peek_chosen,
+		"a spy looks at the card they choose": _peek_chosen.bind(false),
+		"a spy may trade the card they saw for one of theirs": _peek_chosen.bind(true),
 		"last call for a card the caller doesn't hold": _last_call_named,
 		"a bluffed sold out names its card before the claim": _shed_named_first,
 		"a number of the hand-picked characters is drawn": _cast_drawn,
@@ -849,8 +850,8 @@ static func _untraceable_own() -> String:
 	return "" if table.asked(1, Decision.Kind.REACT).is_empty() else "asked about their own swap"
 
 
-## Player 0 calls a Last Call on a card they hold and keeps their own hand
-## out of it with an Untraceable; the other copies still go.
+## Player 0 calls a Last Call on a card they hold: nobody slips out of their
+## own call, so they are not asked about their hand and the copy goes.
 static func _untraceable_own_recall() -> String:
 	var table := Table.new(true, [&"spy"])
 	var engine := table.engine
@@ -861,13 +862,14 @@ static func _untraceable_own_recall() -> String:
 	table.puppets[0].answers[Decision.Kind.REACT] = _vanishes
 	table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"judge")
 	await engine.claim(me, table.ability(LAST_CALL))
-	if me.cards != [&"spy", &"judge"]:
-		return "the hand became %s" % [me.cards]
-	var missed: Array = seen.of(&"hand_missed")
-	if missed.size() != 1 or missed[0].data.owner != me or missed[0].data.by != me:
-		return "missed %d times" % missed.size()
+	var asked: Array = table.asked(0, Decision.Kind.REACT).filter(
+			func(d: Decision) -> bool: return d.context.get("event") != null and d.context.event.type == &"before_hand_reach")
+	if not asked.is_empty():
+		return "asked about their own hand"
+	if seen.of(&"hand_missed").any(func(e: GameEvent) -> bool: return e.data.owner == me):
+		return "their hand slipped out"
 	var recalled: Array = seen.of(&"cards_recalled")
-	if recalled.size() != 1 or recalled[0].data.hands.any(func(hand: Dictionary) -> bool: return hand.player == me):
+	if recalled.size() != 1 or not recalled[0].data.hands.any(func(hand: Dictionary) -> bool: return hand.player == me):
 		return "the wrong hands were recalled"
 	return ""
 
@@ -998,8 +1000,8 @@ static func _paid_up_front(truthful: bool) -> String:
 	return "" if doubter.coins == 20 + engine.config.doubt_reward else "the right call paid %d" % (doubter.coins - 20)
 
 
-## Player 0 uses a Soul Swap on player 1. Whoever ends up trading (player 1,
-## off a `mirror`) hands over the second card of their hand, by choice.
+## Player 0 uses a Soul Swap on player 1 (off a `mirror`, player 1 trades):
+## nobody is asked which card goes, and one card of each changes hands.
 static func _soul_swap(mirror: bool) -> String:
 	var table := Table.new()
 	var engine := table.engine
@@ -1014,14 +1016,13 @@ static func _soul_swap(mirror: bool) -> String:
 	for i: int in 2:
 		table.puppets[i].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
 	await engine.use_item(user, user.items[0])
-	var chooser := 1 if mirror else 0
-	if table.asked(chooser, Decision.Kind.PICK).size() != 1 or not table.asked(1 - chooser, Decision.Kind.PICK).is_empty():
-		return "the wrong player chose"
-	var given: StringName = &"voodooist" if mirror else &"impostor"
-	var taker: PlayerState = user if mirror else target
-	if not taker.cards.has(given):
-		return "%s did not change hands: %s / %s" % [given, user.cards, target.cards]
-	return "" if user.cards.size() == 2 and target.cards.size() == 2 else "a hand lost a card"
+	if not table.asked(0, Decision.Kind.PICK).is_empty() or not table.asked(1, Decision.Kind.PICK).is_empty():
+		return "somebody chose a card"
+	if user.cards.size() != 2 or target.cards.size() != 2:
+		return "a hand lost a card"
+	var moved := user.cards.filter(func(card: StringName) -> bool: return [&"doctor", &"voodooist"].has(card))
+	var back := target.cards.filter(func(card: StringName) -> bool: return [&"bartender", &"impostor"].has(card))
+	return "" if moved.size() == 1 and back.size() == 1 else "the cards: %s / %s" % [user.cards, target.cards]
 
 
 ## Player 0 comes for the one item of player 1, who answers with an
@@ -1101,7 +1102,9 @@ static func _party() -> String:
 	return "" if engine.claim_block_reason(heir, party) != "" else "offered twice in a turn"
 
 
-static func _peek_chosen() -> String:
+## The Spy looks at the second card of player 1 and, if `trade`, hands over
+## their own second card for it.
+static func _peek_chosen(trade: bool) -> String:
 	var table := Table.new(true, [&"spy"])
 	var engine := table.engine
 	var seen := Witness.new()
@@ -1109,13 +1112,20 @@ static func _peek_chosen() -> String:
 	engine.players[0].cards = [&"spy", &"judge"]
 	engine.players[1].cards = [&"doctor", &"voodooist"]
 	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[1]
-	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	table.puppets[0].answers[Decision.Kind.PICK] = func(d: Decision) -> int:
+		return 1 if d.context.has("hand_of") or trade else -1
 	await engine.claim(engine.players[0], table.ability(&"spy.sneak_peek"))
 	var picks: Array = table.asked(0, Decision.Kind.PICK)
-	if picks.size() != 1 or picks[0].context.get("hand_of") != engine.players[1] or picks[0].options.size() != 2:
+	if picks.size() != 2 or picks[0].context.get("hand_of") != engine.players[1] or picks[0].options.size() != 2:
 		return "asked %d times" % picks.size()
 	var peeked: Array = seen.of(&"card_peeked")
-	return "" if peeked.size() == 1 and peeked[0].data.card == &"voodooist" else "the wrong card was seen"
+	if peeked.size() != 1 or peeked[0].data.card != &"voodooist":
+		return "the wrong card was seen"
+	if not trade:
+		return "" if engine.players[0].cards == [&"spy", &"judge"] and seen.of(&"cards_swapped").is_empty() else "traded anyway"
+	if engine.players[0].cards != [&"spy", &"voodooist"] or engine.players[1].cards != [&"doctor", &"judge"]:
+		return "the hands became %s / %s" % [engine.players[0].cards, engine.players[1].cards]
+	return ""
 
 
 static func _last_call_named() -> String:

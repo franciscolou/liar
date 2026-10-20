@@ -1,3 +1,14 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+addons/
+
+# Python
+__pycache__/
+
+# Distribution
+LIAR!*.exe
+LIAR!*.x86_64
+LIAR!*.sh
+LIAR!*.apk
+LIAR!*.idsig

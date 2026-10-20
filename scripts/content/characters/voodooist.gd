@@ -97,7 +97,7 @@ func turn_extras(player: PlayerState, engine: GameEngine) -> Array:
 		out.append({
 			"id": &"voodooist.puppet_strings",
 			"label": _strings.display_name,
-			"description": _strings.description + "\n" + Loc.t("It is not a claim: nobody can doubt it. It ends your turn."),
+			"description": _strings.description,
 			"cost": 0,
 			"enabled": reason == "",
 			"reason": reason,
@@ -163,13 +163,13 @@ class PuppetStrings extends Ability:
 	func _init() -> void:
 		id = &"voodooist.puppet_strings"
 		display_name = "Puppet Strings"
-		describe("Every doll of yours that is awake does one thing to whoever carries it: deal 1 damage, steal %d coins or steal an item. The dolls stay where they are.", [TOLL])
+		describe("For each player with an awake Voodoo doll, make one of these moves of your choice:\n- Deal 1 damage\n- Steal %d coins\n- Steal an item\n\nThis action can't be doubted.", [TOLL])
 		# Never claimed: a turn extra of whoever pinned the doll (see the top).
 		info_only = true
 		tags = [&"damage", &"steal"]
 
 	func kind_label() -> String:
-		return Loc.t("Action, not a claim")
+		return Loc.t("Action")
 
 	## See awake_doll.
 	static func awake(holder: PlayerState, owner: PlayerState) -> bool:

@@ -495,7 +495,7 @@ func _build_touch_characters(page: Control) -> void:
 
 	# A long line under the cards: it keeps its desktop size to fit.
 	_summary = UI.native(func() -> Label: return UI.label("", 13, UI.CREAM.darkened(0.25)))
-	_summary.position = Vector2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 24.0)
+	_summary.position = Vector2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 16.0)
 	_summary.size = Vector2(TOUCH_LEFT.size.x, 24)
 	_summary.clip_text = true
 	page.add_child(_summary)

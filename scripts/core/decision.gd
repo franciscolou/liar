@@ -23,7 +23,9 @@ extends RefCounted
 ##             down, picked where they lie; context.seconds: how long the player
 ##             has, after which the screen answers -1 for them; context.pass: how
 ##             much a bot likes choosing none, when it may; context.quiet: the
-##             card chosen is not shown being taken, it is only a choice so far)
+##             card chosen is not shown being taken, it is only a choice so far;
+##             context.cancel: the label of the way out of a card pick, when
+##             choosing none is a move of its own)
 ##
 ## The engine sets context.private on whatever is asked before a play is
 ## announced (its target, what prepare() asks): the other players are not to

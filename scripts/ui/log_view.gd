@@ -1,7 +1,7 @@
 extends ScrollContainer
 ## The table's log, told in pictures: one row per event, made of who did it
-## (their name in the ink of their seat), small drawings for what happened (a
-## mini card for a claim, the item, a coin and the amount, a broken heart, a
+## (their name in the ink of their seat), small drawings for what happened (the
+## character's own icon for a claim, the item, a coin and the amount, a broken heart, a
 ## "LIAR!" balloon, a tick or a cross, a skull...) and a golden chevron from
 ## whoever acted to whoever it was aimed at. The sentence that says all of it
 ## is the row's tooltip: the mouse over a row (a finger held on it) reads it.
@@ -13,7 +13,6 @@ extends ScrollContainer
 
 const CELL := 2.0
 const ROW := 20.0
-const NAME_CHARS := 7
 ## How many rows are kept: the oldest go first.
 const KEPT := 260
 ## The ink of each seat's name, by player id.
@@ -24,6 +23,7 @@ const BAD := Color("ef5a48")
 const COIN := "res://assets/ui/coin.png"
 const HEART := "res://assets/ui/heart.png"
 const GUN := "res://assets/ui/clown_gun.png"
+const CharacterIcons := preload("res://scripts/ui/character_icons.gd")
 
 ## One character per cell; "." is nothing. Inks below.
 const GLYPHS := {
@@ -126,12 +126,25 @@ func _append(row: Control, header: bool) -> void:
 		row.set_meta(&"header", true)
 	var follow := scroll_vertical >= int(get_v_scroll_bar().max_value - size.y) - 4
 	_list.add_child(row)
+	_fit(row)
 	while _list.get_child_count() > KEPT:
 		var old := _list.get_child(0)
 		_list.remove_child(old)
 		old.queue_free()
 	if follow:
 		_to_bottom.call_deferred()
+
+
+## What is only there if it fits (the name of an ability, meta `optional`)
+## goes when the row is wider than the log: the names around it are never cut
+## for it. The sentence of the tooltip still has it.
+func _fit(row: Control) -> void:
+	var room := (custom_minimum_size.x if custom_minimum_size.x > 0.0 else size.x) - 2.0
+	if room <= 0.0 or row.get_combined_minimum_size().x <= room:
+		return
+	for child: Node in row.get_children():
+		if child.has_meta(&"optional"):
+			(child as Control).visible = false
 
 
 func _to_bottom() -> void:
@@ -184,6 +197,12 @@ func _build(e: GameEvent, row: Row) -> bool:
 			row.add_child(_who(d.player))
 			row.add_child(_item(d.item.def, d.item.hidden and d.player != viewer))
 			row.add_child(_glyph(&"trash"))
+		&"players_painted":
+			row.add_child(_who(d.painter))
+			row.add_child(_glyph(&"brush"))
+			row.add_child(_who(d.pair[0]))
+			row.add_child(_pill("", d.tint, false))
+			row.add_child(_who(d.pair[1]))
 		&"item_sold":
 			row.add_child(_who(d.player))
 			row.add_child(_item(d.item.def))
@@ -197,7 +216,9 @@ func _build(e: GameEvent, row: Row) -> bool:
 			var play: Play = d.play
 			row.add_child(_who(play.actor))
 			row.add_child(_card(play.ability().character_id))
-			row.add_child(_fill(_text(EventText.title(play), UI.BLUE.lightened(0.3), true)))
+			var title := _text(EventText.title(play), UI.BLUE.lightened(0.3), true)
+			title.set_meta(&"optional", true)
+			row.add_child(title)
 			_aim(row, play)
 		&"claim_cancelled":
 			row.add_child(_glyph(&"ban"))
@@ -362,7 +383,7 @@ func _coins(d: Dictionary, row: Row) -> void:
 				row.add_child(_card(d.play.ability().character_id))
 		&"sold":
 			row.add_child(_glyph(&"palette"))
-		&"paint", &"paint_toll":
+		&"paint":
 			row.add_child(_glyph(&"brush"))
 
 
@@ -391,7 +412,7 @@ func _row(line: String) -> Row:
 func _who(p: PlayerState) -> Label:
 	if p == null:
 		return _text("?", UI.MUTED)
-	var name := p.name if p.name.length() <= NAME_CHARS else p.name.left(NAME_CHARS - 1) + "…"
+	var name := p.name
 	var ink: Color = SEAT_INKS[p.id % SEAT_INKS.size()]
 	var l := _text(name, ink, true)
 	return l
@@ -433,22 +454,9 @@ func _item(def: ItemDef, hidden := false) -> TextureRect:
 	return _icon(UI.ITEM_BACK if hidden or def == null else def.texture_path, Vector2(17, 18))
 
 
-## A small picture of the character's card: its art, framed in gold.
+## The character's own little icon (character_icons.gd).
 func _card(character_id: StringName) -> Control:
-	var def := Content.character(character_id)
-	var holder := PanelContainer.new()
-	holder.add_theme_stylebox_override("panel", UI.box(UI.INK, UI.GOLD.darkened(0.2), 1, 1, 0))
-	holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var art := TextureRect.new()
-	art.texture = UI.card_art(def.texture_path) if def != null else null
-	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	art.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-	art.custom_minimum_size = Vector2(10, 17)
-	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	holder.add_child(art)
-	return holder
+	return CharacterIcons.icon(character_id)
 
 
 func _pill(text: String, color: Color, ended: bool) -> PanelContainer:

@@ -50,11 +50,8 @@ class CashOut extends Ability:
 	func _init() -> void:
 		id = &"mythomaniac.cash_out"
 		display_name = "Cash Out"
-		description = "Replace this card with a new one and collect every coin in your Vault."
+		description = "Replace this card with a new one and collect every coin in your Vault (if there are any)."
 		on_turn = true
-
-	func can_use(player: PlayerState, _engine: GameEngine) -> String:
-		return "" if player.counter(VAULT) > 0 else Loc.t("Vault is empty")
 
 	# A bluffer says now which card will go: asked later, it would give them away.
 	func prepare(play: Play) -> bool:
@@ -63,9 +60,12 @@ class CashOut extends Ability:
 	func resolve(play: Play) -> void:
 		var engine := play.engine
 		await engine.shed_card(play, &"cash_out")
+		# An empty vault: the card was all there was to trade.
 		var stash := play.actor.counter(VAULT)
+		if stash <= 0 or engine.over:
+			return
 		await engine.set_counter(play.actor, VAULT, 0)
 		await engine.gain_coins(play.actor, stash, &"vault")
 
 	func ai_weight(player: PlayerState, _engine: GameEngine) -> float:
-		return 0.4 * player.counter(VAULT)
+		return 0.4 * player.counter(VAULT) if player.counter(VAULT) > 0 else 0.08

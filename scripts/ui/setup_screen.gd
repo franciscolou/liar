@@ -239,6 +239,9 @@ var _item_kind: Label
 var _item_price: Label
 var _item_state: Label
 var _item_text: RichTextLabel
+## The rows are being given to other people (someone came or went): a name
+## line losing the cursor then is not the player leaving it.
+var _seats_moving := false
 
 
 func _ready() -> void:
@@ -828,7 +831,8 @@ func _build_players(parent: Control, rect: Rect2) -> void:
 		_slim(name_edit, [&"normal", &"focus", &"read_only"])
 		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_edit.text_changed.connect(_on_renamed.bind(i))
-		name_edit.text_submitted.connect(func(_text: String): name_edit.release_focus())
+		name_edit.text_submitted.connect(func(_text: String): _leave_name(name_edit, i))
+		name_edit.focus_exited.connect(_on_name_left.bind(name_edit, i))
 		row.add_child(name_edit)
 		var tag := Desk.written("", 14, Desk.INK_FADED, true)
 		tag.custom_minimum_size = Vector2(58, 0)
@@ -1597,6 +1601,11 @@ func _write_config() -> void:
 
 
 func _on_renamed(text: String, seat: int) -> void:
+	# Somebody else has that name: it shows in red and is not sent.
+	var taken: bool = _room.name_taken(seat, text)
+	_seat_rows[seat].name.add_theme_color_override("font_color", Desk.INK_RED if taken else Desk.INK_BLUE)
+	if taken:
+		return
 	if seat < _room.seats.size() and _room.seats[seat].peer == _room.my_peer():
 		var player_name: String = Room.clean_name(text)
 		Settings.player_name = player_name if player_name != "" else "Player"
@@ -1620,10 +1629,14 @@ func _redraw_seats() -> void:
 		var seat: Dictionary = seats[i]
 		var edit: LineEdit = row.name
 		if moved and edit.has_focus():
+			_seats_moving = true
 			edit.release_focus()
+			_seats_moving = false
 		# The name being typed is ahead of what the room has heard of it.
 		if not edit.has_focus() and edit.text != seat.name:
 			edit.text = seat.name
+		if not edit.has_focus():
+			edit.add_theme_color_override("font_color", Desk.INK_BLUE)
 		# Nobody writes a name but their own.
 		var mine: bool = not seat.bot and seat.peer == me
 		edit.editable = mine
@@ -1815,10 +1828,34 @@ func _input(event: InputEvent) -> void:
 	var clicked: bool = event is InputEventMouseButton and event.pressed
 	if not clicked and not event.is_action_pressed(&"ui_cancel"):
 		return
-	for row: Dictionary in _seat_rows:
-		var edit: LineEdit = row.name
+	for i: int in _seat_rows.size():
+		var edit: LineEdit = _seat_rows[i].name
 		if edit.has_focus() and not (clicked and edit.get_global_rect().has_point(event.global_position)):
-			edit.release_focus()
+			_leave_name(edit, i)
+
+
+## Done with the name line (Enter, Esc, a click away): unless the name is
+## somebody else's, then the line shakes and keeps the cursor.
+func _leave_name(edit: LineEdit, seat: int) -> void:
+	if _room.name_taken(seat, edit.text):
+		_refuse_name(edit)
+		return
+	edit.release_focus()
+
+
+## The focus went off the name line some other way (Tab): with a name that is
+## somebody else's, it comes straight back.
+func _on_name_left(edit: LineEdit, seat: int) -> void:
+	if _seats_moving:
+		return
+	if edit.editable and edit.is_visible_in_tree() and seat < _room.seats.size() and _room.name_taken(seat, edit.text):
+		edit.grab_focus.call_deferred()
+		_refuse_name(edit)
+
+
+func _refuse_name(edit: LineEdit) -> void:
+	UI.shake(edit, 5.0, 0.25)
+	_play_sfx("cancel")
 
 
 ## The host takes a bot or a guest out of the room, with the scratch of the pen.

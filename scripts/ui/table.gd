@@ -215,6 +215,8 @@ var _popup: Control
 var _modal: Control
 var _read_veil: Control  # touch mode: the table dimmed around a description being read
 var _log: ScrollContainer  # log_view.gd
+## The strokes on the boxes chosen so far for a Monochrome, by player id.
+var _paint_marks: Dictionary = {}
 ## The chevron of each player who made a play this turn, by player id.
 var _chevrons: Dictionary = {}
 var _log_panel: Control
@@ -1241,6 +1243,11 @@ func request(d: Decision) -> Variant:
 	if _clock_spent == engine.turn_count and _on_the_clock(d):
 		return _nothing(d)
 	_pending = d
+	# A choice that stays open between its questions (the Painter's palette)
+	# goes once something else is asked.
+	var lingering := _lingering()
+	if lingering != null and not (d.kind == Decision.Kind.PICK and d.context.get("look") == &"palette"):
+		_let_go_lingering()
 	match d.kind:
 		Decision.Kind.TURN:
 			# A new turn: the keyboard starts from the hand again.
@@ -1277,15 +1284,52 @@ func _answer(value: Variant) -> void:
 		return
 	_close_popup()
 	_hide_prompt()
-	UI.clear(_modal)
+	_clear_modal(value)
 	if TipLayer.current != null:
 		TipLayer.current.hide_all()
 	for seat: SeatView in _seats.values():
 		seat.set_targetable(false)
 		seat.set_item_pick(false)
 		seat.set_card_pick(false)
+	_clear_paint_marks()
 	_countdown = {}
 	answered.emit(value)
+
+
+## Empties the choices over the table. One that stays open between its
+## questions (meta `linger`: the Painter's palette) stays while the answer is
+## one of its options, and goes away its own way otherwise.
+func _clear_modal(value: Variant) -> void:
+	var lingering := _lingering()
+	var keep: bool = lingering != null and value is int and value >= 0
+	if lingering != null and not keep:
+		_let_go_lingering()
+	for child: Node in _modal.get_children():
+		if child == lingering or (keep and child == _aside.get("button")):
+			continue
+		if child.has_meta(&"linger") and child.closing():
+			continue
+		_modal.remove_child(child)
+		child.queue_free()
+
+
+## The choice that stays open between its questions, if one is up.
+func _lingering() -> Control:
+	for child: Node in _modal.get_children():
+		if child.has_meta(&"linger") and not child.closing():
+			return child
+	return null
+
+
+func _let_go_lingering() -> void:
+	var lingering := _lingering()
+	if lingering == null:
+		return
+	lingering.close()
+	var b: Variant = _aside.get("button")
+	if b != null and is_instance_valid(b):
+		b.queue_free()
+	_aside = {}
 
 
 func _answer_turn(option: Dictionary) -> void:
@@ -1473,11 +1517,89 @@ func _on_seat_card_clicked(index: int, owner: PlayerState) -> void:
 func _on_seat_clicked(p: PlayerState) -> void:
 	if _pending != null and _pending.kind == Decision.Kind.TARGET and _pending.options.has(p):
 		_answer(p)
+	elif _painting() and _pending.context.candidates.has(p):
+		_toggle_paint(p)
 	elif _looking_on() and p.alive:
 		var seat: SeatView = _seats[p.id]
 		seat.set_revealed(not seat.is_revealed())
 		_play_sfx("card_draw")
 		_sync_peek()
+
+
+## A Monochrome's two (painter.gd), chosen on the table itself: the boxes of
+## whoever can be painted light up as for a target, a click lays a stroke of
+## this round's colour across a box and another takes it off; with two, it is
+## decided. The viewer's own counter is no box to click: if they can be
+## painted, the prompt has a button for it.
+func _prompt_paint(d: Decision) -> void:
+	_paint_marks = {}
+	for p: PlayerState in d.context.candidates:
+		if _seats.has(p.id):
+			_seats[p.id].set_targetable(true)
+	var buttons := []
+	if viewer != null and d.context.candidates.has(viewer):
+		buttons.append({"text": "Paint yourself", "action": _toggle_paint.bind(viewer)})
+	var tint: Color = d.context.get("tint", UI.GOLD)
+	var hint := "Tap two players to paint them this colour. Tap again to let one go." if UI.touch \
+			else "Click two players to paint them this colour. Click again to let one go."
+	_show_prompt("[b]%s[/b]\n[color=%s]%s[/color]" % [d.prompt, UI.hex(tint.lightened(0.2)), Loc.t(hint)], buttons)
+	_play_sfx("fx_paint_dip")
+
+
+func _painting() -> bool:
+	return _pending != null and _pending.kind == Decision.Kind.PICK and _pending.context.get("look") == &"paint"
+
+
+func _toggle_paint(p: PlayerState) -> void:
+	if not _painting() or _paint_marks.size() >= 2 and not _paint_marks.has(p.id):
+		return
+	var d := _pending
+	var tint: Color = d.context.get("tint", UI.GOLD)
+	if _paint_marks.has(p.id):
+		var mark: Variant = _paint_marks[p.id]
+		_paint_marks.erase(p.id)
+		if is_instance_valid(mark):
+			var off := (mark as Control).create_tween()
+			off.tween_property(mark, "modulate:a", 0.0, 0.2)
+			off.tween_callback((mark as Node).queue_free)
+		_play_sfx("fx_brush")
+		return
+	var box: Variant = _node_of(p)
+	var rect: Rect2 = box.get_global_rect() if box != null else Rect2(_anchor(p) - Vector2(80, 30), Vector2(160, 60))
+	rect = Rect2(rect.position, Vector2(minf(rect.size.x, 320.0), minf(rect.size.y, 110.0)))
+	var stroke := PlayFx.StrokeFx.new()
+	stroke.tint = tint
+	stroke.thick = rect.size.y * 0.42
+	stroke.from = rect.position + Vector2(-4, rect.size.y * 0.5)
+	stroke.to = rect.position + Vector2(rect.size.x + 4, rect.size.y * 0.5)
+	stroke.modulate.a = 0.85
+	_fx.add_child(stroke)
+	stroke.create_tween().tween_property(stroke, "progress", 1.0, 0.25 / _speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_paint_marks[p.id] = stroke
+	_play_sfx("fx_splat")
+	if _paint_marks.size() < 2:
+		return
+	var chosen := _paint_marks.keys()
+	var index := -1
+	for i: int in d.options.size():
+		var pair: Array = d.options[i].pair
+		if pair.any(func(q: PlayerState) -> bool: return q.id == chosen[0]) and pair.any(func(q: PlayerState) -> bool: return q.id == chosen[1]):
+			index = i
+	# A beat to see the two marked, and then it is decided.
+	await _wait(0.35)
+	if _pending == d:
+		_answer(index)
+
+
+## The strokes laid on the boxes while choosing go when the choice does: the
+## paint of the status takes over.
+func _clear_paint_marks() -> void:
+	for mark: Variant in _paint_marks.values():
+		if is_instance_valid(mark):
+			var off := (mark as Control).create_tween()
+			off.tween_property(mark, "modulate:a", 0.0, 0.4)
+			off.tween_callback((mark as Node).queue_free)
+	_paint_marks = {}
 
 
 ## The viewer is out of the match: their side of the counter is cleared
@@ -1836,7 +1958,12 @@ func _open_pick(d: Decision) -> void:
 		_play_sfx("ui_lock")
 		return
 	if d.context.get("look") == &"palette":
-		# The Painter's palette between what he holds and the shelf (see palette_pick.gd).
+		# The Painter's palette between what he holds and the shelf (see
+		# palette_pick.gd). It stays up from one trade to the next.
+		var open := _lingering()
+		if open != null:
+			open.refresh(d)
+			return
 		UI.clear(_modal)
 		var palette := PalettePick.new()
 		palette.setup(d)
@@ -1844,8 +1971,9 @@ func _open_pick(d: Decision) -> void:
 		palette.sounded.connect(_play_sfx)
 		_modal.add_child(palette)
 		_offer_aside(palette)
-		if not d.context.get("again", false):
-			_play_sfx("fx_brush")
+		return
+	if d.context.get("look") == &"paint":
+		_prompt_paint(d)
 		return
 	if d.context.get("look") == &"cosmos":
 		# Not a window: the options hang in the dark (see cosmos_pick.gd).
@@ -2506,6 +2634,13 @@ func _key_stops() -> Dictionary:
 			var holder: Variant = _pending.context.get("held_by")
 			if holder is PlayerState and _seats.has(holder.id):
 				return {"id": "items", "rows": [_seats[holder.id].item_views()]}
+			if _pending.context.get("look") == &"paint":
+				var boxes := []
+				for p: PlayerState in _pending.context.candidates:
+					if _seats.has(p.id):
+						boxes.append(_seats[p.id])
+				boxes.sort_custom(func(a: Control, b: Control) -> bool: return a.position.x < b.position.x)
+				return {"id": "paint", "rows": [boxes, _buttons_in(_prompt)]}
 			var hand: Variant = _pending.context.get("hand_of")
 			if hand is PlayerState and _seats.has(hand.id):
 				return {"id": "hand", "rows": [_seats[hand.id].card_views()]}
@@ -3001,6 +3136,7 @@ func present(e: GameEvent) -> void:
 			if not _holds_round(d.play):
 				await _release_reserve(d.play, false)
 		&"claim_resolved":
+			_let_go_lingering()
 			# Whatever is still set aside for it (the claim was cut short),
 			# unless it is the round of an empty gun, on its way back.
 			if not _owes_round(d.play):
@@ -3019,7 +3155,9 @@ func present(e: GameEvent) -> void:
 		&"item_buying":
 			_sync_shop()
 		&"item_bought":
-			await _anim_item_bought(d)
+			# Bought on the palette: it showed the trade itself.
+			if not _on_palette(d.player):
+				await _anim_item_bought(d)
 		&"service_bought":
 			# Off the shelf to the buyer, and then put into play like an item.
 			await _anim_item_bought({"player": d.player, "item": d.item, "slot": -1})
@@ -3038,8 +3176,11 @@ func present(e: GameEvent) -> void:
 			await _anim_item_broken(d)
 		&"item_discarded":
 			await _anim_item_discarded(d)
+		&"players_painted":
+			await _play_fx.paint_pair(d)
 		&"item_sold":
-			await _anim_item_sold(d)
+			if not _on_palette(d.player):
+				await _anim_item_sold(d)
 		&"item_stolen":
 			await _anim_item_stolen(d)
 		&"item_missed":
@@ -3810,6 +3951,9 @@ func _anim_reveal(play: Play, truthful: bool) -> void:
 
 func _anim_coins(d: Dictionary) -> void:
 	var p: PlayerState = d.player
+	# A trade on the palette: the coins went to and from it there.
+	if (d.reason == &"sold" or d.reason == &"shop") and _on_palette(p):
+		return
 	var delta: int = d.delta
 	var here := _coin_anchor(p)
 	var there := _coin_anchor(d.other) if d.other != null else _bank()
@@ -4361,6 +4505,11 @@ func _anim_item_discarded(d: Dictionary) -> void:
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	fall.tween_callback(icon.queue_free)
 	await _wait(0.45)
+
+
+## Whether `p` is trading on the palette that is open on this screen.
+func _on_palette(p: PlayerState) -> bool:
+	return p == viewer and _lingering() != null
 
 
 ## An item the Painter turned into coins: it goes up off its slot, melts into

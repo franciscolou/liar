@@ -21,8 +21,8 @@ extends RefCounted
 ##     a Voodoo doll does it; &"duck": ducking a Clown's gun, to the bank;
 ##     &"blank": the price of an empty Bang! back to the Clown, with the claim
 ##     the coins were put down for in `play`; &"sold": an item turned into
-##     coins; &"paint_toll"/&"paint": what a painted player pays for reaching
-##     outside the paint, and what the Painter gets for it, see painter.gd)
+##     coins; &"paint": what the bank gives the Painter when a painted
+##     player reaches outside the paint, see painter.gd)
 ##   payment_short {player, amount, allowed, play}  set allowed to let the player go into debt; play = the claim being paid for, if any
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
 ##     for coins still on their way to the victim: see bard.gd)
@@ -30,6 +30,8 @@ extends RefCounted
 ##   item_bought {player, item, slot}           slot = -1 for an item that is always on sale
 ##   service_bought {player, item, play}        a service (ItemDef.service) was paid for; it resolves next. `item` is a stand-in, never held
 ##   shop_restocked {slot} / shop_rerolled {player}
+##   players_painted {play, painter, pair, tint}  the two chosen by a Monochrome
+##     (painter.gd), just before the paint goes on them; tint is only a look
 ##   item_sold {player, item, index, amount}    turned into `amount` coins by its holder
 ##     (All Is Color, painter.gd); the coins follow, with reason &"sold"
 ##   item_used {player, item, play} / item_gained {player, item} / item_broken {player, item, index}

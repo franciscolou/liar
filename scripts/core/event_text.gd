@@ -27,6 +27,8 @@ static func describe(e: GameEvent) -> String:
 			return Loc.t("%s finds nothing to take from %s.") % [d.thief.name, d.victim.name]
 		&"item_discarded":
 			return Loc.t("%s throws %s away.") % [d.player.name, _item(d.item)]
+		&"players_painted":
+			return Loc.t("%s paints %s and %s the same colour.") % [d.painter.name, d.pair[0].name, d.pair[1].name]
 		&"item_sold":
 			return Loc.t("%s turns %s into %d coins.") % [d.player.name, d.item.def.display_name, d.amount]
 		&"item_broken":
@@ -137,8 +139,6 @@ static func _coins(d: Dictionary) -> String:
 			return ""
 		&"sold":
 			return ""
-		&"paint_toll":
-			return Loc.t("%s pays %d for stepping outside the paint.") % [who, -d.delta]
 		&"paint":
 			return Loc.t("%s collects %d for the paint.") % [who, d.delta]
 	if d.delta > 0:

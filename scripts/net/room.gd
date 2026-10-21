@@ -105,7 +105,7 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 32
+const PROTOCOL := 34
 const JOIN_TIMEOUT := 8.0
 ## Joining with no port given: how long each port of the range is tried, past
 ## the first, before the next one (the room may have passed to someone who
@@ -371,6 +371,29 @@ static func clean_name(text: String) -> String:
 	return text.strip_edges().left(NAME_LENGTH)
 
 
+## Whether `text` is the name of some seat other than `seat` (-1: any) in the
+## room, as names go: no matter the capitals or the spaces round it.
+func name_taken(seat: int, text: String) -> bool:
+	var wanted := clean_name(text).to_lower()
+	if wanted == "":
+		return false
+	for i: int in seats.size():
+		if i != seat and String(seats[i].name).strip_edges().to_lower() == wanted:
+			return true
+	return false
+
+
+## `text`, or the first of "text 2", "text 3"... nobody in the room has.
+func _free_name(text: String) -> String:
+	var free := text
+	var n := 2
+	while name_taken(-1, free):
+		var number := " %d" % n
+		free = text.left(NAME_LENGTH - number.length()) + number
+		n += 1
+	return free
+
+
 func _ready() -> void:
 	_token = Crypto.new().generate_random_bytes(16).hex_encode()
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -541,9 +564,12 @@ func _seat_of(peer: int) -> int:
 
 
 ## Renames a seat, which has to be one's own: not even the host writes the
-## name of somebody else.
+## name of somebody else. A name somebody else has already is not taken: who
+## had it first keeps it (see name_taken).
 func rename(seat: int, text: String) -> void:
 	if seat < 0 or seat >= seats.size() or seats[seat].bot or seats[seat].peer != my_peer():
+		return
+	if name_taken(seat, text):
 		return
 	if hosting:
 		seats[seat].name = clean_name(text)
@@ -642,7 +668,8 @@ func _sit(peer: int, seat_name: String, mark: String) -> bool:
 		return false
 	if seats.size() >= MAX_SEATS:
 		seats.erase(bots.back())
-	seats.append({"name": seat_name, "bot": false, "peer": peer, "mark": mark})
+	# Somebody here has the name already: they keep it, the newcomer gets a number.
+	seats.append({"name": _free_name(seat_name), "bot": false, "peer": peer, "mark": mark})
 	return true
 
 
@@ -767,6 +794,10 @@ func _watcher_down(who: String, on: bool) -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func _rename(text: String) -> void:
 	var seat := _seat_of(multiplayer.get_remote_sender_id())
+	if hosting and seat >= 0 and name_taken(seat, text):
+		# Somebody got there first: the room tells them their name as it is.
+		_push()
+		return
 	if hosting and seat >= 0:
 		seats[seat].name = clean_name(text)
 		_push()

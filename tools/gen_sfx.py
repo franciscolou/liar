@@ -1606,6 +1606,41 @@ def fx_palette():
     return out
 
 
+def fx_paint_dip():
+    """A brush pushed into a gob of thick paint and drawn out: a wet squelch,
+    a couple of sticky pops and the drip after it."""
+    out = silence(0.6)
+    mix(out, lowpass(noise(0.22, 0.03, 0.16, 651), lambda t: 700 - 1500 * t), 0.0, 1.0)
+    for i, at in enumerate((0.07, 0.15, 0.24)):
+        mix(out, tone(lambda t, i=i: 220 + 90 * i + 900 * t, 0.06, 0.002, 0.04), at, 0.35)
+        mix(out, lowpass(noise(0.03, 0.001, 0.02, 653 + i), 1200), at, 0.4)
+    mix(out, tone(lambda t: 1300 - 500 * t, 0.07, 0.001, 0.04), 0.42, 0.22)
+    return out
+
+
+def fx_paint_flick():
+    """A brush flicked hard: a quick high swish and drops pattering down."""
+    out = silence(0.6)
+    mix(out, bandpass(noise(0.12, 0.01, 0.08, 661), 1500, lambda t: 3000 + 30000 * t), 0.0, 0.9)
+    rng = random.Random(663)
+    for i in range(9):
+        at = 0.12 + rng.uniform(0.0, 0.35)
+        mix(out, lowpass(noise(0.02, 0.001, 0.012, 665 + i), 2200), at, rng.uniform(0.2, 0.45))
+        mix(out, tone(rng.uniform(900, 1600), 0.03, 0.001, 0.015, glide=1.4), at, 0.12)
+    return out
+
+
+def fx_paint_link():
+    """Two players bound by one colour: a soft rising shimmer, two bells in
+    a fifth meeting, and a wet run of paint under them."""
+    out = silence(1.2)
+    mix(out, lowpass(noise(0.5, 0.15, 0.45, 671), 900), 0.0, 0.4)
+    for i, (freq, at) in enumerate(((659.25, 0.05), (987.77, 0.22), (1318.5, 0.4))):
+        mix(out, bell(freq, 0.9, 0.7), at, 0.4 - 0.08 * i)
+    mix(out, tone(lambda t: 440 + 440 * t, 0.6, 0.2, 0.5, shape="tri"), 0.0, 0.12)
+    return out
+
+
 def chevron():
     """The golden chevron shot from a box at its mark and back: an airy
     whoosh, a bright ting where it points and the click of it settling."""
@@ -1831,6 +1866,9 @@ SOUNDS = {
     "fx_doll_hit": fx_doll_hit,
     "chalk": chalk,
     "chevron": chevron,
+    "fx_paint_dip": fx_paint_dip,
+    "fx_paint_flick": fx_paint_flick,
+    "fx_paint_link": fx_paint_link,
     "fx_brush": fx_brush,
     "fx_splat": fx_splat,
     "fx_palette": fx_palette,
@@ -1896,6 +1934,7 @@ PEAKS = {
     "fx_spaghettify": 0.8, "fx_materialize": 0.85,
     "shop_lever": 0.6, "shop_reels": 0.32,
     "chevron": 0.32, "fx_brush": 0.5, "fx_splat": 0.6, "fx_palette": 0.5,
+    "fx_paint_dip": 0.55, "fx_paint_flick": 0.5, "fx_paint_link": 0.55,
 }
 
 

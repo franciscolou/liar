@@ -895,6 +895,7 @@ func put_away() -> void:
 	drop_lurk()
 	drop_bets()
 	drop_gun()
+	drop_paint()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -4020,61 +4021,154 @@ func _fx_painter_all_is_color(play: Play) -> void:
 	await _wait(0.25)
 
 
-## Monochrome: the brush is dipped and laid along the top of one box and then
-## of the other, the same colour on both, and goes home. The paint that stays
-## is the status's (StatusFx), which takes over from the strokes.
+## Monochrome, as it is announced: the Painter's palette opens beside his
+## box with the brush stirring the paint, and waits there for the two he
+## chooses (paint_pair), which only comes once the table let the claim pass.
 func _fx_painter_monochrome(play: Play) -> void:
-	var engine := play.engine
-	var paint: Color = Painter.PAINTS[engine.turn_count % Painter.PAINTS.size()]
-	var pair: Array = []
-	for id: int in play.params.get("pair", []):
-		var p := engine.player_by_id(id)
-		if p != null and p.alive and table._node_of(p) != null:
-			pair.append(p)
-	if pair.is_empty():
-		return
-	dim(0.3, 0.8 + pair.size() * (BRUSH_HOP + BRUSH_SWEEP))
+	drop_paint()
+	var kit := PaletteFx.new()
+	kit.position = _beside(play.actor, 80.0)
+	# Not under the stage, in the middle of the table: beside it.
+	if kit.position.x > 330.0 and kit.position.x < 822.0 and kit.position.y > 190.0:
+		kit.position.x = 300.0 if kit.position.x < POT.x else 852.0
+		# Nor under the prompt, which sits just over the counter.
+		kit.position.y = minf(kit.position.y, 360.0)
+	kit.scale = Vector2.ZERO
+	add_child(kit)
 	var brush := BrushFx.new()
-	brush.tint = paint
-	brush.position = _at(play.actor)
-	brush.scale = Vector2.ONE * 1.7
+	brush.scale = Vector2.ONE * 1.8
+	brush.position = kit.position + Vector2(0, -14)
 	brush.modulate.a = 0.0
 	add_child(brush)
-	brush.create_tween().tween_property(brush, "modulate:a", 1.0, 0.15 / table._speed)
-	ring(brush.position, paint, 6.0, 40.0, 0.3, 4.0)
-	await _wait(0.2)
-	for p: PlayerState in pair:
-		var box: Rect2 = table._node_of(p).get_global_rect()
-		var start := box.position + Vector2(-6, 2)
-		var end := box.position + Vector2(box.size.x + 6, 2)
-		var hop := brush.create_tween()
-		hop.tween_property(brush, "position", start, BRUSH_HOP / table._speed) \
-				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		hop.parallel().tween_property(brush, "rotation", -0.5, BRUSH_HOP / table._speed)
-		await _wait(BRUSH_HOP)
-		var stroke := StrokeFx.new()
-		stroke.tint = paint
-		stroke.from = start
-		stroke.to = end
-		add_child(stroke)
-		move_child(stroke, brush.get_index())
-		_snd("fx_brush")
-		var sweep := brush.create_tween().set_parallel()
-		sweep.tween_property(brush, "position", end, BRUSH_SWEEP / table._speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		sweep.tween_property(brush, "rotation", 0.25, BRUSH_SWEEP / table._speed)
-		sweep.tween_property(stroke, "progress", 1.0, BRUSH_SWEEP / table._speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		await _wait(BRUSH_SWEEP)
+	_paint_kit = {"palette": kit, "brush": brush, "actor": play.actor}
+	_snd("fx_paint_dip")
+	var open := kit.create_tween().set_parallel()
+	open.tween_property(kit, "scale", Vector2.ONE, 0.35 / table._speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	open.tween_property(kit, "rotation", 0.0, 0.35 / table._speed).from(-1.2)
+	open.tween_property(brush, "modulate:a", 1.0, 0.2 / table._speed).set_delay(0.2 / table._speed)
+	# Stirring, round and round the gobs, until the two are chosen.
+	brush.set_meta(&"stir", true)
+	await _wait(0.45)
+
+
+## The two a Monochrome chose (players_painted): the brush dives into this
+## round's colour, flies to each box dripping on the way and lays three
+## strokes across it, back and forth, with a flick of drops at the end; then
+## a thread of paint runs between the two boxes and the brush goes home. The
+## strokes soak away into the paint the status leaves running down the boxes.
+func paint_pair(d: Dictionary) -> void:
+	var speed: float = table._speed
+	var tint: Color = d.tint
+	var painter: PlayerState = d.painter
+	if _paint_kit.is_empty() or not is_instance_valid(_paint_kit.get("brush")):
+		_fx_painter_monochrome(d.play)
+		await _wait(0.4)
+	var kit: PaletteFx = _paint_kit.palette
+	var brush: BrushFx = _paint_kit.brush
+	brush.set_meta(&"stir", false)
+	# The dip: into the gob of this colour, and out loaded.
+	var gob: Vector2 = kit.position + kit.gob(Painter.PAINTS.find(tint))
+	brush.tint = tint
+	kit.dipped = Painter.PAINTS.find(tint)
+	var dip := brush.create_tween()
+	dip.tween_property(brush, "position", gob + Vector2(0, -26), 0.18 / speed)
+	dip.tween_property(brush, "position", gob, 0.12 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	dip.tween_property(brush, "position", gob + Vector2(0, -34), 0.2 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await _wait(0.3)
+	_snd("fx_paint_dip")
+	burst(gob, tint, 10, 120.0, 0.45, 420.0, 4.0)
+	await _wait(0.25)
+	dim(0.32, 1.0 + 2.2 * d.pair.size())
+	var strokes: Array = []
+	var boxes: Array[Rect2] = []
+	for p: PlayerState in d.pair:
+		var holder: Variant = table._node_of(p)
+		if holder == null:
+			continue
+		var box: Rect2 = holder.get_global_rect()
+		# A big panel (the viewer's own) is painted along its top only.
+		box = Rect2(box.position, Vector2(minf(box.size.x, 320.0), minf(box.size.y, 110.0)))
+		boxes.append(box)
+		await _brush_flight(brush, box.position + Vector2(-8, 14), tint)
+		for row: int in 3:
+			var y := box.size.y * (0.18 + 0.32 * row)
+			var left := box.position + Vector2(-6, y)
+			var right := box.position + Vector2(box.size.x + 6, y + 6.0 * (row - 1))
+			var from := left if row % 2 == 0 else right
+			var to := right if row % 2 == 0 else left
+			var stroke := StrokeFx.new()
+			stroke.thick = box.size.y * 0.36
+			stroke.tint = tint
+			stroke.from = from
+			stroke.to = to
+			add_child(stroke)
+			move_child(stroke, brush.get_index())
+			strokes.append(stroke)
+			_snd("fx_brush")
+			var sweep := brush.create_tween().set_parallel()
+			sweep.tween_property(brush, "position", to, 0.26 / speed).from(from).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			sweep.tween_property(brush, "rotation", 0.35 if row % 2 == 0 else -0.6, 0.26 / speed)
+			sweep.tween_property(stroke, "progress", 1.0, 0.26 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+			await _wait(0.27)
+		# The flick: drops thrown off the brush across the box.
+		_snd("fx_paint_flick")
+		var tip := brush.position
+		brush.create_tween().tween_property(brush, "rotation", -1.2, 0.08 / speed)
+		burst(tip, tint, 18, 260.0, 0.6, 520.0, 4.0)
+		burst(box.get_center(), tint.lightened(0.3), 8, 140.0, 0.4, 300.0, 6.0)
 		_snd("fx_splat")
-		burst(end, paint, 10, 150.0, 0.45, 420.0, 6.0)
-		var dry := stroke.create_tween()
-		dry.tween_interval(0.5 / table._speed)
-		dry.tween_property(stroke, "modulate:a", 0.0, 0.4 / table._speed)
-		dry.tween_callback(stroke.queue_free)
-	var home := brush.create_tween().set_parallel()
-	home.tween_property(brush, "position", _at(play.actor), BRUSH_HOP / table._speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	home.tween_property(brush, "modulate:a", 0.0, BRUSH_HOP / table._speed).set_delay(BRUSH_HOP * 0.4 / table._speed)
-	home.chain().tween_callback(brush.queue_free)
+		await _wait(0.3)
+	# The two are one colour now: a thread of paint runs from one to the other.
+	if boxes.size() == 2:
+		_snd("fx_paint_link")
+		stream(boxes[0].get_center(), boxes[1].get_center(), tint, 18, 0.55, 0.4)
+		stream(boxes[1].get_center(), boxes[0].get_center(), tint.lightened(0.25), 12, 0.55, 0.4)
+		await _wait(0.5)
+		for box: Rect2 in boxes:
+			ring(box.get_center(), tint, 10.0, 90.0, 0.4, 5.0)
+	for stroke: StrokeFx in strokes:
+		var soak := stroke.create_tween()
+		soak.tween_interval(0.3 / speed)
+		soak.tween_property(stroke, "modulate:a", 0.0, 0.5 / speed)
+		soak.tween_callback(stroke.queue_free)
+	await _brush_flight(brush, kit.position + Vector2(0, -14), tint)
+	drop_paint()
 	await _wait(0.2)
+
+
+## The brush on its way to `to`, in an arc, dripping `tint` as it goes.
+func _brush_flight(brush: BrushFx, to: Vector2, tint: Color) -> void:
+	var from := brush.position
+	var lift := clampf(from.distance_to(to) * 0.3, 40.0, 140.0)
+	# Never over the top of the screen: to the seats up there it dips instead.
+	if minf(from.y, to.y) - lift < 24.0:
+		lift = -lift * 0.6
+	var dripped := [0.0]
+	var time := clampf(from.distance_to(to) / 900.0, 0.25, 0.55)
+	brush.create_tween().tween_method(func(t: float) -> void:
+		brush.position = from.lerp(to, t) + Vector2(0, -lift * sin(t * PI))
+		brush.rotation = lerpf(-0.4, 0.3, t)
+		if t - dripped[0] > 0.12:
+			dripped[0] = t
+			burst(brush.position, tint, 1, 30.0, 0.7, 700.0, 4.0), 0.0, 1.0, time / table._speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await _wait(time)
+
+
+## Whether a Monochrome's palette is open, waiting for its two.
+func painting() -> bool:
+	return not _paint_kit.is_empty() and is_instance_valid(_paint_kit.get("palette"))
+
+
+func drop_paint() -> void:
+	for key: String in ["palette", "brush"]:
+		var node: Variant = _paint_kit.get(key)
+		if node != null and is_instance_valid(node):
+			var gone := (node as Control).create_tween()
+			gone.tween_property(node, "modulate:a", 0.0, 0.25 / table._speed)
+			gone.parallel().tween_property(node, "scale", Vector2.ONE * 0.3, 0.25 / table._speed)
+			gone.tween_callback((node as Node).queue_free)
+	_paint_kit = {}
 
 
 ## A painted player reached past the paint: a gob of their colour splashes
@@ -4259,6 +4353,10 @@ func _wait(seconds: float) -> void:
 func _wake() -> void:
 	set_process(true)
 
+
+## A Monochrome's palette and brush, open beside the Painter (see paint_pair):
+## {palette, brush, actor}, or empty.
+var _paint_kit: Dictionary = {}
 
 func _ready() -> void:
 	set_process(false)
@@ -7324,7 +7422,14 @@ class BrushFx extends Control:
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	func _process(_delta: float) -> void:
+	var _time := 0.0
+
+	func _process(delta: float) -> void:
+		_time += delta
+		# Stirring: little circles over the palette, while it waits.
+		if get_meta(&"stir", false):
+			rotation = 0.3 * sin(_time * 5.0)
+			position += Vector2(cos(_time * 5.0), sin(_time * 5.0)) * 0.6
 		queue_redraw()
 
 	func _draw() -> void:
@@ -7354,9 +7459,9 @@ class BrushFx extends Control:
 ## with ragged edges and the streaks of the bristles in it.
 class StrokeFx extends Control:
 	const CELL := 2.0
-	const THICK := 10.0
 
 	var tint := Color.WHITE
+	var thick := 10.0
 	var from := Vector2.ZERO
 	var to := Vector2.ZERO
 	var progress := 0.0:
@@ -7375,8 +7480,8 @@ class StrokeFx extends Control:
 		var along := 0.0
 		while along < length:
 			var ragged := 2.0 * floorf(1.5 * sin(along * 0.21) + 0.8 * sin(along * 0.57))
-			var top := -THICK / 2.0 + ragged * 0.5
-			var bottom := THICK / 2.0 + ragged
+			var top := -thick / 2.0 + ragged * 0.5
+			var bottom := thick / 2.0 + ragged
 			var across := top
 			while across < bottom:
 				var at := (from + way * along + side * across).snapped(Vector2(CELL, CELL))
@@ -7385,3 +7490,55 @@ class StrokeFx extends Control:
 				draw_rect(Rect2(at, Vector2(CELL, CELL)), ink)
 				across += CELL
 			along += CELL
+
+
+## The Painter's palette, small, held beside his box during a Monochrome: a
+## kidney of wood and the three gobs of paint, the one dipped into (`dipped`)
+## swirling. Drawn in cells around its middle.
+class PaletteFx extends Control:
+	const CELL := 2.0
+	const REACH := Vector2(38, 24)
+	const WOOD := [Color("6e4222"), Color("8f5a30"), Color("b07a44"), Color("cf9e60")]
+	const OUTLINE := Color("1b0f14")
+
+	var dipped := -1
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Where gob `i` sits, from the middle.
+	func gob(i: int) -> Vector2:
+		return [Vector2(-20, -6), Vector2(-4, -13), Vector2(13, -11), Vector2(-18, 8)][clampi(i, 0, 3)]
+
+	func _process(delta: float) -> void:
+		_time += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		var y := -REACH.y
+		while y <= REACH.y:
+			var x := -REACH.x
+			while x <= REACH.x:
+				var u := x / REACH.x
+				var v := y / REACH.y
+				var round_ := u * u + v * v
+				var hole := Vector2(x, y).distance_to(Vector2(20, 8))
+				if round_ <= 1.0 and hole > 5.0:
+					var ink: Color = OUTLINE if round_ > 0.86 or hole < 7.0 else WOOD[clampi(int((0.6 - u * 0.2 - v * 0.3) * WOOD.size()), 0, 3)]
+					draw_rect(Rect2(x, y, CELL, CELL), ink)
+				x += CELL
+			y += CELL
+		for i: int in Painter.PAINTS.size():
+			var paint: Color = Painter.PAINTS[i]
+			var r := 5.0 + (1.5 * sin(_time * 8.0) if i == dipped else 0.0)
+			var at := gob(i)
+			var gy := -r
+			while gy <= r:
+				var gx := -r
+				while gx <= r:
+					if Vector2(gx, gy).length() <= r:
+						var ink := paint.lightened(0.35) if gx + gy < -r * 0.6 else paint
+						draw_rect(Rect2((at + Vector2(gx, gy)).snapped(Vector2(CELL, CELL)), Vector2(CELL, CELL)), ink)
+					gx += CELL
+				gy += CELL

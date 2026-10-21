@@ -102,9 +102,10 @@ static func run() -> int:
 		"a disguised sold out trades the impostor, once": _disguised_sold_out,
 		"all is color: items sold, one bought, the shelf restocked after": _all_is_color,
 		"all is color: what was bought can't be sold in the same go": _all_is_color_fresh,
-		"monochrome: reaching outside the paint pays the painter": _monochrome.bind(false),
+		"monochrome: reaching outside the paint, the bank pays the painter": _monochrome.bind(false),
 		"monochrome: dealing with the partner costs nothing": _monochrome.bind(true),
-		"monochrome: the paint comes off after the wearer's next turn": _monochrome_wears_off,
+		"monochrome: the paint comes off after the later one's clean turn": _monochrome_wears_off,
+		"monochrome: a LIAR! is no reaching out": _monochrome_doubt,
 	}
 	var failed := 0
 	for title: String in scenes:
@@ -1415,17 +1416,21 @@ static func _all_is_color_fresh() -> String:
 	return "" if table.held(0) == [&"roulette", &"silencer"] and painter.coins == 7 else "holds %s, %d coins" % [table.held(0), painter.coins]
 
 
-## The Painter (player 0) paints players 1 and 2. On their turn, player 1
-## spikes player 0 (outside the paint: 4 coins to the Painter) or player 2
-## (`partner`: nothing).
+## The Painter (player 0) paints players 1 and 2, chosen after the doubt
+## window. On their turn, player 1 spikes player 0 (outside the paint: the
+## bank gives the Painter 4 coins) or player 2 (`partner`: nothing).
 static func _monochrome(partner: bool) -> String:
 	var table := Table.new(true, [&"painter"])
 	var engine := table.engine
 	var painter: PlayerState = engine.players[0]
 	var one: PlayerState = engine.players[1]
 	painter.cards = [&"painter", &"judge"]
-	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 1
+	# The pairs of [0, 1, 2]: [0, 1], [0, 2], [1, 2].
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 2
 	await engine.claim(painter, table.ability(&"painter.monochrome"))
+	var picks: Array = table.asked(0, Decision.Kind.PICK)
+	if picks.size() != 1 or picks[0].context.get("private", false):
+		return "the two were not chosen once, in the open"
 	if not one.has_status(&"painted") or not engine.players[2].has_status(&"painted"):
 		return "nobody was painted"
 	if one.statuses[&"painted"].partner != 2 or painter.has_status(&"painted"):
@@ -1436,33 +1441,70 @@ static func _monochrome(partner: bool) -> String:
 	table.puppets[1].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return aim
 	await engine.claim(one, table.ability(MICKEY_FINN))
 	var toll := 0 if partner else 4
-	if one.coins != 20 - toll or painter.coins != 20 + toll:
+	if one.coins != 20 or painter.coins != 20 + toll:
 		return "coins: %d / %d" % [one.coins, painter.coins]
-	return "" if one.has_status(&"painted") else "the paint came off"
+	if not one.has_status(&"painted"):
+		return "the paint came off"
+	# Nobody wears two coats: with only the Painter left unpainted, there is nobody to pair.
+	return "" if engine.claim_block_reason(painter, table.ability(&"painter.monochrome")) != "" else "offered with one left to paint"
 
 
+## Players 1 and 2 are painted. On player 1's turn the Painter (player 0)
+## claims a Mickey Finn on player 2 he can't back up, and player 1 calls LIAR!
+## on him: the Painter gets nothing for it.
+static func _monochrome_doubt() -> String:
+	var table := Table.new(false, [&"painter"])
+	var engine := table.engine
+	var painter: PlayerState = engine.players[0]
+	var one: PlayerState = engine.players[1]
+	painter.cards = [&"painter", &"judge"]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 2
+	await engine.claim(painter, table.ability(&"painter.monochrome"))
+	if not one.has_status(&"painted"):
+		return "nobody was painted"
+	engine.current = one
+	one.turn = {}
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[2]
+	table.puppets[1].answers[Decision.Kind.DOUBT] = func(_d: Decision) -> Variant: return &"coins"
+	await engine.claim(painter, table.ability(MICKEY_FINN))
+	if painter.morale != engine.config.start_morale - 1:
+		return "the lie was not caught"
+	return "" if painter.coins == 20 else "the painter got %d coins" % (painter.coins - 20)
+
+
+## The paint comes off the two only at the end of the later one's turn, once
+## both have played one, and only if that turn stayed inside the paint.
 static func _monochrome_wears_off() -> String:
 	var table := Table.new(true, [&"painter"])
 	var engine := table.engine
 	var painter: PlayerState = engine.players[0]
+	var one: PlayerState = engine.players[1]
 	painter.cards = [&"painter", &"judge"]
 	engine.turn_count = 5
 	# Himself and player 1, on his own turn.
 	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0
 	await engine.claim(painter, table.ability(&"painter.monochrome"))
-	if not painter.has_status(&"painted") or not engine.players[1].has_status(&"painted"):
+	if not painter.has_status(&"painted") or not one.has_status(&"painted"):
 		return "nobody was painted"
 	# The turn it was put on does not count.
 	await engine.fire(&"turn_ended", {"player": painter})
 	if not painter.has_status(&"painted"):
 		return "came off in the turn it was put on"
 	engine.turn_count = 6
-	await engine.fire(&"turn_ended", {"player": engine.players[1]})
-	if engine.players[1].has_status(&"painted"):
-		return "stayed on after the wearer's turn"
+	one.turn = {}
+	await engine.fire(&"turn_ended", {"player": one})
+	if not one.has_status(&"painted") or not painter.has_status(&"painted"):
+		return "came off before both had played"
+	# The painter's turn reached outside the paint: it stays.
 	engine.turn_count = 8
+	painter.turn = {"paint_tolled": [RefCounted.new()]}
 	await engine.fire(&"turn_ended", {"player": painter})
-	return "" if not painter.has_status(&"painted") else "stayed on the painter"
+	if not painter.has_status(&"painted"):
+		return "came off after a turn outside the paint"
+	engine.turn_count = 9
+	one.turn = {}
+	await engine.fire(&"turn_ended", {"player": one})
+	return "" if not painter.has_status(&"painted") and not one.has_status(&"painted") else "stayed after a clean turn"
 
 
 # --- the stage ------------------------------------------------------------------

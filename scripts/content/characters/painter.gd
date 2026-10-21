@@ -9,17 +9,21 @@ extends CharacterDef
 ## is once per turn, nothing bought in it can be sold again in the same go,
 ## and a slot emptied in it is only restocked once he is done.
 ##
-## Monochrome paints two players (he may be one of them) the same colour.
-## During their own turns they are only to deal with each other: anything a
-## painted player does on their turn that reaches somebody else costs them
-## TOLL coins, paid to the Painter (the bank makes up what they don't have),
-## and the paint stays. It comes off once its wearer's next turn is over.
+## Monochrome paints two players who are not painted yet (he may be one of
+## them) the same colour, chosen once the table has let the claim pass.
+## During their own turns they are only to deal with each other: whenever a
+## painted player reaches somebody else on their turn, the bank gives the
+## Painter TOLL coins, and the paint stays. It comes off the two of them once
+## both have played a turn in it, at the end of the later one's turn, and
+## only if that turn stayed inside the paint; if not, it waits for the next
+## clean turn of either.
 
 const PAINTED := &"painted"
 const TOLL := 4
 ## The paints, for the table only: nothing in the rules tells them apart.
-const PAINTS := [Color("4f8fe0"), Color("e877b8"), Color("f2cf3c")]
-const PAINT_NAMES := ["Blue", "Pink", "Yellow"]
+## Blue, pink and yellow; green only once those three are all on the table
+## (with eight players, four pairs can be painted at once).
+const PAINTS := [Color("4f8fe0"), Color("e877b8"), Color("f2cf3c"), Color("5fbf5a")]
 ## How many trades one All Is Color takes at most (a bot that won't stop).
 const MAX_TRADES := 24
 
@@ -33,7 +37,7 @@ func _init() -> void:
 	status_defs = {
 		PAINTED: {
 			"name": "Painted",
-			"description": "Painted the same colour as another player. On their own turn they are to deal only with that player: whatever they do that reaches anyone else pays the Painter %d coins. It comes off when this player's next turn ends.", "args": [TOLL],
+			"description": "Painted the same colour as another player. On their own turn they are to deal only with that player: whenever they reach anyone else, the bank gives the Painter %d coins. It comes off both once each has played a turn, if the last of those turns stayed inside the paint.", "args": [TOLL],
 			"color": PAINTS[0],
 			# Bots steer clear of anyone else on their own turn (BotController._target).
 			"ai_stray": 0.12,
@@ -51,11 +55,17 @@ static func partner_of(player: PlayerState, engine: GameEngine) -> PlayerState:
 func on_event(event: GameEvent, engine: GameEngine) -> void:
 	match event.type:
 		&"turn_ended":
-			var wearer: PlayerState = event.data.player
-			# Painted during this very turn (by themselves, or on the
-			# Painter's turn): it lasts through their next one.
-			if wearer.alive and wearer.has_status(PAINTED) and wearer.statuses[PAINTED].get("planted", 0) < engine.turn_count:
-				await engine.remove_status(wearer, PAINTED)
+			await _wear(event.data.player, engine)
+		&"doubt_declared":
+			# A LIAR! is no reaching out: neither the call nor what comes of
+			# it counts, until the claim it was called on is over.
+			var doubter: PlayerState = event.data.doubter
+			if doubter == engine.current:
+				doubter.turn["paint_doubting"] = event.data.play
+		&"claim_resolved":
+			var current := engine.current
+			if current != null and current.turn.get("paint_doubting") == event.data.play:
+				current.turn.erase("paint_doubting")
 		&"player_eliminated":
 			var dead: PlayerState = event.data.player
 			for p: PlayerState in engine.players:
@@ -63,6 +73,26 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 					await engine.remove_status(p, PAINTED)
 		_:
 			await _check_toll(event, engine)
+
+
+## `wearer`'s turn is over. A turn played in the paint counts (not the one it
+## was put on in); once both of the pair have played one, it comes off the
+## two of them, unless this turn reached outside it.
+func _wear(wearer: PlayerState, engine: GameEngine) -> void:
+	if engine.over or not wearer.alive or not wearer.has_status(PAINTED):
+		return
+	var status: Dictionary = wearer.statuses[PAINTED]
+	if status.get("planted", 0) >= engine.turn_count:
+		return
+	status["played"] = true
+	var partner := partner_of(wearer, engine)
+	var waiting: bool = partner != null and partner.alive and partner.has_status(PAINTED) \
+			and not partner.statuses[PAINTED].get("played", false)
+	if waiting or not wearer.turn.get("paint_tolled", []).is_empty():
+		return
+	await engine.remove_status(wearer, PAINTED)
+	if partner != null and partner.alive and partner.has_status(PAINTED):
+		await engine.remove_status(partner, PAINTED)
 
 
 ## Charges the toll if `event` is a painted player, on their own turn,
@@ -76,6 +106,9 @@ func _check_toll(event: GameEvent, engine: GameEngine) -> void:
 	var reached := _reached(event, doer)
 	if reached.is_empty():
 		return
+	# In the middle of a LIAR! of theirs only what they play themselves counts.
+	if doer.turn.has("paint_doubting") and event.type != &"play_effect":
+		return
 	var partner := partner_of(doer, engine)
 	if not reached.any(func(p: PlayerState) -> bool: return p != doer and p != partner):
 		return
@@ -86,13 +119,11 @@ func _check_toll(event: GameEvent, engine: GameEngine) -> void:
 	if tolled.has(key):
 		return
 	tolled.append(key)
+	# The Painter himself out of his own paint: there is nobody to pay him.
 	var painter := engine.player_by_id(doer.statuses[PAINTED].get("by", -1))
 	if painter == null or not painter.alive or painter == doer:
 		return
 	await engine.note(doer, "%s steps outside the paint.", false, &"paint_toll")
-	var owed := mini(TOLL, maxi(doer.coins, 0))
-	if owed > 0:
-		await engine.change_coins(doer, -owed, &"paint_toll")
 	if not engine.over and painter.alive:
 		await engine.gain_coins(painter, TOLL, &"paint")
 
@@ -246,57 +277,62 @@ class Monochrome extends Ability:
 	func _init() -> void:
 		id = &"painter.monochrome"
 		display_name = "Monochrome"
-		describe("Paint two players the same colour (you may be one of them). On their own turns they can only deal with each other: whatever they do that reaches anyone else pays you %d coins, and the paint stays. It comes off at the end of each one's next turn.", [TOLL])
+		describe("Once the table lets this pass, choose two players who are not painted yet (you may be one of them) and paint them the same colour. On their own turns they can only deal with each other: whenever they reach anyone else, the bank gives you %d coins, and the paint stays. It comes off both once each has played a turn, if the last of those turns stayed inside the paint.", [TOLL])
 		on_turn = true
 		inflicts = true
 
 	func can_use(_player: PlayerState, engine: GameEngine) -> String:
-		return Loc.t("Not enough players") if engine.alive_players().size() < 3 else ""
+		return Loc.t("Not enough players to paint") if unpainted(engine).size() < 2 else ""
 
-	# Both picked before the claim is announced, the Painter among them if he likes.
-	func prepare(play: Play) -> bool:
-		var engine := play.engine
-		var pair := []
-		for nth: int in 2:
-			var candidates := engine.seat_order(play.actor).filter(func(p: PlayerState) -> bool: return not pair.has(p))
-			var d := Decision.new(Decision.Kind.PICK, play.actor)
-			d.prompt = Loc.t("Who gets the first coat?") if nth == 0 else Loc.t("Who is painted the same colour as %s?") % pair[0].name
-			d.cancellable = true
-			d.options = candidates.map(func(p: PlayerState) -> Dictionary: return {
-				"label": Loc.t("Yourself") if p == play.actor else p.name, "player": p,
-				"description": "",
-			})
-			d.context = {
-				"play": play,
-				"weights": candidates.map(func(p: PlayerState) -> float: return _ai_pick(play, p)),
-			}
-			var index: int = await engine.ask(d)
-			if index < 0 or index >= candidates.size():
-				return false
-			pair.append(candidates[index])
-		play.params["pair"] = pair.map(func(p: PlayerState) -> int: return p.id)
-		# The table points at whoever of them is not the Painter.
-		play.mark = pair[0] if pair[0] != play.actor else pair[1]
-		return true
+	## Who can still be painted: nobody wears two coats.
+	static func unpainted(engine: GameEngine) -> Array:
+		return engine.alive_players().filter(func(p: PlayerState) -> bool: return not p.has_status(PAINTED))
 
+	# The two are chosen now, once nobody called LIAR!: one question whose
+	# options are the pairs, picked on the boxes of the table (table._prompt_paint).
 	func resolve(play: Play) -> void:
 		var engine := play.engine
-		var pair: Array = play.params.get("pair", []).map(func(id: int) -> PlayerState: return engine.player_by_id(id))
-		if pair.size() != 2 or pair.any(func(p: PlayerState) -> bool: return p == null or not p.alive):
+		var candidates := engine.seat_order(play.actor).filter(func(p: PlayerState) -> bool: return not p.has_status(PAINTED))
+		if candidates.size() < 2:
 			return
-		# A fresh coat takes the old one off, and off whoever shared it.
-		for p: PlayerState in pair:
-			var old := partner(p, engine)
-			if old != null and old.alive and not pair.has(old) and old.statuses.get(PAINTED, {}).get("partner", -1) == p.id:
-				await engine.remove_status(old, PAINTED)
-		var paint: int = engine.turn_count % PAINTS.size()
+		var paint := _free_paint(engine)
+		var pairs: Array = []
+		for i: int in candidates.size():
+			for j: int in range(i + 1, candidates.size()):
+				pairs.append([candidates[i], candidates[j]])
+		var d := Decision.new(Decision.Kind.PICK, play.actor)
+		d.prompt = Loc.t("Monochrome: paint two players the same colour")
+		d.options = pairs.map(func(pair: Array) -> Dictionary: return {
+			"label": "%s + %s" % [pair[0].name, pair[1].name], "pair": pair, "description": "",
+		})
+		d.context = {
+			"play": play, "look": &"paint", "candidates": candidates, "tint": PAINTS[paint],
+			"painted": engine.seat_order(play.actor).filter(func(p: PlayerState) -> bool: return p.has_status(PAINTED)),
+			"weights": pairs.map(func(pair: Array) -> float: return _ai_pick(play, pair[0]) * _ai_pick(play, pair[1])),
+		}
+		var index: int = await engine.ask(d)
+		if index < 0 or index >= pairs.size():
+			index = engine.rng.randi_range(0, pairs.size() - 1)
+		var pair: Array = pairs[index]
+		if engine.over or pair.any(func(p: PlayerState) -> bool: return not p.alive or p.has_status(PAINTED)):
+			return
+		play.mark = pair[0] if pair[0] != play.actor else pair[1]
+		await engine.fire(&"players_painted", {"play": play, "painter": play.actor, "pair": pair, "tint": PAINTS[paint]})
 		for i: int in 2:
 			if engine.over or not pair[i].alive:
 				return
 			await engine.add_status(pair[i], PAINTED, {
 				"by": play.actor.id, "partner": pair[1 - i].id, "planted": engine.turn_count,
-				"tint": PAINTS[paint], "paint": paint,
+				"tint": PAINTS[paint], "paint": paint, "played": false,
 			})
+
+	## The first of blue, pink and yellow nobody wears; green if all three are on.
+	static func _free_paint(engine: GameEngine) -> int:
+		var worn := engine.alive_players().map(func(p: PlayerState) -> int: return p.statuses.get(PAINTED, {}).get("paint", -1))
+		for i: int in 3:
+			if not worn.has(i):
+				return i
+		return 3
 
 	## See partner_of.
 	static func partner(player: PlayerState, engine: GameEngine) -> PlayerState:

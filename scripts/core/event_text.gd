@@ -84,6 +84,14 @@ static func describe(e: GameEvent) -> String:
 			if d.ducked:
 				return Loc.t("%s's gun was empty: %s ducked for nothing.") % [d.shooter.name, d.target.name]
 			return Loc.t("%s's gun was empty.") % d.shooter.name
+		&"duel_settled":
+			if d.duelist_strikes and d.rival_strikes:
+				return Loc.t("%s and %s both attack: the swords break.") % [d.duelist.name, d.rival.name]
+			if d.duelist_strikes or d.rival_strikes:
+				var striker: PlayerState = d.duelist if d.duelist_strikes else d.rival
+				var struck: PlayerState = d.rival if d.duelist_strikes else d.duelist
+				return Loc.t("%s attacks while %s contributes.") % [striker.name, struck.name]
+			return Loc.t("%s and %s both contribute.") % [d.duelist.name, d.rival.name]
 		&"coin_flipped":
 			return Loc.t("%s flips a coin: heads" if d.heads else "%s flips a coin: tails") % d.player.name + ("!" if d.won else ".")
 		&"note":
@@ -141,6 +149,8 @@ static func _coins(d: Dictionary) -> String:
 			return ""
 		&"paint":
 			return Loc.t("%s collects %d for the paint.") % [who, d.delta]
+		&"duel":
+			return Loc.t("%s collects %d from the dilemma.") % [who, d.delta]
 	if d.delta > 0:
 		return Loc.t("%s gains %d coins.") % [who, d.delta]
 	return Loc.t("%s pays %d coins.") % [who, -d.delta]

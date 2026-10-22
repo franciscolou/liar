@@ -174,14 +174,19 @@ func _reaction_window(event: GameEvent) -> void:
 	await _contested_window(event)
 	for p in seat_order(current):
 		# Asked again for as long as they back out of what they picked (a
-		# target, a card to give up): that is a step back, not a pass.
+		# target, a card to give up): that is a step back, not a pass. And
+		# asked again after each reaction that went through, with what they
+		# have not played on this event yet: one blow may be answered by two
+		# characters (a kill drained by the Necromancer and followed up by
+		# the Assassin).
+		var played: Array = []  # the abilities and item kinds already played on it
 		var again := true
 		while again:
 			again = false
 			if over or event.cancelled:
 				return
 			var options := reaction_options(p, event).filter(func(option: Dictionary) -> bool:
-				return not _contested(option))
+				return not _contested(option) and not played.has(_played_as(option)))
 			if options.is_empty():
 				break
 			var choice: Variant = null
@@ -209,7 +214,17 @@ func _reaction_window(event: GameEvent) -> void:
 			# Only if they did back out of something: a reaction that came to
 			# nothing without asking them anything would be offered forever.
 			var asks := _asks
-			again = not await _react(p, choice, event) and asked and not p.is_bot and _asks != asks
+			if await _react(p, choice, event):
+				played.append(_played_as(choice))
+				# What was played for them is the whole of it.
+				again = event.data.get("auto") != p
+			else:
+				again = asked and not p.is_bot and _asks != asks
+
+
+## What reaction `option` plays, to tell it from the others offered.
+func _played_as(option: Dictionary) -> Variant:
+	return option.ability if option.kind == &"ability" else option.item.def
 
 
 ## `player` answers `event` with reaction option `choice`. False if they

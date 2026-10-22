@@ -26,6 +26,7 @@ const CosmosPick := preload("res://scripts/ui/cosmos_pick.gd")
 const WandPick := preload("res://scripts/ui/wand_pick.gd")
 const DollPick := preload("res://scripts/ui/doll_pick.gd")
 const GunPick := preload("res://scripts/ui/gun_pick.gd")
+const DilemmaPick := preload("res://scripts/ui/dilemma_pick.gd")
 const GuardPick := preload("res://scripts/ui/guard_pick.gd")
 const PalettePick := preload("res://scripts/ui/palette_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
@@ -36,6 +37,7 @@ const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
 const Painter := preload("res://scripts/content/characters/painter.gd")
+const Sounds := preload("res://scripts/ui/sounds.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const END_SCENE := "res://scenes/end.tscn"
 ## How slow time runs while the blow that ends the match lands (see
@@ -46,7 +48,6 @@ const MUSIC_DROP := 0.45
 const FADE_TO_BLACK := 2.0
 ## Loaded up front; the sound of each item ("item_<id>") is loaded on first use.
 const SOUNDS := ["doubt", "damage", "breaking", "spend", "coin_1", "coin_2", "coin_3", "card_draw", "truth", "lie", "cancel", "heal", "item_get", "item_use"]
-const SOUND_DIR := "res://assets/sounds/"
 ## Different clinks of a coin, played in turn so a pile does not sound like one note.
 const COIN_SOUNDS := 3
 ## Most coins shown (and heard) flying for one change of coins.
@@ -69,6 +70,8 @@ const COIN_FLIGHT := 0.42
 const COIN_STAGGER := 0.11
 ## The Voodooist's dolls at work: see PlayFx.curse_flush.
 const PUPPET_STRINGS := &"voodooist.puppet_strings"
+## The Duelist's "Berserk": its Morale and the items it breaks have their own look.
+const BERSERK := &"duelist.berserk"
 ## The Clown's gun: what it costs stays down until it is shown (_holds_round).
 const CLOWN_BANG := &"clown.bang"
 ## The item whose use is staged as a spin of the cylinder (_anim_roulette).
@@ -1946,6 +1949,17 @@ func _open_pick(d: Decision) -> void:
 		_offer_aside(gun)
 		_play_sfx("item_roulette_cock")
 		return
+	if d.context.get("look") == &"dilemma":
+		# The Duelist's sword between the two answers (see dilemma_pick.gd).
+		UI.clear(_modal)
+		var dilemma := DilemmaPick.new()
+		dilemma.setup(d)
+		dilemma.picked.connect(_answer)
+		dilemma.sounded.connect(_play_sfx)
+		_modal.add_child(dilemma)
+		_offer_aside(dilemma)
+		_play_sfx("fx_sword_draw")
+		return
 	if d.context.get("look") == &"guard":
 		# The guards stand under what is coming (see guard_pick.gd).
 		UI.clear(_modal)
@@ -3206,6 +3220,9 @@ func present(e: GameEvent) -> void:
 			if healed != null and _play_fx.releasing(d.player):
 				# Out of the chains of an Entropy.
 				await _play_fx.release_morale(d.player, healed.heart_spot(d.player.morale - 1))
+			elif healed != null and _play_fx.draining(d.player):
+				# Out of the soul a Drain took.
+				await _play_fx.drain_morale(d.player, healed.heart_spot(d.player.morale - 1))
 			_play_sfx("heal")
 			_float(Loc.t("+%d MORALE") % d.amount, _anchor(d.player), UI.GREEN, 22)
 			await _wait(0.4)
@@ -3266,6 +3283,8 @@ func present(e: GameEvent) -> void:
 			await _play_fx.cards_binned(d)
 		&"coin_flipped":
 			await _play_fx.coin_flip(d.player, d.heads, d.won)
+		&"duel_settled":
+			await _play_fx.duel_clash(d)
 		&"gun_fired":
 			await _play_fx.gun_fired(d)
 			# A loaded gun spent the round put down for it.
@@ -3311,6 +3330,9 @@ func present(e: GameEvent) -> void:
 				await _play_fx.doll_missed(d.owner, _item_spot(d.owner, 0))
 			elif d.how == &"steal":
 				await _play_fx.rope_missed(d.by, _item_spot(d.owner, 0))
+			elif _play_fx.berserking():
+				# A Berserk: the sword goes through where they were, and on.
+				await _play_fx.sword_missed(_item_spot(d.owner, 0))
 			elif _play_fx.bombing():
 				# A Demolition: the bomb is thrown all the same, finds nothing
 				# to blow up and goes on bouncing off the table.
@@ -3790,6 +3812,17 @@ func _render_stage() -> void:
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	description.custom_minimum_size = Vector2(300, 0)
 	text.add_child(description)
+	_fit_stage.call_deferred()
+
+
+## A container only ever grows: the stage is brought back to what the play
+## on it needs (a long description before would leave it that tall), keeping
+## its top where it is and its middle on the middle of the table.
+func _fit_stage() -> void:
+	if UI.touch:
+		return
+	_stage.reset_size()
+	_stage.position.x = roundf(576.0 - _stage.size.x / 2.0)
 
 
 ## Touch mode: there is no room for the description between the row of seats
@@ -4209,6 +4242,10 @@ func _anim_morale_spent(d: Dictionary) -> void:
 		var def: ItemDef = play.params.item
 		await _play_fx.spaghettify(p, box.heart_spot(p.morale), UI.tex(def.texture_path), "+ %s" % def.display_name.to_upper())
 		return
+	if play is Play and play.source.id == BERSERK and _play_fx.berserking():
+		# The fury breaks loose with the heart, and the sword with it.
+		await _play_fx.berserk_spent(p, box.heart_spot(p.morale) if box != null else _anchor(p))
+		return
 	_play_sfx("spend")
 	_float(Loc.t("-%d MORALE") % d.amount, _anchor(p), UI.PURPLE.lightened(0.3), 22)
 	await _wait(0.5)
@@ -4458,6 +4495,15 @@ func _anim_item_gained(d: Dictionary) -> void:
 
 
 func _anim_item_broken(d: Dictionary) -> void:
+	if _play_fx.berserking():
+		# The Duelist's "Berserk": the sword goes through it.
+		var pierced: Variant = _node_of(d.player)
+		var through := func() -> void:
+			if pierced != null and is_instance_valid(pierced):
+				pierced.sync()
+		await _play_fx.item_pierced(UI.tex(d.item.def.texture_path), _item_spot(d.player, d.get("index", 0)),
+				ItemView.BASE * (0.8 if d.player == viewer else 0.4), through)
+		return
 	if _play_fx.bombing():
 		# The Bomber's "Demolition": the bomb rolls to it and takes it along.
 		var held: Variant = _node_of(d.player)
@@ -4938,13 +4984,17 @@ func _resume_time(seconds := 0.5) -> void:
 	_glide_time(1.0, seconds)
 
 
-## Takes the pace of the game to `pace` over `seconds` of real time.
-func _glide_time(pace: float, seconds: float) -> void:
+## Takes the pace of the game to `pace` over `seconds` of real time. With
+## `sound` false only what moves is slowed: the sounds keep their own pace
+## (a blow in slow motion, see PlayFx._slow_down).
+func _glide_time(pace: float, seconds: float, sound := true) -> void:
 	if _time_glide != null:
 		_time_glide.kill()
 	_time_glide = create_tween()
 	_time_glide.set_ignore_time_scale(true)
-	_time_glide.tween_method(_set_time, Engine.time_scale, pace, seconds)
+	if not sound:
+		AudioServer.playback_speed_scale = 1.0
+	_time_glide.tween_method(_set_time if sound else _set_motion, Engine.time_scale, pace, seconds)
 
 
 ## Slows (or restores) everything that moves and everything that sounds:
@@ -4952,6 +5002,11 @@ func _glide_time(pace: float, seconds: float) -> void:
 func _set_time(pace: float) -> void:
 	Engine.time_scale = pace
 	AudioServer.playback_speed_scale = pace
+
+
+## Slows (or restores) what moves and nothing else.
+func _set_motion(pace: float) -> void:
+	Engine.time_scale = pace
 
 
 # --- small fx helpers ---------------------------------------------------------
@@ -4974,20 +5029,12 @@ func _play_sfx_later(sound: String, delay: float) -> void:
 
 
 func _load_sfx(sound: String) -> AudioStreamPlayer:
-	var stream: AudioStream = null
-	for extension: String in ["wav", "mp3"]:
-		var path := "%s%s.%s" % [SOUND_DIR, sound, extension]
-		if ResourceLoader.exists(path):
-			stream = load(path)
-		elif extension == "wav" and FileAccess.file_exists(path):
-			# Not imported yet (the editor has not rescanned): read the file directly.
-			stream = AudioStreamWAV.load_from_file(path)
-		if stream != null:
-			break
+	var stream := Sounds.stream(sound)
 	var player: AudioStreamPlayer = null
 	if stream != null:
 		player = AudioStreamPlayer.new()
 		player.stream = stream
+		player.volume_db = Sounds.level(sound)
 		player.bus = Settings.SFX_BUS
 		# Quick repeats (coins) ring out instead of cutting each other off.
 		player.max_polyphony = 4

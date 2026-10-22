@@ -16,7 +16,7 @@ signal revealed
 ## The big paintings the cards were cut from. A character without one shows
 ## the art of its card, with no frame around it.
 const PORTRAIT_DIR := "res://assets/cards/portraits/"
-const SOUND := "res://assets/sounds/mirror_shatter.wav"
+const SOUND := "res://assets/sounds/ui/mirror_shatter.wav"
 ## Seconds: the dark before anything, the title coming up, the wait with
 ## only the title on the screen, the crack running to the edges and the
 ## pictures coming up with it.

@@ -1,5 +1,5 @@
-"""Cuts the recorded sounds in assets/sounds/*.mp3 down to the effects the
-game plays, as assets/sounds/*.wav (the synthesized ones are gen_sfx.py's).
+"""Cuts the recorded sounds in assets/sounds/**/*.mp3 down to the effects the
+game plays, as .wav files next to them (the synthesized ones are gen_sfx.py's).
 
 Needs an MP3 decoder: `pip install miniaudio`, then
 `python3 tools/cut_sfx.py [name ...]` (no names: all).
@@ -18,10 +18,21 @@ TAU = 2.0 * math.pi
 OUT = os.path.join(os.path.dirname(__file__), "..", "assets", "sounds")
 
 
+def where(name, extension):
+    """Where `name`.`extension` lives: the sounds sit in a folder per character
+    or concept under assets/sounds (the shared ones at the root). A sound that
+    is not there yet starts at the root; move it to its folder."""
+    file = name + "." + extension
+    for folder, _, files in os.walk(OUT):
+        if file in files:
+            return os.path.join(folder, file)
+    return os.path.join(OUT, file)
+
+
 def clip(name, start, end, fade_in=0.005, fade_out=0.05, speed=1.0):
     """The stretch of `name`.mp3 from `start` to `end` seconds, faded at both
     ends and with its loudest sample at 1. `speed` plays it faster (and higher)."""
-    decoded = miniaudio.decode_file(os.path.join(OUT, name + ".mp3"), nchannels=1, sample_rate=RATE,
+    decoded = miniaudio.decode_file(where(name, "mp3"), nchannels=1, sample_rate=RATE,
             output_format=miniaudio.SampleFormat.SIGNED16)
     cut = [s / 32768.0 for s in decoded.samples[int(start * RATE):int(end * RATE)]]
     if speed != 1.0:
@@ -187,7 +198,7 @@ def main():
         samples = SOUNDS[name]()
         top = max(abs(s) for s in samples) or 1.0
         gain = PEAK[name] / top
-        path = os.path.join(OUT, name + ".wav")
+        path = where(name, "wav")
         with wave.open(path, "wb") as f:
             f.setnchannels(1)
             f.setsampwidth(2)

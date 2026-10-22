@@ -191,6 +191,18 @@ const ICONS := {
 		"ooooooooo",
 		".o.....o.",
 	],
+	# A skull with its eyes alight.
+	&"necromancer": [
+		"..ooooo..",
+		".o#####o.",
+		"o#######o",
+		"o#gg#gg#o",
+		"o#gg#gg#o",
+		".o##o##o.",
+		"..o###o..",
+		"..#o#o#..",
+		"...ooo...",
+	],
 	# A palette with its three paints.
 	&"painter": [
 		"..oooo...",
@@ -202,6 +214,18 @@ const ICONS := {
 		".o##o....",
 		"..ooo....",
 		".........",
+	],
+	# Two swords crossed.
+	&"duelist": [
+		"+.......+",
+		".+.....+.",
+		"..+...+..",
+		"...+.+...",
+		"....+....",
+		"...+.+...",
+		".oo...oo.",
+		".#o...o#.",
+		"#.......#",
 	],
 	# The sheriff's star.
 	&"sheriff": [
@@ -269,6 +293,8 @@ const INKS := {
 	&"magician": {"o": Color("8a8a98"), "#": Color("2a2a34"), "r": Color("c8302a")},
 	&"mercenary": {"o": Color("e85a3a"), "#": Color("ffd0a0")},
 	&"mythomaniac": {"o": Color("2a2a30"), "#": Color("7a7e8a"), "+": Color("e6bc4c"), "-": Color("4a4e58")},
+	&"duelist": {"+": Color("dfe6f0"), "o": Color("e6bc4c"), "#": Color("8a1e24")},
+	&"necromancer": {"o": Color("6e6852"), "#": Color("e8e0c8"), "g": Color("7dff9a")},
 	&"painter": {"o": Color("3a2410"), "#": Color("b07a44"), "b": Color("4f8fe0"), "p": Color("e877b8"), "y": Color("f2cf3c")},
 	&"sheriff": {"#": Color("e6bc4c"), "+": Color("fff0b0")},
 	&"spy": {"o": Color("8a8a98"), "#": Color("2e2c34"), "r": Color("8a2a2a")},
@@ -283,7 +309,7 @@ const RIMS := {
 	&"entity": Color("9a62c4"), &"gambler": Color("c8302a"), &"gravedigger": Color("8a8a7a"),
 	&"heir": Color("5fd0f0"), &"impostor": Color("8e4fb5"), &"judge": Color("e6bc4c"),
 	&"magician": Color("c8302a"), &"mercenary": Color("e85a3a"), &"mythomaniac": Color("e6bc4c"),
-	&"painter": Color("e877b8"), &"sheriff": Color("e6bc4c"), &"spy": Color("8a8a98"),
+	&"duelist": Color("b8322e"), &"necromancer": Color("3fbf6a"), &"painter": Color("e877b8"), &"sheriff": Color("e6bc4c"), &"spy": Color("8a8a98"),
 	&"vagabond": Color("a8743c"), &"voodooist": Color("8e4fb5"),
 }
 

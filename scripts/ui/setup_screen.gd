@@ -18,6 +18,8 @@ const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
 const Desk := preload("res://scripts/ui/noir_desk.gd")
 const TouchMode := preload("res://scripts/ui/touch_mode.gd")
+const Sounds := preload("res://scripts/ui/sounds.gd")
+const LogView := preload("res://scripts/ui/log_view.gd")
 const ROOM_SCENE := "res://scenes/room.tscn"
 ## Width of the character grid, and the most cards it shows in a single row.
 const GRID_WIDTH := 664.0
@@ -176,6 +178,12 @@ var _random := true
 var _picked: Array = []
 var _items_on: Dictionary = {}
 var _cards: Dictionary = {}  # character id -> CardView
+## A press on a character card, held (desktop): the button, the card it began
+## on, and whether it has moved on to other cards (a sweep: the left button
+## puts every card it passes in the match, the right one takes them out).
+var _sweep_button := MOUSE_BUTTON_NONE
+var _sweep_from: StringName = &""
+var _sweeping := false
 var _item_views: Dictionary = {}
 var _refreshers: Array = []  # Callables that redraw a stepper value
 var _mode_random: Button
@@ -891,26 +899,294 @@ func _build_rules() -> void:
 	_on_paper = false
 
 
-## The house rules, one stepper to a line, into `box`.
+## The house rules, one to a line, into `box`, written like the lines of a
+## ledger: a short name, a dotted leader and the value in a column of its own
+## on the right, between two ink arrows. Where a picture says it better the
+## number is the picture: Morale is hearts picked like a rating (with the
+## starting coins beside them, as the table shows a player), and the shop is
+## its slots.
 func _add_rules(box: Container) -> void:
-	box.add_child(_stepper("Starting Morale", "Lose it all and you are out.",
-			func(): return _config.start_morale, func(v): _config.start_morale = v, 1, 5))
-	box.add_child(_stepper("Starting coins", "",
-			func(): return _config.start_coins, func(v): _config.start_coins = v, 0, 10))
-	box.add_child(_stepper("Income per turn", "",
-			func(): return _config.income, func(v): _config.income = v, 0, 5))
-	box.add_child(_stepper("Cost of a wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.",
-			func(): return _config.doubt_cost, func(v): _config.doubt_cost = v, 0, 6))
-	box.add_child(_stepper("Reward for a right LIAR!", "Coins you gain when you doubt someone who was lying.",
-			func(): return _config.doubt_reward, func(v): _config.doubt_reward = v, 0, 6))
-	box.add_child(_stepper("Turn timer", "How long each player has for their turn. When it runs out, the turn ends. The clock is the outline round the player's box, and it only runs while the table is waiting for them.",
-			_turn_time_index, func(v): _config.turn_seconds = TURN_TIMES[v],
-			0, TURN_TIMES.size() - 1, false, 1, "%s", TURN_TIME_NAMES))
-	box.add_child(_stepper("Shop slots", "",
-			func(): return _config.shop_slots, func(v): _config.shop_slots = v, 1, 4))
-	box.add_child(_stepper("Animation speed", "",
-			_anim_speed_index, func(v): _config.anim_speed = ANIM_SPEEDS[v] / 100.0,
-			0, ANIM_SPEEDS.size() - 1, false, 1, "%d%%", ANIM_SPEEDS))
+	var start := _rule_row("Start with", "")
+	var hearts := _pips(5, Vector2(9, 9) * (3.0 if UI.touch else 2.0), 2.0, _paint_heart,
+			func(): return _config.start_morale - 1, func(v): _config.start_morale = v + 1)
+	TipLayer.attach(hearts, func() -> String:
+		return "%s: %d. %s" % [Loc.t("Starting Morale"), _config.start_morale, Loc.t("Lose it all and you are out.")])
+	start.add_child(hearts)
+	start.add_child(_rule_spinner("Starting coins", func(): return _config.start_coins,
+			func(v): _config.start_coins = v, 0, 10, func(v: int) -> Variant: return str(v), Desk.INK, true))
+	box.add_child(start)
+	var income := _rule_row("Income", "Coins everyone gains at the start of each of their turns.")
+	income.add_child(_rule_spinner("", func(): return _config.income,
+			func(v): _config.income = v, 0, 5, func(v: int) -> Variant: return "+%d" % v, Desk.INK_GREEN, true, true))
+	box.add_child(income)
+	var wrong := _rule_row("Wrong LIAR!", "Coins you lose when you doubt someone who was telling the truth.")
+	wrong.add_child(_rule_spinner("", func(): return _config.doubt_cost,
+			func(v): _config.doubt_cost = v, 0, 6, func(v: int) -> Variant: return "-%d" % v, Desk.INK_RED, true))
+	box.add_child(wrong)
+	var right := _rule_row("Right LIAR!", "Coins you gain when you doubt someone who was lying.")
+	right.add_child(_rule_spinner("", func(): return _config.doubt_reward,
+			func(v): _config.doubt_reward = v, 0, 6, func(v: int) -> Variant: return "+%d" % v, Desk.INK_GREEN, true))
+	box.add_child(right)
+	# No clock at all comes after the longest, not before the shortest.
+	var marks := TURN_TIMES.size()
+	var timer := _rule_row("Turn timer", "How long each player has for their turn. When it runs out, the turn ends. The clock is the outline round the player's box, and it only runs while the table is waiting for them.")
+	timer.add_child(_rule_spinner("", func(): return (_turn_time_index() + marks - 1) % marks,
+			func(v): _config.turn_seconds = TURN_TIMES[(v + 1) % marks], 0, marks - 1,
+			func(v: int) -> Variant: return TURN_TIME_NAMES[(v + 1) % marks], Desk.INK))
+	box.add_child(timer)
+	var slots := _rule_row("Shop slots", "")
+	var shelf := _pips(4, Vector2(16, 16) * _rule_scale(), 4.0, _paint_slot,
+			func(): return _config.shop_slots - 1, func(v): _config.shop_slots = v + 1)
+	TipLayer.attach(shelf, func() -> String:
+		return Loc.t("%d items on the shelf of the shop, besides the ones always on sale.") % _config.shop_slots)
+	slots.add_child(_rule_column(shelf))
+	box.add_child(slots)
+	var speed := _rule_row("Animation speed", "")
+	speed.add_child(_rule_spinner("", _anim_speed_index, func(v): _config.anim_speed = ANIM_SPEEDS[v] / 100.0,
+			0, ANIM_SPEEDS.size() - 1, func(v: int) -> Variant: return "%d%%" % ANIM_SPEEDS[v], Desk.INK))
+	box.add_child(speed)
+
+
+func _rule_scale() -> float:
+	return 1.35 if UI.touch else 1.0
+
+
+## The width of the column the values of the house rules are written in.
+func _rule_width() -> float:
+	return 124.0 * _rule_scale()
+
+
+## A line of the house rules: the name in ink and a dotted leader up to what
+## sets it, which is added after.
+func _rule_row(text: String, tip: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.custom_minimum_size = Vector2(0, 38 if UI.touch else 25)
+	var l := Desk.ink(UI.label(text, 14, UI.CREAM))
+	row.add_child(l)
+	if tip != "":
+		l.mouse_filter = Control.MOUSE_FILTER_PASS
+		TipLayer.attach(l, tip)
+	var leader := Control.new()
+	leader.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	leader.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	leader.draw.connect(func():
+		var y := roundf(leader.size.y / 2.0 + 4.0 * _rule_scale())
+		var x := 2.0
+		while x + 2.0 <= leader.size.x - 2.0:
+			leader.draw_rect(Rect2(x, y, 2, 2), Color(Desk.INK_FADED, 0.45))
+			x += 6.0)
+	row.add_child(leader)
+	return row
+
+
+## `content` in the middle of the column of values.
+func _rule_column(content: Control) -> Control:
+	var column := CenterContainer.new()
+	column.custom_minimum_size = Vector2(_rule_width(), 0)
+	column.add_child(content)
+	return column
+
+
+## A value of the house rules in its column: what `show` makes of it (a text,
+## or a bitmap of text rows such as INFINITY), in `ink`, with the coin after it
+## (`coin`) and the hourglass of "every turn" (`per_turn`), between two ink
+## arrows that step it. The wheel over it steps it too.
+func _rule_spinner(tip: String, getter: Callable, setter: Callable, low: int, high: int, show: Callable, ink: Color, coin := false, per_turn := false) -> Control:
+	var grown := _rule_scale()
+	var row := HBoxContainer.new()
+	row.custom_minimum_size = Vector2(_rule_width(), 0)
+	row.add_theme_constant_override("separation", 0)
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
+	var less := _rule_arrow(true)
+	var more := _rule_arrow(false)
+	var sum := HBoxContainer.new()
+	sum.alignment = BoxContainer.ALIGNMENT_CENTER
+	sum.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sum.add_theme_constant_override("separation", 3)
+	sum.mouse_filter = Control.MOUSE_FILTER_PASS
+	if tip != "":
+		TipLayer.attach(sum, tip)
+	var value := Desk.ink(UI.label("", 15, UI.GOLD, true), ink)
+	# With a coin the number is right-aligned in a fixed width, and the place
+	# of the hourglass is kept where there is none: the coins of every line
+	# fall in one column.
+	var number := Vector2(24.0 * grown, 0) if coin else Vector2.ZERO
+	value.custom_minimum_size = number
+	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value.draw.connect(func():
+		if value.has_meta(&"bits"):
+			var bits: Array[String] = value.get_meta(&"bits")
+			var cell := 2.0
+			var origin := ((value.size - Vector2(bits[0].length(), bits.size()) * cell) / 2.0).round()
+			for y in bits.size():
+				for x in bits[y].length():
+					if bits[y][x] == "#":
+						value.draw_rect(Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell)), ink))
+	sum.add_child(value)
+	if coin:
+		var icon := TextureRect.new()
+		icon.texture = UI.tex(UI.COIN_ICON)
+		icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = Vector2.ONE * 14.0 * grown
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		sum.add_child(icon)
+	if per_turn:
+		sum.add_child(_rule_glyph(&"hourglass"))
+	elif coin:
+		var room := Control.new()
+		var glass: Array = LogView.GLYPHS[&"hourglass"]
+		room.custom_minimum_size = Vector2(glass[0].length(), glass.size()) * 2.0 * grown
+		room.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		sum.add_child(room)
+	row.add_child(less)
+	row.add_child(sum)
+	row.add_child(more)
+	var change := func(delta: int):
+		var next := clampi(getter.call() + delta, low, high)
+		if not _host or next == getter.call():
+			return
+		setter.call(next)
+		UI.pop(value, 1.3, 0.2)
+		_play_sfx("ui_key")
+		_refresh()
+	less.pressed.connect(change.bind(-1))
+	more.pressed.connect(change.bind(1))
+	sum.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed:
+			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				change.call(1)
+				sum.accept_event()
+			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				change.call(-1)
+				sum.accept_event())
+	_refreshers.append(func():
+		var current: int = getter.call()
+		var shown: Variant = show.call(current)
+		if shown is Array:
+			var bits: Array[String] = shown
+			value.text = ""
+			value.custom_minimum_size = Vector2(bits[0].length() * 2.0, 0)
+			value.set_meta(&"bits", bits)
+		else:
+			value.text = shown
+			value.custom_minimum_size = number
+			value.remove_meta(&"bits")
+		value.queue_redraw()
+		less.disabled = current <= low
+		more.disabled = current >= high
+		less.visible = _host
+		more.visible = _host)
+	return row
+
+
+## A small triangle of ink that steps a rule down (`left`) or up: faded until
+## the mouse is on it, and gone where the rule cannot go further.
+const ARROW_LEFT: Array[String] = ["...#", "..##", ".###", "####", ".###", "..##", "...#"]
+const ARROW_RIGHT: Array[String] = ["#...", "##..", "###.", "####", "###.", "##..", "#..."]
+
+
+func _rule_arrow(left: bool) -> Button:
+	var b := Button.new()
+	b.flat = true
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(44, 40) if UI.touch else Vector2(26, 26)
+	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	for state: String in ["normal", "hover", "pressed", "disabled", "focus"]:
+		b.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	b.mouse_entered.connect(b.queue_redraw)
+	b.mouse_exited.connect(b.queue_redraw)
+	b.draw.connect(func():
+		if b.disabled:
+			return
+		var bits: Array[String] = ARROW_LEFT if left else ARROW_RIGHT
+		var cell := 3.0 if UI.touch else 2.0
+		var origin := ((b.size - Vector2(bits[0].length(), bits.size()) * cell) / 2.0).round()
+		var ink := Desk.INK if b.is_hovered() else Color(Desk.INK_FADED, 0.7)
+		for y in bits.size():
+			for x in bits[y].length():
+				if bits[y][x] == "#":
+					b.draw_rect(Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell)), ink))
+	return b
+
+
+## Inks of the log's pictures that are too pale for paper.
+const PAPER_INKS := {
+	&"hourglass": {"o": Desk.INK, "#": Desk.INK_FADED, "+": Color("b89a6a"), "-": Desk.INK_FADED},
+}
+
+
+## One of the log's pictures (LogView.GLYPHS), in its 2 px blocks.
+func _rule_glyph(id: StringName) -> Control:
+	var rows: Array = LogView.GLYPHS[id]
+	var inks: Dictionary = PAPER_INKS.get(id, LogView.INKS[id])
+	var cell := 2.0 * _rule_scale()
+	var glyph := Control.new()
+	glyph.custom_minimum_size = Vector2(rows[0].length(), rows.size()) * cell
+	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glyph.draw.connect(func():
+		for y in rows.size():
+			for x in rows[y].length():
+				var ink: Variant = inks.get(rows[y][x])
+				if ink != null:
+					glyph.draw_rect(Rect2(Vector2(x, y) * cell, Vector2(cell, cell)), ink))
+	return glyph
+
+
+## Marks picked like a rating (see Pips), kept in step with the config.
+func _pips(count: int, mark: Vector2, gap: float, painter: Callable, getter: Callable, setter: Callable) -> Pips:
+	var pips := Pips.new(count, mark, gap, painter)
+	pips.picked.connect(func(index: int):
+		if not _host or index == getter.call():
+			return
+		setter.call(index)
+		_play_sfx("ui_key")
+		_refresh())
+	_refreshers.append(func():
+		pips.value = getter.call()
+		pips.live = _host
+		pips.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _host else Control.CURSOR_ARROW
+		pips.queue_redraw())
+	return pips
+
+
+## How a mark of a rating is drawn: chosen, chosen only under the mouse,
+## about to be let go (the mouse is on a lower one), or not chosen.
+func _rating_tone(pips: Pips, i: int) -> Color:
+	var shown := pips.shown()
+	if i <= shown:
+		return Color.WHITE if i <= pips.value else Color(1, 1, 1, 0.55)
+	if i <= pips.value:
+		return Color(Desk.INK, 0.45)
+	return Color(Desk.INK, 0.2)
+
+
+## heart.png is 9 x 9 blocks of 3 px: drawn at a whole number of pixels per
+## block, or rows of it would be dropped.
+func _paint_heart(pips: Pips, i: int, rect: Rect2) -> void:
+	var tone := _rating_tone(pips, i)
+	# Not chosen: the heart in faded ink.
+	var tint := Color(0.16, 0.12, 0.09, tone.a) if tone.r < 0.5 else tone
+	pips.draw_texture_rect(UI.tex(LogView.HEART), rect, false, tint)
+
+
+func _paint_slot(pips: Pips, i: int, rect: Rect2) -> void:
+	var tone := _rating_tone(pips, i)
+	var cell := 2.0 * _rule_scale()
+	var on := tone.r > 0.5
+	var ink := Color(Desk.INK_FADED, tone.a if on else 0.4)
+	# A hollow of the shelf: a frame of ink, and for a slot in use a box on it.
+	pips.draw_rect(Rect2(rect.position, Vector2(rect.size.x, cell)), ink)
+	pips.draw_rect(Rect2(rect.position + Vector2(0, rect.size.y - cell), Vector2(rect.size.x, cell)), ink)
+	pips.draw_rect(Rect2(rect.position, Vector2(cell, rect.size.y)), ink)
+	pips.draw_rect(Rect2(rect.position + Vector2(rect.size.x - cell, 0), Vector2(cell, rect.size.y)), ink)
+	if on:
+		var inner := rect.grow(-cell * 2.0)
+		pips.draw_rect(inner, Color(Desk.INK_FADED, 0.55 * tone.a))
 
 
 ## Where a character's abilities are read: ink on the sheet.
@@ -1370,7 +1646,8 @@ func _fill_grid(grid: Control, per_row: int, card_scale: float, caption_height: 
 		if UI.touch:
 			# No hover: a tap reads the character too.
 			card.clicked.connect(_read_character.bind(def.id, false))
-		if _host:
+		if _host and UI.touch:
+			# With a mouse, clicks and sweeps over the cards are _sweep_input's.
 			card.clicked.connect(_toggle_character.bind(def.id))
 		grid.add_child(card)
 		_cards[def.id] = card
@@ -1540,12 +1817,89 @@ func _set_random(value: bool) -> void:
 
 func _toggle_character(character_id: StringName) -> void:
 	if _random:
+		# Clicking a card while drawing at random keeps every character but
+		# that one.
+		if not _host:
+			return
+		_picked.clear()
+		for def: CharacterDef in Content.character_list():
+			if def.id != character_id:
+				_picked.append(def.id)
 		_set_random(false)
-		return
-	if _picked.has(character_id):
+	elif _picked.has(character_id):
 		_picked.erase(character_id)
 	else:
 		_picked.append(character_id)
+	UI.pop(_cards[character_id], 1.15, 0.2)
+	_refresh()
+
+
+## The host's mouse on the character cards. A left click adds or removes a
+## card, a right click leaves that card alone in the match (and reads it, by
+## _on_card_input). Held and dragged onto other cards, the left button puts
+## every card it passes in the match and the right one takes them out, the
+## card it began on included; no box is drawn.
+func _sweep_input(event: InputEvent) -> void:
+	if not _host or UI.touch:
+		return
+	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		if event.pressed:
+			var id := _card_at(event.global_position)
+			if id != &"" and _sweep_button == MOUSE_BUTTON_NONE:
+				_sweep_button = event.button_index
+				_sweep_from = id
+				_sweeping = false
+		elif event.button_index == _sweep_button:
+			if not _sweeping and _card_at(event.global_position) == _sweep_from:
+				if _sweep_button == MOUSE_BUTTON_LEFT:
+					_toggle_character(_sweep_from)
+				else:
+					_pick_only(_sweep_from)
+			_sweep_button = MOUSE_BUTTON_NONE
+			_sweep_from = &""
+			_sweeping = false
+	elif event is InputEventMouseMotion and _sweep_button != MOUSE_BUTTON_NONE:
+		var id := _card_at(event.global_position)
+		if id == &"" or (id == _sweep_from and not _sweeping):
+			return
+		var adding := _sweep_button == MOUSE_BUTTON_LEFT
+		if not _sweeping:
+			_sweeping = true
+			if _random:
+				# Drawn at random every card is in: a sweep of the left button
+				# starts from none, one of the right button from all of them.
+				_random = false
+				_picked.clear()
+				if not adding:
+					for def: CharacterDef in Content.character_list():
+						_picked.append(def.id)
+			_sweep_mark(_sweep_from, adding)
+		_sweep_mark(id, adding)
+
+
+## The character card under `point`, or &"".
+func _card_at(point: Vector2) -> StringName:
+	for id: StringName in _cards:
+		var card: CardView = _cards[id]
+		if card.is_visible_in_tree() and card.get_global_rect().has_point(point):
+			return id
+	return &""
+
+
+func _sweep_mark(character_id: StringName, on: bool) -> void:
+	if _picked.has(character_id) != on:
+		if on:
+			_picked.append(character_id)
+		else:
+			_picked.erase(character_id)
+		UI.pop(_cards[character_id], 1.15, 0.2)
+	_refresh()
+
+
+## Every card out of the match but this one.
+func _pick_only(character_id: StringName) -> void:
+	_random = false
+	_picked = [character_id]
 	UI.pop(_cards[character_id], 1.15, 0.2)
 	_refresh()
 
@@ -1825,6 +2179,7 @@ func _on_leave() -> void:
 
 ## A click anywhere but on the name being written, or Esc, puts the pen down.
 func _input(event: InputEvent) -> void:
+	_sweep_input(event)
 	var clicked: bool = event is InputEventMouseButton and event.pressed
 	if not clicked and not event.is_action_pressed(&"ui_cancel"):
 		return
@@ -1865,13 +2220,7 @@ func _cross_off(i: int) -> void:
 
 
 func _play_sfx(sound: String) -> void:
-	var path := "res://assets/sounds/%s.wav" % sound
-	var stream: AudioStream = null
-	if ResourceLoader.exists(path):
-		stream = load(path)
-	elif FileAccess.file_exists(path):
-		# Not imported yet (the editor has not rescanned): read the file directly.
-		stream = AudioStreamWAV.load_from_file(path)
+	var stream := Sounds.stream(sound)
 	if stream == null:
 		return
 	var player := AudioStreamPlayer.new()
@@ -1880,6 +2229,73 @@ func _play_sfx(sound: String) -> void:
 	player.finished.connect(player.queue_free)
 	add_child(player)
 	player.play()
+
+
+## A row of marks, one per value, picked like a rating: a click on a mark
+## sets the value to it, dragging along the marks goes with the mouse, and
+## the wheel steps it. Under the mouse the marks show what a click would
+## make of them (`shown`). Every mark is drawn by `painter(pips, index, rect)`.
+class Pips extends Control:
+	signal picked(index: int)
+
+	var count := 5
+	var value := 0
+	## The mark under the mouse, or -1.
+	var hover := -1
+	## Off for a guest: the marks only show the rule.
+	var live := true
+	var _mark := Vector2(18, 18)
+	var _gap := 3.0
+	var _painter: Callable
+	var _held := false
+
+	func _init(marks: int, mark: Vector2, gap: float, painter: Callable) -> void:
+		count = marks
+		_mark = mark
+		_gap = gap
+		_painter = painter
+		custom_minimum_size = Vector2(count * mark.x + (count - 1) * gap, mark.y)
+		size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		mouse_exited.connect(func() -> void:
+			hover = -1
+			queue_redraw())
+
+	## The value to draw as chosen: the one under the mouse, if any.
+	func shown() -> int:
+		return hover if hover >= 0 else value
+
+	func rect_of(i: int) -> Rect2:
+		return Rect2(Vector2(i * (_mark.x + _gap), (size.y - _mark.y) / 2.0).round(), _mark)
+
+	func _at(x: float) -> int:
+		return clampi(int(x / (_mark.x + _gap)), 0, count - 1)
+
+	func _gui_input(event: InputEvent) -> void:
+		if not live:
+			return
+		if event is InputEventMouseMotion:
+			# A finger shows no preview but while it is down.
+			hover = _at(event.position.x) if _held or not UI.touch else -1
+			if _held and hover != value:
+				picked.emit(hover)
+			queue_redraw()
+		elif event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				_held = event.pressed
+				if event.pressed:
+					picked.emit(_at(event.position.x))
+				elif UI.touch:
+					hover = -1
+				queue_redraw()
+				accept_event()
+			elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+				picked.emit(clampi(value + (1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1), 0, count - 1))
+				accept_event()
+
+	func _draw() -> void:
+		for i in count:
+			_painter.call(self, i, rect_of(i))
 
 
 ## The host's cross next to a bot's name: an X in red ink, two quick strokes

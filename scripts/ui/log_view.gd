@@ -54,6 +54,7 @@ const GLYPHS := {
 	&"dice": ["ooooooo", "o#...#o", "o..#..o", "o#...#o", "ooooooo", "......."],
 	&"gavel": ["ooo....", "o#oo...", "oo#oo..", ".oo#o..", "...o#o.", "....o#o", ".....oo"],
 	&"ha": ["#.#.###", "#.#.#.#", "###.###", "#.#.#.#", "#.#.#.#", ".......", "......."],
+	&"sword": ["......+", ".....+.", "....+..", ".o.+...", "..o....", ".#.o...", "o......"],
 	&"down": ["..o#o..", "..o#o..", "..o#o..", "o.o#o.o", ".o###o.", "..o#o..", "...o..."],
 }
 const INKS := {
@@ -65,6 +66,7 @@ const INKS := {
 	&"trash": {"o": Color("2a2a30"), "#": Color("8a8a94"), "-": Color("5a5a64")},
 	&"palette": {"o": Color("3a2410"), "#": Color("b07a44"), "b": Color("4f8fe0"), "p": Color("e877b8"), "y": Color("f2cf3c")},
 	&"crack": {"o": Color("ef5a48")},
+	&"sword": {"+": Color("dfe6f0"), "o": Color("e6bc4c"), "#": Color("7a4a24")},
 	&"ban": {"o": Color("6cc3e0")},
 	&"liar": {"o": Color("5c1210"), "#": Color("ef5a48"), "!": Color("fff0e0")},
 	&"check": {"o": Color("2e5a1c"), "#": Color("8cd06a")},
@@ -299,6 +301,12 @@ func _build(e: GameEvent, row: Row) -> bool:
 			row.add_child(_who(d.target))
 			if d.ducked:
 				row.add_child(_glyph(&"down"))
+		&"duel_settled":
+			row.add_child(_who(d.duelist))
+			row.add_child(_glyph(&"sword") if d.duelist_strikes else _icon(COIN))
+			row.add_child(_text("×", UI.MUTED))
+			row.add_child(_who(d.rival))
+			row.add_child(_glyph(&"sword") if d.rival_strikes else _icon(COIN))
 		&"coin_flipped":
 			row.add_child(_who(d.player))
 			row.add_child(_icon(COIN))
@@ -385,6 +393,8 @@ func _coins(d: Dictionary, row: Row) -> void:
 			row.add_child(_glyph(&"palette"))
 		&"paint":
 			row.add_child(_glyph(&"brush"))
+		&"duel":
+			row.add_child(_glyph(&"sword"))
 
 
 ## The chevron and whoever `play` was aimed at, if anyone.

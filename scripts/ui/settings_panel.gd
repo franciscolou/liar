@@ -33,8 +33,10 @@ func _init() -> void:
 	panel.add_child(box)
 	box.add_child(Board.plaque("SETTINGS", 26))
 
-	box.add_child(_volume_row("Music", Settings.music, func(v: float): Settings.set_music(v)))
-	var sfx_row := _volume_row("Sound effects", Settings.sfx, func(v: float): Settings.set_sfx(v))
+	box.add_child(_volume_row("Music", Settings.music, func(v: float): Settings.set_music(v),
+			func() -> bool: return Settings.music_muted, func(on: bool): Settings.set_music_muted(on)))
+	var sfx_row := _volume_row("Sound effects", Settings.sfx, func(v: float): Settings.set_sfx(v),
+			func() -> bool: return Settings.sfx_muted, func(on: bool): Settings.set_sfx_muted(on))
 	# Lets the new volume be heard when the slider is let go.
 	sfx_row.get_node("Slider").drag_ended.connect(func(_changed): _preview.play())
 	box.add_child(sfx_row)
@@ -107,8 +109,39 @@ func _row(text: String) -> HBoxContainer:
 	return row
 
 
-func _volume_row(text: String, value: float, setter: Callable) -> HBoxContainer:
+## The speaker of the mute button, in 2 px blocks: its body, then a wave
+## for every third of the volume (each further out and taller than the one
+## before), or a cross where the waves would be when the bus is muted.
+const SPEAKER: Array[String] = [
+	"....#",
+	"...##",
+	"#####",
+	"#####",
+	"#####",
+	"#####",
+	"...##",
+	"....#",
+]
+## Column and height (in blocks) of each wave, centred on the speaker.
+const WAVES := [Vector2i(6, 2), Vector2i(8, 4), Vector2i(10, 6)]
+const CROSS: Array[String] = [
+	"#...#",
+	".#.#.",
+	"..#..",
+	".#.#.",
+	"#...#",
+]
+
+
+## A volume: the mute button, the slider and the percent. Muting keeps the
+## volume, which comes back when it is heard again; moving the slider of a
+## muted bus brings it back too.
+func _volume_row(text: String, value: float, setter: Callable, muted: Callable, set_muted: Callable) -> HBoxContainer:
 	var row := _row(text)
+	var mute := UI.button("", UI.BORDER, 15)
+	mute.custom_minimum_size = UI.grown(Vector2(40, 32))
+	mute.focus_mode = Control.FOCUS_NONE
+	row.add_child(mute)
 	var slider := HSlider.new()
 	slider.name = "Slider"
 	slider.max_value = 1.0
@@ -125,9 +158,47 @@ func _volume_row(text: String, value: float, setter: Callable) -> HBoxContainer:
 	row.add_child(percent)
 	var show_value := func(v: float): percent.text = "%d%%" % roundi(v * 100.0)
 	show_value.call(value)
+	var show_muted := func():
+		var on: bool = muted.call()
+		Board.plank(mute, UI.RED if on else UI.BORDER)
+		slider.modulate.a = 0.4 if on else 1.0
+		percent.modulate.a = 0.4 if on else 1.0
+		mute.queue_redraw()
+	show_muted.call()
+	TipLayer.attach(mute, func() -> String: return Loc.t("Unmute") if muted.call() else Loc.t("Mute"))
+	mute.draw.connect(func():
+		var cell := 2.0
+		var rows := SPEAKER.size()
+		var origin := ((mute.size - Vector2(11, rows) * cell) / 2.0).round()
+		var ink := UI.CREAM if muted.call() else UI.GOLD
+		var block := func(x: int, y: int):
+			mute.draw_rect(Rect2(origin + Vector2(x, y) * cell, Vector2(cell, cell)), ink)
+		for y in rows:
+			for x in SPEAKER[y].length():
+				if SPEAKER[y][x] == "#":
+					block.call(x, y)
+		if muted.call():
+			for y in CROSS.size():
+				for x in CROSS[y].length():
+					if CROSS[y][x] == "#":
+						block.call(6 + x, (rows - CROSS.size()) / 2 + y)
+			return
+		var waves := ceili(slider.value * WAVES.size() - 0.001)
+		for i in clampi(waves, 0, WAVES.size()):
+			var wave: Vector2i = WAVES[i]
+			for y in wave.y:
+				block.call(wave.x, (rows - wave.y) / 2 + y))
+	mute.pressed.connect(func():
+		set_muted.call(not muted.call())
+		show_muted.call()
+		Settings.save())
 	slider.value_changed.connect(func(v: float):
 		setter.call(v)
-		show_value.call(v))
+		show_value.call(v)
+		mute.queue_redraw()
+		if muted.call():
+			set_muted.call(false)
+			show_muted.call())
 	slider.drag_ended.connect(func(_changed): Settings.save())
 	return row
 

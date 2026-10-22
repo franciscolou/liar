@@ -41,6 +41,20 @@ static func run() -> int:
 		"a silver tongue keeps the coins from a swindle": _swindle_talked_down,
 		"the first to fall loses: the blow in the air is void": _first_to_fall,
 		"a demolition goes past shield and mirror": _demolition,
+		"a dilemma both contribute to pays both": _duel.bind(0, 0),
+		"a dilemma both attack comes to nothing": _duel.bind(1, 1),
+		"a dilemma: whoever contributes to an attack is hurt": _duel.bind(1, 0),
+		"a dilemma: the challenger can be the one hurt": _duel.bind(0, 1),
+		"retaliation hits back whoever dealt the blow": _retaliation.bind(&""),
+		"a shield stops a retaliation": _retaliation.bind(&"shield"),
+		"a mirror sends a retaliation back at the necromancer": _retaliation.bind(&"mirror"),
+		"a retaliation is not answered with another": _retaliation_on_retaliation,
+		"drain gives back the Morale of a kill": _drain.bind(2),
+		"drain is not offered at full Morale": _drain.bind(3),
+		"one kill answered by two characters: drain and streak thirst": _drain_and_streak,
+		"berserk breaks every item for 1 Morale": _berserk.bind(&""),
+		"a shield stops a berserk, and it costs nothing": _berserk.bind(&"shield"),
+		"a mirror sends a berserk back at the duelist's items": _berserk.bind(&"mirror"),
 		"a shield stops a time bomb as it is planted": _time_bomb.bind(&"shield"),
 		"a mirror sends a time bomb back as it is planted": _time_bomb.bind(&"mirror"),
 		"a ticking bomb goes past shield and mirror": _time_bomb.bind(&""),
@@ -248,6 +262,60 @@ static func _demolition() -> String:
 	if table.engine.players[0].coins != coins:
 		return "it cost %d coins" % (coins - table.engine.players[0].coins)
 	return "" if table.held(1) == [&"shield", &"mirror"] else "kept %s" % [table.held(1)]
+
+
+## Player 0 challenges player 1 to a Prisoner's Dilemma; `a` and `b` are what each answers
+## (0 contribute, 1 attack).
+static func _duel(a: int, b: int) -> String:
+	var table := Table.new(true, [&"duelist"])
+	var engine := table.engine
+	var duelist: PlayerState = engine.players[0]
+	var rival: PlayerState = engine.players[1]
+	duelist.cards = [&"duelist", &"judge"]
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return rival
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return a
+	table.puppets[1].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return b
+	var coins: Array = [duelist.coins, rival.coins]
+	var morale: Array = [duelist.morale, rival.morale]
+	await engine.claim(duelist, table.ability(&"duelist.dilemma"))
+	var sides: Array = [duelist, rival]
+	var answers: Array = [a, b]
+	for i in 2:
+		var p: PlayerState = sides[i]
+		var paid: int = 5 if a == 0 and b == 0 else 0
+		var hurt: int = 1 if answers[i] == 0 and answers[1 - i] == 1 else 0
+		if p.coins != coins[i] + paid:
+			return "%s went from %d to %d coins" % [p.name, coins[i], p.coins]
+		if p.morale != morale[i] - hurt:
+			return "%s went from %d to %d Morale" % [p.name, morale[i], p.morale]
+	return ""
+
+
+## Player 0, on 3 Morale, goes berserk on player 1, who holds `defence` and
+## two potions. A mirror sends the sword back at player 0's own items, and
+## player 0 still pays the Morale; a shield stops it before anything is paid.
+static func _berserk(defence: StringName) -> String:
+	var table := Table.new(true, [&"duelist"])
+	var engine := table.engine
+	var duelist: PlayerState = engine.players[0]
+	var victim: PlayerState = engine.players[1]
+	duelist.cards = [&"duelist", &"judge"]
+	table.give(0, [&"potion"])
+	table.give(1, ([defence] if defence != &"" else []) + [&"potion", &"potion"])
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return victim
+	var morale := [duelist.morale, victim.morale]
+	await engine.claim(duelist, table.ability(&"duelist.berserk"))
+	var paid := 0 if defence == &"shield" else 1
+	if duelist.morale != morale[0] - paid:
+		return "the duelist went from %d to %d Morale" % [morale[0], duelist.morale]
+	if victim.morale != morale[1]:
+		return "the target lost Morale"
+	match defence:
+		&"":
+			return "" if table.held(1) == [] and table.held(0) == [&"potion"] else "kept %s and %s" % [table.held(0), table.held(1)]
+		&"shield":
+			return "" if table.held(1) == [&"potion", &"potion"] else "kept %s" % [table.held(1)]
+	return "" if table.held(0) == [] and table.held(1) == [&"potion", &"potion"] else "kept %s and %s" % [table.held(0), table.held(1)]
 
 
 ## Player 0 plants a Time Bomb on player 1, who holds `defence` when it is
@@ -1510,6 +1578,128 @@ static func _monochrome_wears_off() -> String:
 # --- the stage ------------------------------------------------------------------
 
 ## Three players with coins to spare. Player 0 holds the Bartender.
+
+
+## The Assassin hits the Necromancer, who claims Retaliation against them:
+## it is damage aimed at the Assassin, which a shield stops and a mirror
+## turns round (and that is not answered again).
+static func _retaliation(defence: StringName) -> String:
+	var table := Table.new(true, [&"assassin", &"necromancer"])
+	var engine := table.engine
+	var assassin: PlayerState = engine.players[0]
+	var necromancer: PlayerState = engine.players[1]
+	assassin.cards = [&"assassin", &"judge"]
+	necromancer.cards = [&"necromancer", &"judge"]
+	if defence != &"":
+		table.give(0, [defence])
+	var offers := [0]
+	table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		for option: Dictionary in d.options:
+			if option.kind == &"ability" and option.ability.id == &"necromancer.retaliation":
+				offers[0] += 1
+				return option
+		return null
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return necromancer
+	await engine.claim(assassin, table.ability(&"assassin.blood_count"))
+	# Turned by the mirror, it is still a Retaliation: not to be answered
+	# with another.
+	if offers[0] != 1:
+		return "offered %d times" % offers[0]
+	# It is free.
+	if necromancer.coins != 20:
+		return "the necromancer paid %d" % (20 - necromancer.coins)
+	var expected: Array = {&"": [2, 2], &"shield": [3, 2], &"mirror": [3, 1]}[defence]
+	if [assassin.morale, necromancer.morale] != expected:
+		return "morale: %d / %d" % [assassin.morale, necromancer.morale]
+	return "" if table.held(0) == [] else "kept %s" % [table.held(0)]
+
+
+## The Necromancer fells a player and claims Drain: one Morale back, and a
+## card with it. With full Morale there is nothing to drain into.
+static func _drain(morale: int) -> String:
+	var table := Table.new(true, [&"assassin", &"necromancer"])
+	var engine := table.engine
+	var necromancer: PlayerState = engine.players[1]
+	var victim: PlayerState = engine.players[2]
+	necromancer.cards = [&"necromancer", &"assassin"]
+	necromancer.morale = morale
+	if morale < engine.config.start_morale:
+		necromancer.cards.resize(morale)
+	victim.morale = 1
+	victim.cards = [&"judge"]
+	var offers := [0]
+	table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		for option: Dictionary in d.options:
+			if option.kind == &"ability" and option.ability.id == &"necromancer.drain":
+				offers[0] += 1
+				return option
+		return null
+	table.puppets[1].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return victim
+	await engine.claim(necromancer, table.ability(&"assassin.blood_count"))
+	if victim.alive:
+		return "the victim is still standing"
+	if offers[0] != (1 if morale < engine.config.start_morale else 0):
+		return "offered %d times" % offers[0]
+	if necromancer.morale != mini(morale + 1, engine.config.start_morale):
+		return "morale %d" % necromancer.morale
+	return "" if necromancer.cards.size() == engine.hand_limit(necromancer) else "%d cards" % necromancer.cards.size()
+
+
+## A Necromancer who also holds the Assassin fells a player: both answers to
+## the kill are theirs to claim, one after the other.
+static func _drain_and_streak() -> String:
+	var table := Table.new(true, [&"assassin", &"necromancer"])
+	var engine := table.engine
+	var first: PlayerState = engine.players[0]
+	var killer: PlayerState = engine.players[1]
+	var victim: PlayerState = engine.players[2]
+	killer.cards = [&"necromancer", &"assassin"]
+	killer.morale = 2
+	victim.morale = 1
+	victim.cards = [&"judge"]
+	var claimed: Array = []
+	table.puppets[1].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+		for id: StringName in [&"necromancer.drain", &"assassin.streak_thirst"]:
+			for option: Dictionary in d.options:
+				if option.kind == &"ability" and option.ability.id == id and not claimed.has(id):
+					claimed.append(id)
+					return option
+		return null
+	table.puppets[1].answers[Decision.Kind.TARGET] = func(d: Decision) -> PlayerState:
+		return victim if d.options.has(victim) else first
+	await engine.claim(killer, table.ability(&"assassin.blood_count"))
+	if claimed != [&"necromancer.drain", &"assassin.streak_thirst"]:
+		return "claimed %s" % [claimed]
+	if killer.morale != 3:
+		return "the killer has %d Morale" % killer.morale
+	return "" if first.morale == 2 else "the next one has %d Morale" % first.morale
+
+
+## Two Necromancers: the one struck back by a Retaliation can't answer it
+## with a Retaliation of their own.
+static func _retaliation_on_retaliation() -> String:
+	var table := Table.new(true, [&"assassin", &"necromancer"])
+	var engine := table.engine
+	var assassin: PlayerState = engine.players[0]
+	var necromancer: PlayerState = engine.players[1]
+	assassin.cards = [&"necromancer", &"assassin"]
+	necromancer.cards = [&"necromancer", &"judge"]
+	var offers := [0, 0]
+	for i in 2:
+		table.puppets[i].answers[Decision.Kind.REACT] = func(d: Decision) -> Variant:
+			for option: Dictionary in d.options:
+				if option.kind == &"ability" and option.ability.id == &"necromancer.retaliation":
+					offers[i] += 1
+					return option
+			return null
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return necromancer
+	await engine.claim(assassin, table.ability(&"assassin.blood_count"))
+	if offers != [0, 1]:
+		return "offered %s" % [offers]
+	return "" if [assassin.morale, necromancer.morale] == [2, 2] else "morale: %d / %d" % [assassin.morale, necromancer.morale]
+
+
+
 class Table extends RefCounted:
 	var engine: GameEngine
 	var puppets: Array = []

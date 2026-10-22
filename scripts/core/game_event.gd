@@ -22,7 +22,8 @@ extends RefCounted
 ##     &"blank": the price of an empty Bang! back to the Clown, with the claim
 ##     the coins were put down for in `play`; &"sold": an item turned into
 ##     coins; &"paint": what the bank gives the Painter when a painted
-##     player reaches outside the paint, see painter.gd)
+##     player reaches outside the paint, see painter.gd; &"duel": the pot of
+##     a Duel both sides contributed to, see duelist.gd)
 ##   payment_short {player, amount, allowed, play}  set allowed to let the player go into debt; play = the claim being paid for, if any
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
 ##     for coins still on their way to the victim: see bard.gd)
@@ -77,6 +78,9 @@ extends RefCounted
 ##   hand_redrawn {player, count}               the whole hand went back for new cards
 ##   gun_fired {play, shooter, target, loaded, ducked}  a Clown's gun is shown (clown.gd):
 ##     loaded or empty, and whether the target paid to duck it
+##   duel_settled {play, duelist, rival, duelist_strikes, rival_strikes}  the two
+##     secret answers of a Duel are shown (duelist.gd), before anything comes of
+##     them; `duelist` is who challenged (the holder of a mirror, if it was turned)
 ##   coin_flipped {player, heads, won}          a coin tossed for everyone to see;
 ##     won: it fell on the side the player was hoping for
 ##   note {player, text, good, tag}             news from content that no other event

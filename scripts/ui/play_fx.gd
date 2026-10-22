@@ -28,6 +28,7 @@ const POT := Vector2(576, 322)
 ## How far past a cursed box the bending of a curse_flush reaches, easing off.
 const WARP_FEATHER := 48.0
 const VoodooDoll := preload("res://scripts/ui/voodoo_doll.gd")
+const Sounds := preload("res://scripts/ui/sounds.gd")
 const Painter := preload("res://scripts/content/characters/painter.gd")
 ## Monochrome: how long the brush takes from box to box, and along each one.
 const BRUSH_HOP := 0.38
@@ -896,6 +897,9 @@ func put_away() -> void:
 	drop_bets()
 	drop_gun()
 	drop_paint()
+	drop_duel()
+	drop_berserk()
+	drop_soul()
 
 
 ## The wand slides out from behind the Magician's box, turns on the item
@@ -3169,6 +3173,623 @@ func drop_bomb() -> void:
 	_bomb = null
 
 
+# --- the Duelist ---------------------------------------------------------------
+
+## How far out of a box each sword of a Prisoner's Dilemma waits, and how far
+## apart the two wait at the least.
+const SWORD_POST := 34.0
+const SWORD_APART := 190.0
+## How much of the blade goes into what it is driven into, in cells.
+const SWORD_SUNK := 7
+## What a sword stuck point down into the table covers, from its point.
+const SWORD_FOOT := Rect2(-13, -90, 26, 96)
+## Two swords laid down side by side: how far each stands from the middle.
+const DILEMMA_GAP := 24.0
+## How far from the point between the two players a free patch of table is
+## looked for, and on what grid (a full table leaves little room).
+const GROUND_REACH := 260.0
+const GROUND_STEP := 10.0
+## How high a laid-down sword is flung before it comes down, and how many
+## whole turns it makes on the way (on top of what it takes to point down).
+const SWORD_TOSS := 70.0
+const SWORD_TURNS := 1
+## A blow of the Dilemma: the pace the table drops to as the sword goes in,
+## and for how long (real seconds) before it comes back.
+const DAMAGE_SLOW := 0.2
+const DAMAGE_HOLD := 0.55
+## The recorded swing (sword-attack) is loudest SWING_PEAK seconds in: when
+## to start it so that its peak is the blow or the meeting of two swords
+## (_swords_cross: 0.3 s of wind-up and 0.16 of flight). The blow
+## (_stab_box) is 0.45 s of wind-up, 0.1 of flight and then the last 0.06
+## in slow motion, which the sound does not share: those take DAMAGE_REAL
+## seconds of real time (the slowing down itself included).
+## And how long after the clash the blades are heard giving way (sword-break).
+const SWING_PEAK := 0.39
+const DAMAGE_REAL := 0.2
+const ATTACK_LEAD := 0.45 + 0.1 + DAMAGE_REAL - SWING_PEAK
+const CROSS_LEAD := 0.3 + 0.16 - SWING_PEAK
+const BREAK_LAG := 0.08
+## Berserk: how long the fury takes to build (the heartbeat is as long), how
+## far the sword is drawn back before it goes, and how far past each item it
+## carries on.
+const FURY_BUILD := 2.0
+## The heart under the fury: the first gap between beats, how much shorter
+## each one gets and the shortest (as in fx_heartbeat, gen_sfx.py).
+const HEARTBEAT_FIRST := 0.62
+const HEARTBEAT_HURRY := 0.82
+const HEARTBEAT_FASTEST := 0.2
+const SWORD_WIND := 22.0
+const SWORD_THROUGH := 34.0
+const FURY := Color("e0261a")
+const SPLINTERS := Color("8a5a30")
+
+## The two swords of a Prisoner's Dilemma, drawn and waiting for the answers:
+## {player id: SwordFx}.
+var _duel: Dictionary = {}
+## The cracks the swords left in the table (CrackFx), until the play is over.
+var _duel_marks: Array = []
+## The sword of a Berserk and the fury round whoever went berserk:
+## {sword, fury, by, box, tint}, or empty.
+var _berserk: Dictionary = {}
+
+
+## Both swords are drawn, one by each side: each comes out of its box with a
+## flourish, turning over once as it grows, and then hangs there, swaying,
+## pointed at the other while the two choose (duel_clash shows what they chose).
+func _fx_duelist_dilemma(play: Play) -> void:
+	drop_duel()
+	var speed: float = table._speed
+	var sides: Array = [play.actor, play.target]
+	var posts: Array = sides.map(_sword_post)
+	# Neighbours on a crowded table: each sword stands back from the other,
+	# or the two would lie on top of each other.
+	var apart: float = posts[0].distance_to(posts[1])
+	if apart < SWORD_APART:
+		var way: Vector2 = (posts[1] - posts[0]).normalized() if apart > 1.0 else Vector2.RIGHT
+		posts[0] -= way * (SWORD_APART - apart) / 2.0
+		posts[1] += way * (SWORD_APART - apart) / 2.0
+	_snd("fx_sword_draw")
+	for i in 2:
+		var post: Vector2 = posts[i]
+		var aim: float = (posts[1 - i] - post).angle()
+		var sword := SwordFx.new()
+		sword.position = post
+		sword.rotation = aim - TAU
+		sword.scale = Vector2(0.2, 0.2)
+		sword.modulate.a = 0.0
+		sword.trail = 1.0
+		add_child(sword)
+		_duel[sides[i].id] = sword
+		var out := sword.create_tween().set_parallel()
+		out.tween_property(sword, "modulate:a", 1.0, 0.1 / speed)
+		out.tween_property(sword, "scale", Vector2.ONE, 0.45 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		out.tween_property(sword, "rotation", aim, 0.5 / speed).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		out.chain().tween_property(sword, "trail", 0.0, 0.2 / speed)
+		burst(post, STEEL, 10, 160.0, 0.35, 0.0, 4.0)
+		burst(post, UI.GOLD, 6, 120.0, 0.4, -40.0, 4.0)
+		ring(post, UI.GOLD, 4.0, 40.0, 0.3, 3.0)
+	await _wait(0.5)
+	for i in 2:
+		var sword: SwordFx = _duel.get(sides[i].id)
+		if sword != null and is_instance_valid(sword):
+			sword.bob = true
+			sword.shine()
+	await _wait(0.35)
+
+
+## Where `p` holds a sword: just out of their box, on the side of the middle
+## of the table. Over the player's own counter, above the notice if there is
+## one up: that is where they answer.
+func _sword_post(p: PlayerState) -> Vector2:
+	var rect := _box_rect(p)
+	if p == table.viewer:
+		var top := rect.position.y
+		var notice: Control = table._prompt
+		if notice != null and notice.visible:
+			top = minf(top, notice.get_global_rect().position.y)
+		return Vector2(_at(p).x, top - SWORD_POST)
+	return _edge(rect, POT, -SWORD_POST)
+
+
+## The point where the line from the middle of `rect` to `toward` crosses its
+## edge, `inset` further in (out, if negative).
+func _edge(rect: Rect2, toward: Vector2, inset: float) -> Vector2:
+	var middle := rect.get_center()
+	var way := (toward - middle).normalized() if toward.distance_to(middle) > 1.0 else Vector2.UP
+	var half := rect.size / 2.0
+	var reach := INF
+	if absf(way.x) > 0.001:
+		reach = half.x / absf(way.x)
+	if absf(way.y) > 0.001:
+		reach = minf(reach, half.y / absf(way.y))
+	return middle + way * (reach - inset)
+
+
+## True while the swords of a Prisoner's Dilemma are out.
+func dueling() -> bool:
+	return not _duel.is_empty()
+
+
+## The answers of a Prisoner's Dilemma are shown. Both contributed: the two
+## swords are flung up, turn over and are driven into the table side by side,
+## between the two players, and the pot follows. Both attacked: they fly at
+## each other, meet in the air and break. One of each: the one laid down is
+## driven into the table and the other, in slow motion, into the box of
+## whoever laid it down; the blow follows.
+func duel_clash(d: Dictionary) -> void:
+	var sides: Array = [d.duelist, d.rival]
+	var strikes: Array = [d.duelist_strikes, d.rival_strikes]
+	var swords: Array = []
+	for p: PlayerState in sides:
+		var sword: SwordFx = _duel.get(p.id) if is_instance_valid(_duel.get(p.id)) else null
+		if sword == null:
+			sword = SwordFx.new()
+			sword.position = _sword_post(p)
+			add_child(sword)
+			_duel[p.id] = sword
+		sword.bob = false
+		swords.append(sword)
+	var ground := _dilemma_ground(swords[0].position, swords[1].position)
+	if strikes[0] and strikes[1]:
+		await _swords_cross(swords, (ground[0] + ground[1]) / 2.0 + Vector2(0, SWORD_FOOT.position.y / 2.0))
+		return
+	if not strikes[0] and not strikes[1]:
+		_lay_sword(swords[0], ground[0])
+		await _wait(0.2)
+		await _lay_sword(swords[1], ground[1])
+		await _wait(0.15)
+		# The pact: a gold glint runs between the two hilts.
+		var hilts: Array = []
+		for sword: Variant in swords:
+			if is_instance_valid(sword):
+				hilts.append(sword.position)
+		if hilts.size() == 2:
+			_snd("fx_glint")
+			line(hilts[0], hilts[1], UI.GOLD, 3.0, 0.5, 0.15)
+			rise((hilts[0] + hilts[1]) / 2.0, UI.GOLD, 12, 40.0)
+		await _wait(0.4)
+		return
+	var giver := 1 if strikes[0] else 0
+	await _lay_sword(swords[giver], ground[giver])
+	await _wait(0.25)
+	await _stab_box(swords[1 - giver], sides[giver])
+
+
+## Where the two swords of a Dilemma go into the table, one for the side at
+## `a` and one for the side at `b`: as close as can be to the point between
+## the two, side by side, clear of the boxes and of the claim on the stage.
+## On a crowded table, the patch that covers the least of them.
+func _dilemma_ground(a: Vector2, b: Vector2) -> Array:
+	var blocked := _ground_taken()
+	var screen := Rect2(Vector2.ZERO, size).grow(-10.0)
+	var middle := (a + b) / 2.0
+	# Side by side across the table: the one from the left on the left.
+	var side := Vector2(DILEMMA_GAP, 0) * (1.0 if a.x <= b.x else -1.0)
+	var best: Array = [middle - side, middle + side]
+	var least := INF
+	# Every patch on a grid round the middle; what it covers weighs far more
+	# than how far it is, so the nearest clear one wins.
+	var steps := int(GROUND_REACH / GROUND_STEP)
+	for row in range(-steps, steps + 1):
+		for column in range(-steps, steps + 1):
+			var shift := Vector2(column, row) * GROUND_STEP
+			var away := shift.length()
+			if away > GROUND_REACH:
+				continue
+			var spots: Array = [middle + shift - side, middle + shift + side]
+			var covered := 0.0
+			for spot: Vector2 in spots:
+				var foot := Rect2(spot + SWORD_FOOT.position, SWORD_FOOT.size)
+				if not screen.encloses(foot):
+					covered += foot.size.x * foot.size.y
+				for rect: Rect2 in blocked:
+					var over := rect.intersection(foot)
+					covered += over.size.x * over.size.y
+			var cost := covered * 100.0 + away
+			if cost < least:
+				least = cost
+				best = spots
+	return best
+
+
+## What a sword stuck in the table must not stand on: every box, the stage
+## with the claim on it, the notice and the log.
+func _ground_taken() -> Array:
+	var taken: Array = []
+	for p: PlayerState in table.engine.players:
+		if table._node_of(p) != null:
+			taken.append(_box_rect(p).grow(6.0))
+	for shown: Variant in [table._stage, table._prompt]:
+		if shown is Control and shown.visible:
+			taken.append(shown.get_global_rect().grow(8.0))
+	var log_box: Variant = table.get("_log_box")
+	if log_box is Control and log_box.is_visible_in_tree():
+		taken.append(log_box.get_global_rect().grow(4.0))
+	return taken
+
+
+## The sword is flung up off its post, turns over in the air leaving a blur
+## behind it, and comes down point first into the table at `spot`.
+func _lay_sword(sword: SwordFx, spot: Vector2) -> void:
+	if not is_instance_valid(sword):
+		return
+	var speed: float = table._speed
+	var lean := 0.14 if spot.x < POT.x else -0.14
+	var down := PI / 2.0 + lean
+	var tip := Vector2.from_angle(down) * SwordFx.TIP * SwordFx.PIXEL
+	var over := spot - tip - Vector2(0, 26)
+	var from := sword.position
+	var top := minf(from.y, over.y) - SWORD_TOSS
+	var control := Vector2((from.x + over.x) / 2.0, top)
+	var start := sword.rotation
+	# However it was pointing, it ends pointing down, turning the way it flies.
+	var turn := angle_difference(start, down) + TAU * SWORD_TURNS * (1.0 if over.x >= from.x else -1.0)
+	sword.trail = 1.0
+	_snd("fx_sword_spin")
+	var flight := 0.5
+	var toss := sword.create_tween()
+	toss.tween_method(func(t: float) -> void:
+		var u := 1.0 - t
+		sword.position = from * u * u + control * 2.0 * u * t + over * t * t
+		sword.rotation = start + turn * ease(t, 0.6), 0.0, 1.0, flight / speed)
+	await _wait(flight)
+	if not is_instance_valid(sword):
+		return
+	var drive := sword.create_tween().set_parallel()
+	drive.tween_property(sword, "position", spot - tip + Vector2.from_angle(down) * SWORD_SUNK * SwordFx.PIXEL, 0.06 / speed).set_ease(Tween.EASE_IN)
+	drive.tween_property(sword, "sunk", float(SWORD_SUNK), 0.06 / speed)
+	await _wait(0.06)
+	if not is_instance_valid(sword):
+		return
+	sword.trail = 0.0
+	_sword_lands(sword, spot, 1.0)
+
+
+## A sword has just gone into the table at `spot`: the wood cracks round it,
+## dust and splinters fly, the blade flashes and hums.
+func _sword_lands(sword: SwordFx, spot: Vector2, heft: float) -> void:
+	var speed: float = table._speed
+	_snd("contribute")
+	_snd("fx_sword_stick")
+	var crack := CrackFx.new()
+	crack.position = spot
+	add_child(crack)
+	move_child(crack, 0)
+	crack.create_tween().tween_property(crack, "grow", 1.0, 0.12 / speed).set_ease(Tween.EASE_OUT)
+	_duel_marks.append(crack)
+	sword.quiver = 1.0
+	sword.create_tween().tween_property(sword, "quiver", 0.0, 0.9 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	sword.shine()
+	flash(Color(1.0, 0.95, 0.85, 0.12 * heft), 0.12)
+	burst(spot, EARTH.lightened(0.45), int(12 * heft), 150.0, 0.5, 120.0, 5.0)
+	burst(spot, SPLINTERS, int(8 * heft), 260.0, 0.45, 700.0, 4.0)
+	burst(spot, Color("ffe9a0"), int(6 * heft), 220.0, 0.25, 0.0, 3.0)
+	ring(spot, Color.WHITE, 4.0, 46.0 * heft, 0.22, 3.0)
+	ring(spot, UI.GOLD, 4.0, 28.0 * heft, 0.3, 2.0)
+	table._shake_screen(5.0 * heft)
+
+
+## The sword is drawn back, takes aim and is thrown at the box of `victim`;
+## as it goes in the table drops into slow motion for a moment: the blow,
+## heard and felt. The loss of Morale follows (table._anim_damage).
+func _stab_box(sword: SwordFx, victim: PlayerState) -> void:
+	if not is_instance_valid(sword):
+		return
+	var speed: float = table._speed
+	var rect := _box_rect(victim)
+	var spot := _edge(rect, sword.position, 12.0)
+	if victim == table.viewer:
+		spot = Vector2(clampf(sword.position.x, rect.position.x + 40.0, rect.end.x - 40.0), rect.position.y + 12.0)
+	var way := (spot - sword.position).normalized()
+	var tip := way * SwordFx.TIP * SwordFx.PIXEL
+	# Drawn back, slowly, shaking with it; then thrown hard.
+	_snd("fx_sword_draw")
+	# The swing comes in under the wind-up: its loudest is the blow.
+	table._play_sfx_later("sword-attack", ATTACK_LEAD)
+	var back := sword.create_tween().set_parallel()
+	back.tween_property(sword, "rotation", sword.rotation + angle_difference(sword.rotation, way.angle()), 0.3 / speed) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	back.tween_property(sword, "position", sword.position - way * SWORD_WIND * 1.5, 0.4 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	back.tween_property(sword, "quiver", 0.6, 0.4 / speed)
+	ring(sword.position, BLOOD, 60.0, 8.0, 0.4, 3.0)
+	await _wait(0.45)
+	if not is_instance_valid(sword):
+		return
+	sword.quiver = 0.0
+	sword.trail = 1.0
+	sword.shine()
+	var from := sword.position
+	var lands := spot - tip + way * SWORD_SUNK * SwordFx.PIXEL
+	var fly := sword.create_tween().set_parallel()
+	fly.tween_property(sword, "position", lands, 0.16 / speed).set_ease(Tween.EASE_IN)
+	fly.tween_property(sword, "sunk", float(SWORD_SUNK), 0.06 / speed).set_delay(0.1 / speed)
+	line(from + tip, spot, Color(STEEL, 0.6), 8.0, 0.3)
+	line(from + tip, spot, Color.WHITE, 2.0, 0.22)
+	await _wait(0.1)
+	# The last stretch, and the blow, slowed right down.
+	var slowed := _slow_down()
+	await _wait(0.06)
+	if not is_instance_valid(sword):
+		if slowed:
+			_speed_up(0.3)
+		return
+	sword.trail = 0.0
+	_snd("fx_sword_impale")
+	flash(Color(BLOOD, 0.4), 0.35)
+	flash(Color(1, 1, 1, 0.3), 0.08)
+	burst(spot, BLOOD, 30, 300.0, 0.7, 500.0, 6.0)
+	burst(spot, BLOOD.darkened(0.3), 12, 180.0, 0.9, 300.0, 4.0)
+	burst(spot, STEEL, 10, 260.0, 0.4, 300.0, 4.0)
+	burst(spot, Color("ffe9a0"), 8, 300.0, 0.25, 0.0, 3.0)
+	ring(spot, Color.WHITE, 6.0, 90.0, 0.3, 5.0)
+	ring(spot, BLOOD, 6.0, 140.0, 0.5, 4.0)
+	sword.quiver = 1.0
+	sword.create_tween().tween_property(sword, "quiver", 0.0, 1.1 / speed)
+	sword.shine()
+	table._shake_screen(18.0)
+	if slowed:
+		await get_tree().create_timer(DAMAGE_HOLD, true, false, true).timeout
+		_speed_up(0.35)
+	await _wait(0.2)
+
+
+## Takes the table into slow motion for a blow, unless it is in it already
+## (the last blow of the match is the table's: see table._last_blow). Only
+## the picture: the sound of the blow keeps its pace (slowed down, it was
+## ugly). True if it did, for the caller to bring it back (_speed_up).
+func _slow_down() -> bool:
+	if table._slowed:
+		return false
+	table._glide_time(DAMAGE_SLOW, 0.05, false)
+	return true
+
+
+func _speed_up(seconds: float) -> void:
+	table._glide_time(1.0, seconds, false)
+
+
+## The two swords fly at each other, turning as they go, meet point to point
+## at `meet` and break: the blades fly off in pieces, the hilts drop.
+func _swords_cross(swords: Array, meet: Vector2) -> void:
+	var speed: float = table._speed
+	for sword: Variant in swords:
+		if not is_instance_valid(sword):
+			continue
+		var way: Vector2 = (meet - sword.position).normalized()
+		var back: Tween = sword.create_tween().set_parallel()
+		back.tween_property(sword, "rotation", sword.rotation + angle_difference(sword.rotation, way.angle()), 0.25 / speed)
+		back.tween_property(sword, "position", sword.position - way * SWORD_WIND, 0.25 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		back.tween_property(sword, "quiver", 0.5, 0.25 / speed)
+	# The swing, timed so that its loudest is where they meet.
+	table._play_sfx_later("sword-attack", CROSS_LEAD)
+	await _wait(0.3)
+	for sword: Variant in swords:
+		if not is_instance_valid(sword):
+			continue
+		var way: Vector2 = (meet - sword.position).normalized()
+		var from: Vector2 = sword.position
+		var to: Vector2 = meet - way * (SwordFx.TIP * SwordFx.PIXEL + 2.0)
+		sword.quiver = 0.0
+		sword.trail = 1.0
+		sword.create_tween().tween_property(sword, "position", to, 0.16 / speed).set_ease(Tween.EASE_IN)
+		line(from + way * SwordFx.TIP * SwordFx.PIXEL, meet, Color(STEEL, 0.5), 6.0, 0.25)
+	await _wait(0.16)
+	_snd("sword-clash")
+	table._play_sfx_later("sword-break", BREAK_LAG)
+	flash(Color(1.0, 0.97, 0.88, 0.55), 0.22)
+	burst(meet, Color("ffe9a0"), 26, 400.0, 0.45, 200.0, 4.0)
+	burst(meet, Color.WHITE, 10, 300.0, 0.2, 0.0, 3.0)
+	burst(meet, STEEL, 18, 320.0, 0.7, 600.0, 5.0)
+	ring(meet, Color.WHITE, 6.0, 120.0, 0.3, 6.0)
+	ring(meet, UI.GOLD, 6.0, 70.0, 0.4, 3.0)
+	table._float(Loc.t("CLASH!"), meet + Vector2(0, -44), STEEL, 26)
+	table._shake_screen(12.0)
+	for sword: Variant in swords:
+		if is_instance_valid(sword):
+			sword.trail = 0.0
+			_break_sword(sword, meet)
+	# Broken: they free themselves, there is nothing left to put away.
+	_duel.clear()
+	await _wait(0.9)
+
+
+## `sword` gives way: what is past SwordFx.SNAP flies off spinning, the hilt
+## and the stump drop to the table and fade.
+func _break_sword(sword: SwordFx, from: Vector2) -> void:
+	var speed: float = table._speed
+	var piece := SwordFx.new()
+	piece.keep_from = SwordFx.SNAP
+	# Where it broke, kept: the sword itself is gone before the piece lands.
+	var start := sword.position
+	piece.position = start
+	piece.rotation = sword.rotation
+	piece.trail = 0.7
+	add_child(piece)
+	sword.keep_to = SwordFx.SNAP - 1
+	var away := (sword.position - from).normalized().rotated(randf_range(-0.6, 0.6))
+	var flung := piece.create_tween().set_parallel()
+	flung.tween_method(func(t: float) -> void:
+		piece.position = start + away * 260.0 * t + Vector2(0, -120.0 * t + 420.0 * t * t), 0.0, 1.0, 0.8 / speed)
+	flung.tween_property(piece, "rotation", piece.rotation + randf_range(8.0, 12.0) * signf(away.x if away.x != 0.0 else 1.0), 0.8 / speed)
+	flung.tween_property(piece, "modulate:a", 0.0, 0.3 / speed).set_delay(0.5 / speed)
+	flung.chain().tween_callback(piece.queue_free)
+	var drop := sword.create_tween().set_parallel()
+	drop.tween_property(sword, "position", sword.position + Vector2(-away.x * 30.0, 70.0), 0.5 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	drop.tween_property(sword, "rotation", sword.rotation + randf_range(-1.2, 1.2), 0.5 / speed)
+	drop.tween_property(sword, "modulate:a", 0.0, 0.3 / speed).set_delay(0.4 / speed)
+	drop.chain().tween_callback(sword.queue_free)
+
+
+## Takes the swords of a Prisoner's Dilemma, and the cracks they left, off
+## the table.
+func drop_duel() -> void:
+	for thing: Variant in _duel.values() + _duel_marks:
+		if is_instance_valid(thing):
+			var leave: Tween = thing.create_tween()
+			leave.tween_property(thing, "modulate:a", 0.0, 0.3 / table._speed)
+			leave.tween_callback(thing.queue_free)
+	_duel.clear()
+	_duel_marks.clear()
+
+
+## The fury builds up in whoever goes berserk: their box turns red and burns,
+## the table goes dark round it, and a sword comes out, red hot and shaking,
+## pointed at what it is going to go through. It waits there: the Morale is
+## given up as the play resolves (berserk_spent) and the items go one by one
+## (item_pierced).
+func _fx_duelist_berserk(play: Play) -> void:
+	drop_berserk()
+	var speed: float = table._speed
+	var berserker: PlayerState = play.target if play.reflected else play.actor
+	var victim := play.target
+	var rect := _box_rect(berserker)
+	var fury := FuryFx.new()
+	fury.rect = rect
+	add_child(fury)
+	var box: Control = table._node_of(berserker)
+	var tint := box.modulate if box != null else Color.WHITE
+	# The growl, and under it a heart racing faster and faster.
+	_snd("fx_fury")
+	_snd("fx_heartbeat")
+	dim(0.4, FURY_BUILD + 0.5)
+	fury.create_tween().tween_property(fury, "heat", 1.0, FURY_BUILD / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	if box != null:
+		box.create_tween().tween_property(box, "modulate", Color(1.3, 0.62, 0.55, tint.a), FURY_BUILD / speed)
+	# Out of the box of whoever plays it: a mirror's holder, if it was turned.
+	var post := _sword_post(play.actor)
+	var aim: Vector2 = table._item_spot(victim, maxi(victim.items.size() - 1, 0))
+	var sword := SwordFx.new()
+	sword.position = post
+	sword.rotation = (aim - post).angle()
+	sword.scale = Vector2(0.2, 0.2)
+	sword.modulate.a = 0.0
+	sword.glow = 0.0
+	add_child(sword)
+	_berserk = {"sword": sword, "fury": fury, "by": berserker, "box": box, "tint": tint}
+	var out := sword.create_tween().set_parallel()
+	out.tween_property(sword, "modulate:a", 1.0, 0.2 / speed)
+	out.tween_property(sword, "scale", Vector2.ONE, 0.4 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	out.tween_property(sword, "glow", 1.0, FURY_BUILD / speed)
+	out.tween_property(sword, "quiver", 1.0, FURY_BUILD / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	# A pulse on every beat of the heart: the gaps are those of fx_heartbeat.
+	var middle := rect.get_center()
+	var at := 0.0
+	var gap := HEARTBEAT_FIRST
+	while at < FURY_BUILD - 0.08:
+		var k := at / FURY_BUILD
+		ring(middle, FURY, maxf(rect.size.x, rect.size.y) * 0.8, 10.0, 0.3, 3.0 + 4.0 * k)
+		rise(middle + Vector2(0, rect.size.y * 0.3), FURY.lerp(EMBER, randf()), int(3 + 7 * k), rect.size.x * 0.4)
+		table._shake_screen(1.0 + 4.0 * k)
+		await _wait(gap)
+		at += gap
+		gap = maxf(gap * HEARTBEAT_HURRY, HEARTBEAT_FASTEST)
+	await _wait(0.1)
+
+
+## True while the sword of a Berserk is out over the table.
+func berserking() -> bool:
+	return not _berserk.is_empty() and is_instance_valid(_berserk.sword)
+
+
+## The Morale of a Berserk goes, from `heart_at`: the heart bursts, the fury
+## breaks loose and the sword is drawn back to be thrown.
+func berserk_spent(who: PlayerState, heart_at: Vector2) -> void:
+	var speed: float = table._speed
+	var sword: SwordFx = _berserk.sword
+	_snd("damage")
+	flash(Color(FURY, 0.35), 0.3)
+	burst(heart_at, BLOOD, 24, 300.0, 0.6, 400.0, 6.0)
+	burst(heart_at, FURY.lightened(0.3), 10, 200.0, 0.4, 0.0, 4.0)
+	ring(heart_at, FURY, 6.0, 80.0, 0.3, 5.0)
+	table._float(Loc.t("BERSERK!"), _at(who) + Vector2(0, -34), FURY.lightened(0.25), 30)
+	table._shake_screen(14.0)
+	var fury: FuryFx = _berserk.fury
+	if is_instance_valid(fury):
+		var flare := fury.create_tween()
+		flare.tween_property(fury, "heat", 1.6, 0.12 / speed)
+		flare.tween_property(fury, "heat", 0.0, 0.6 / speed)
+	var box: Control = _berserk.box
+	if box != null and is_instance_valid(box):
+		box.create_tween().tween_property(box, "modulate", _berserk.tint, 0.6 / speed)
+	if is_instance_valid(sword):
+		var way := Vector2.from_angle(sword.rotation)
+		sword.create_tween().tween_property(sword, "position", sword.position - way * SWORD_WIND, 0.25 / speed) \
+				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await _wait(0.4)
+
+
+## The sword of a Berserk goes through the item at `at` at full speed and on
+## past it, where it waits for the next one. `gone` is called as it goes
+## through: from then on the item is not in the inventory.
+func item_pierced(texture: Texture2D, at: Vector2, item_size: Vector2, gone: Callable) -> void:
+	var sword: SwordFx = _berserk.sword
+	var speed: float = table._speed
+	var from := sword.position
+	var tip := Vector2.from_angle(sword.rotation) * SwordFx.TIP * SwordFx.PIXEL
+	var way := (at - (from + tip)).normalized() if at.distance_to(from + tip) > 1.0 else Vector2.from_angle(sword.rotation)
+	tip = way * SwordFx.TIP * SwordFx.PIXEL
+	sword.rotation = way.angle()
+	var lands := at - tip + way * SWORD_THROUGH
+	sword.trail = 1.0
+	_snd("fx_sword_whoosh")
+	sword.create_tween().tween_property(sword, "position", lands, 0.1 / speed).set_ease(Tween.EASE_IN)
+	line(from + tip, at + way * SWORD_THROUGH, Color(FURY, 0.7), 8.0, 0.3)
+	line(from + tip, at + way * SWORD_THROUGH, Color.WHITE, 2.0, 0.2)
+	await _wait(0.07)
+	gone.call()
+	_snd("fx_sword_pierce")
+	var wreck: TextureRect = _sprite(texture, at, item_size)
+	wreck.pivot_offset = item_size / 2.0
+	var apart := wreck.create_tween().set_parallel()
+	apart.tween_property(wreck, "scale", Vector2.ONE * 1.6, 0.2 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	apart.tween_property(wreck, "rotation", 0.5 * signf(way.x if way.x != 0.0 else 1.0), 0.2 / speed)
+	apart.tween_property(wreck, "modulate", Color(1.0, 0.35, 0.3, 0.0), 0.24 / speed)
+	apart.chain().tween_callback(wreck.queue_free)
+	burst(at, STEEL, 14, 300.0, 0.45, 400.0, 5.0)
+	burst(at, FURY, 10, 240.0, 0.4, 300.0, 4.0)
+	ring(at, Color.WHITE, 4.0, 50.0, 0.22, 4.0)
+	table._shake_screen(7.0)
+	await _wait(0.3)
+
+
+## The sword of a Berserk goes through where the items should be (`at`) and
+## finds nothing: it carries on and off the table.
+func sword_missed(at: Vector2) -> void:
+	var sword: SwordFx = _berserk.sword
+	var speed: float = table._speed
+	var from := sword.position
+	var way := (at - from).normalized() if at.distance_to(from) > 1.0 else Vector2.from_angle(sword.rotation)
+	sword.rotation = way.angle()
+	_snd("fx_sword_whoosh")
+	sword.create_tween().tween_property(sword, "position", from + way * 1400.0, 0.5 / speed).set_ease(Tween.EASE_IN)
+	line(from, from + way * 600.0, Color(FURY, 0.5), 6.0, 0.35)
+	await _wait(0.12)
+	table._float(Loc.t("NOTHING THERE"), at, UI.MUTED, 16)
+	await _wait(0.35)
+
+
+## Takes the sword and the fury of a Berserk off the table.
+func drop_berserk() -> void:
+	if _berserk.is_empty():
+		return
+	var speed: float = table._speed
+	var sword: SwordFx = _berserk.sword
+	if is_instance_valid(sword):
+		var leave := sword.create_tween().set_parallel()
+		leave.tween_property(sword, "modulate:a", 0.0, 0.3 / speed)
+		leave.tween_property(sword, "glow", 0.0, 0.3 / speed)
+		leave.chain().tween_callback(sword.queue_free)
+	var fury: FuryFx = _berserk.fury
+	if is_instance_valid(fury):
+		var cool := fury.create_tween()
+		cool.tween_property(fury, "heat", 0.0, 0.3 / speed)
+		cool.tween_callback(fury.queue_free)
+	var box: Control = _berserk.box
+	if box != null and is_instance_valid(box):
+		box.create_tween().tween_property(box, "modulate", _berserk.tint, 0.3 / speed)
+	_berserk = {}
+
+
 # --- the Clown ----------------------------------------------------------------
 
 const CLOWN_GUN := "res://assets/ui/clown_gun.png"
@@ -4468,6 +5089,370 @@ func _draw_bolt(shape: Dictionary) -> void:
 		draw_rect(Rect2(Vector2(cell) * PIXEL, Vector2(PIXEL, PIXEL)), Color(Color.WHITE, alpha))
 
 
+# --- the Necromancer ------------------------------------------------------------
+
+const NECRO_BONE := Color("e8e0c8")
+const NECRO_GLOW := Color("7dff9a")
+const NECRO_DEEP := Color("1f8a4a")
+## How far from the Necromancer's box the skull of a Retaliation rises.
+const SKULL_REACH := 66.0
+## How far it is drawn back before it is let go.
+const SKULL_WIND := 24.0
+const SKULL_FLIGHT := 0.32
+## How far the soul of a Drain rises off the cards that were left.
+const SOUL_RISE := 46.0
+## How wide the soul swings round as it is reeled in.
+const SOUL_SWING := 64.0
+const SOUL_REEL := 0.95
+## Where the soul waits, once swallowed, for the Morale it is worth.
+const SOUL_ORBIT := 34.0
+
+## The soul a Drain took, going round the Necromancer until its Morale comes
+## (drain_morale), or null.
+var _soul: SoulFx
+var _soul_owner: PlayerState
+
+
+## Retaliation. The wound the Necromancer has just taken bleeds up out of
+## his box and the blood sets, cell by cell, into a skull, still smeared
+## with it. Its eyes catch a
+## green fire, it turns on whoever struck him and a thread of that blood
+## shoots out to them; it chatters, draws back and is flung along the thread,
+## screaming, eating it up as it goes, and bursts into bone on their box. The
+## blow itself comes after (morale_lost). Turned by a mirror, the skull goes
+## to the one who struck him all the same, glances off and comes back.
+func _fx_necromancer_retaliation(play: Play) -> void:
+	var speed: float = table._speed
+	# Turned by a mirror, the play is its holder's, aimed at the Necromancer.
+	var turned := play.reflected
+	var caster: PlayerState = play.target if turned else play.actor
+	var struck: PlayerState = play.actor if turned else play.target
+	var here := _at(caster)
+	var there := _at(struck)
+	var spot := _beside(caster, SKULL_REACH)
+	dim(0.6, 3.0 if turned else 2.6)
+
+	# His voice over all of it: it swells to its worst as the skull is let go.
+	_snd("retaliation")
+	# The wound opens again and bleeds upwards.
+	_snd("fx_necro_wound")
+	var box: Control = table._node_of(caster)
+	if box != null:
+		var throb := box.create_tween()
+		throb.tween_property(box, "modulate", Color(1.5, 0.45, 0.45), 0.08 / speed)
+		throb.tween_property(box, "modulate", Color.WHITE, 0.5 / speed)
+	burst(here, BLOOD, 12, 150.0, 0.45, 280.0, 6.0)
+	stream(here, spot, BLOOD, 22, 0.42, 0.55)
+	var skull := SkullFx.new()
+	skull.speed = speed
+	skull.position = spot
+	skull.gaze = (there - spot).normalized()
+	add_child(skull)
+	await _wait(0.3)
+	if not is_instance_valid(skull):
+		return
+
+	# It sets, still smeared with the blood it was made of.
+	_snd("fx_bone_rattle")
+	skull.create_tween().tween_property(skull, "formed", 1.0, 0.65 / speed).set_trans(Tween.TRANS_SINE)
+	await _wait(0.65)
+	if not is_instance_valid(skull):
+		return
+	skull.create_tween().tween_property(skull, "bloody", SkullFx.STAINED, 0.5 / speed)
+
+	# Its eyes light, and it looks round at them.
+	_snd("fx_soul_flare")
+	var light := skull.create_tween().set_parallel()
+	light.tween_property(skull, "eyes", 1.0, 0.15 / speed)
+	light.tween_property(skull, "fire", 1.0, 0.4 / speed)
+	ring(spot, NECRO_GLOW, 6.0, 64.0, 0.35, 4.0)
+	burst(spot, NECRO_GLOW, 12, 150.0, 0.45, -140.0, 6.0)
+	UI.pop(skull, 1.2)
+	await _wait(0.3)
+	if not is_instance_valid(skull):
+		return
+
+	# The thread of blood finds them.
+	var thread := ThreadFx.new()
+	thread.speed = speed
+	thread.a = spot
+	thread.b = there
+	add_child(thread)
+	move_child(thread, skull.get_index())
+	_snd("fx_blood_thread")
+	_snd("carnage")
+	thread.create_tween().tween_property(thread, "reach", 1.0, 0.26 / speed) \
+			.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+	await _wait(0.26)
+	if not is_instance_valid(skull):
+		return
+	var marked: Control = table._node_of(struck)
+	if marked != null:
+		var blink := marked.create_tween()
+		blink.tween_property(marked, "modulate", Color(1.5, 0.5, 0.5), 0.06 / speed)
+		blink.tween_property(marked, "modulate", Color.WHITE, 0.3 / speed)
+	# It lands on them wet.
+	ring(there, BLOOD, 54.0, 8.0, 0.3, 4.0)
+	burst(there, BLOOD, 16, 240.0, 0.45, 520.0, 7.0)
+	burst(there, Color("6a0a0a"), 8, 140.0, 0.4, 400.0, 5.0)
+	table._shake_screen(5.0)
+	thread.create_tween().tween_property(thread, "slack", 2.0, 0.5 / speed).set_trans(Tween.TRANS_SINE)
+
+	# It chatters at them, and is drawn back.
+	_snd("fx_skull_chatter")
+	skull.chatter = 1.0
+	await _wait(0.42)
+	if not is_instance_valid(skull):
+		return
+	var back := spot - (there - spot).normalized() * SKULL_WIND
+	var wind := skull.create_tween().set_parallel()
+	wind.tween_property(skull, "position", back, 0.18 / speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	wind.tween_property(skull, "scale", Vector2(0.85, 1.15), 0.18 / speed)
+	await _wait(0.2)
+	if not is_instance_valid(skull):
+		return
+
+	# Let go, tearing through the cord.
+	_snd("fx_skull_scream")
+	_snd("carnage2")
+	skull.chatter = 0.0
+	skull.jaw = 1.0
+	skull.trail = true
+	skull.scale = Vector2(1.2, 0.85)
+	skull.create_tween().tween_property(skull, "scale", Vector2.ONE, SKULL_FLIGHT / speed)
+	var carry := func(k: float) -> void:
+		if is_instance_valid(skull):
+			skull.position = back.lerp(there, k)
+		if is_instance_valid(thread):
+			thread.eaten = k
+	skull.create_tween().tween_method(carry, 0.0, 1.0, SKULL_FLIGHT / speed) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await _wait(SKULL_FLIGHT)
+	if not is_instance_valid(skull):
+		return
+	if is_instance_valid(thread):
+		thread.queue_free()
+
+	if turned:
+		# Off the mirror, the way it came.
+		_snd("item_mirror")
+		ring(there, Color("bfe9f5"), 8.0, 90.0, 0.3, 4.0)
+		burst(there, Color("bfe9f5"), 14, 220.0, 0.4, 0.0, 5.0)
+		table._shake_screen(6.0)
+		skull.gaze = (here - there).normalized()
+		skull.create_tween().tween_property(skull, "rotation", TAU * (1.0 if here.x < there.x else -1.0), 0.4 / speed)
+		var bounce := skull.create_tween()
+		bounce.tween_property(skull, "position", here, 0.4 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		await _wait(0.4)
+		if not is_instance_valid(skull):
+			return
+		there = here
+
+	# It bursts on them.
+	_snd("fx_skull_shatter")
+	var shards := ShardsFx.new()
+	shards.speed = speed
+	shards.position = there
+	shards.burst((there - spot).normalized())
+	add_child(shards)
+	skull.queue_free()
+	burst(there, NECRO_GLOW, 16, 240.0, 0.5, -80.0, 6.0)
+	burst(there, BLOOD, 18, 280.0, 0.6, 520.0)
+	ring(there, Color.WHITE, 8.0, 84.0, 0.2, 5.0)
+	ring(there, NECRO_GLOW, 10.0, 130.0, 0.45, 6.0)
+	flash(Color(0.25, 0.9, 0.45, 0.18), 0.3)
+	table._shake_screen(13.0)
+	await _wait(0.45)
+
+
+## Drain. Over the cards the fallen player left, a sigil opens and their
+## soul rises out of them, wailing. A green tendril reaches out of the
+## Necromancer's box with a bony claw at its end, closes on it and reels it in
+## round a wide spiral, the soul streaming behind; his box swallows it in a
+## pulse of green. What is left of it goes round him until its Morale comes
+## (drain_morale), and the sigils close.
+func _fx_necromancer_drain(play: Play) -> void:
+	var speed: float = table._speed
+	var here := _at(play.actor)
+	var fallen: Variant = play.event.data.get("player") if play.event != null else null
+	var grave := _at(fallen) if fallen is PlayerState else POT
+	if grave.distance_to(here) < 40.0:
+		grave = POT
+	dim(0.65, 3.6)
+
+	# His voice, calling the soul up, for as long as it takes to reel it in.
+	_snd("drain")
+	# The circle opens on the cards they left, and the cards stir.
+	_snd("fx_necro_sigil")
+	var low := SigilFx.new()
+	low.speed = speed
+	low.position = grave + Vector2(0, 10)
+	low.radius = 58.0
+	add_child(low)
+	low.create_tween().tween_property(low, "open", 1.0, 0.45 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if fallen is PlayerState:
+		for i in fallen.left.size():
+			var view: CardView = table._card_view(fallen, i)
+			if view == null:
+				continue
+			var was := view.modulate
+			var stir := view.create_tween()
+			stir.tween_property(view, "modulate", Color(0.6, 1.5, 0.8), 0.25 / speed)
+			stir.tween_property(view, "modulate", was, 0.9 / speed)
+			UI.shake(view, 4.0, 0.4)
+	await _wait(0.45)
+
+	# The soul comes up out of them.
+	_snd("fx_soul_wail")
+	var soul := SoulFx.new()
+	soul.speed = speed
+	soul.position = grave
+	soul.modulate.a = 0.0
+	add_child(soul)
+	var up := soul.create_tween().set_parallel()
+	up.tween_property(soul, "position", grave + Vector2(0, -SOUL_RISE), 0.6 / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	up.tween_property(soul, "modulate:a", 1.0, 0.3 / speed)
+	rise(grave, NECRO_GLOW, 12, 30.0)
+	await _wait(0.55)
+	if not is_instance_valid(soul):
+		return
+	soul.struggle = 1.0
+
+	# Out of him, the tendril and the claw.
+	var high := SigilFx.new()
+	high.speed = speed
+	high.position = here
+	high.radius = 80.0
+	high.spin = -1.0
+	add_child(high)
+	high.create_tween().tween_property(high, "open", 1.0, 0.35 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var tendril := TendrilFx.new()
+	tendril.speed = speed
+	tendril.a = _beside(play.actor, 10.0)
+	tendril.b = soul.position
+	add_child(tendril)
+	_snd("fx_soul_reach")
+	tendril.create_tween().tween_property(tendril, "reach", 1.0, 0.42 / speed) \
+			.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+	await _wait(0.42)
+	if not is_instance_valid(soul) or not is_instance_valid(tendril):
+		return
+
+	# It closes on the soul.
+	_snd("fx_soul_grab")
+	tendril.create_tween().tween_property(tendril, "grip", 1.0, 0.1 / speed)
+	soul.struggle = 2.0
+	UI.pop(soul, 0.8)
+	ring(soul.position, NECRO_GLOW, 30.0, 6.0, 0.2, 3.0)
+	burst(soul.position, SoulFx.BODY, 8, 120.0, 0.3, 0.0, 5.0)
+	await _wait(0.22)
+	if not is_instance_valid(soul) or not is_instance_valid(tendril):
+		return
+
+	# Reeled in, round and round.
+	_snd("fx_soul_drain")
+	soul.trail = true
+	var start := soul.position
+	var side := 1.0 if start.x < here.x else -1.0
+	var pull := func(k: float) -> void:
+		var turn := k * TAU * 1.25 * side
+		var at := start.lerp(here, k) + Vector2(sin(turn), (1.0 - cos(turn)) * 0.5) * SOUL_SWING * sin(PI * k)
+		if is_instance_valid(soul):
+			soul.heading = at - soul.position
+			soul.position = at
+			soul.stretch = sin(PI * k)
+		if is_instance_valid(tendril):
+			tendril.b = at
+	soul.create_tween().tween_method(pull, 0.0, 1.0, SOUL_REEL / speed) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await _wait(SOUL_REEL)
+	if not is_instance_valid(soul):
+		return
+
+	# Swallowed.
+	_snd("fx_soul_absorb")
+	if is_instance_valid(tendril):
+		tendril.queue_free()
+	soul.trail = false
+	soul.stretch = 0.0
+	soul.struggle = 0.0
+	ring(here, NECRO_GLOW, 110.0, 8.0, 0.4, 5.0)
+	ring(here, Color.WHITE, 70.0, 4.0, 0.3, 3.0)
+	burst(here, NECRO_GLOW, 20, 220.0, 0.55, -90.0, 6.0)
+	flash(Color(0.3, 1.0, 0.55, 0.14), 0.35)
+	table._shake_screen(6.0)
+	var gorged: Control = table._node_of(play.actor)
+	if gorged != null:
+		var pulse := gorged.create_tween()
+		pulse.tween_property(gorged, "modulate", Color(0.7, 1.6, 0.9), 0.1 / speed)
+		pulse.tween_property(gorged, "modulate", Color.WHITE, 0.6 / speed)
+	# What is left of it: a wisp going round him.
+	var shrink := soul.create_tween()
+	shrink.tween_property(soul, "scale", Vector2(0.45, 0.45), 0.2 / speed)
+	soul.circle(here, SOUL_ORBIT)
+	_soul = soul
+	_soul_owner = play.actor
+	for sigil: SigilFx in [low, high]:
+		var close := sigil.create_tween()
+		close.tween_property(sigil, "open", 0.0, 0.4 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+		close.tween_callback(sigil.queue_free)
+	await _wait(0.4)
+
+
+func draining(who: PlayerState) -> bool:
+	return _soul != null and is_instance_valid(_soul) and _soul_owner == who
+
+
+## The Morale a Drain gives: the soul going round the Necromancer is wound
+## into a heart, green fading to red, that goes to `to`, its place in his
+## Morale.
+func drain_morale(who: PlayerState, to: Vector2) -> void:
+	if not draining(who):
+		return
+	var speed: float = table._speed
+	var soul := _soul
+	_soul = null
+	_soul_owner = null
+	var at := soul.position
+	soul.circle(at, 0.0)
+	var wind := soul.create_tween().set_parallel()
+	wind.tween_property(soul, "scale", Vector2(0.15, 0.15), 0.25 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	wind.tween_property(soul, "rotation", TAU, 0.25 / speed)
+	ring(at, NECRO_GLOW, 28.0, 4.0, 0.25, 3.0)
+	await _wait(0.25)
+	if is_instance_valid(soul):
+		soul.queue_free()
+	_snd("fx_soul_flare")
+	var heart := _sprite(UI.tex(HEART_ART), at, Vector2(30, 30))
+	heart.pivot_offset = heart.size / 2.0
+	heart.modulate = Color(0.5, 1.8, 0.8)
+	heart.scale = Vector2(0.3, 0.3)
+	burst(at, NECRO_GLOW, 10, 140.0, 0.35, 0.0, 5.0)
+	var go := heart.create_tween().set_parallel()
+	go.tween_property(heart, "scale", Vector2(1.3, 1.3), 0.15 / speed).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	go.tween_property(heart, "modulate", Color.WHITE, 0.45 / speed)
+	go.tween_property(heart, "position", to - heart.size / 2.0, 0.42 / speed) \
+			.set_delay(0.12 / speed).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	go.tween_property(heart, "scale", Vector2(0.8, 0.8), 0.3 / speed).set_delay(0.24 / speed)
+	go.chain().tween_callback(heart.queue_free)
+	stream(at, to, NECRO_GLOW, 8, 0.4, 0.3)
+	await _wait(0.55)
+	ring(to, Color("ff7a8c"), 4.0, 26.0, 0.3, 3.0)
+	ring(to, NECRO_GLOW, 4.0, 34.0, 0.4, 2.0)
+
+
+## A soul nobody's Morale came for fades away.
+func drop_soul() -> void:
+	if _soul != null and is_instance_valid(_soul):
+		var soul := _soul
+		var fade := soul.create_tween()
+		fade.tween_property(soul, "modulate:a", 0.0, 0.3 / table._speed)
+		fade.tween_callback(soul.queue_free)
+	_soul = null
+	_soul_owner = null
+
+
 # --- props ---------------------------------------------------------------------
 
 ## The Magician's wand: black, capped in white at both ends. Its origin is
@@ -4894,7 +5879,7 @@ void fragment() {
 		var player := AudioStreamPlayer.new()
 		player.stream = known.stream
 		player.pitch_scale = pitch
-		player.volume_db = volume
+		player.volume_db = volume + Sounds.level(sound)
 		player.bus = Settings.SFX_BUS
 		add_child(player)
 		player.play()
@@ -7542,3 +8527,853 @@ class PaletteFx extends Control:
 						draw_rect(Rect2((at + Vector2(gx, gy)).snapped(Vector2(CELL, CELL)), Vector2(CELL, CELL)), ink)
 					gx += CELL
 				gy += CELL
+
+
+## The Duelist's sword, a rapier seen flat, in blocks of PIXEL: brass pommel,
+## leather grip, swept brass guard and a long steel blade that tapers to the
+## point. The origin is the guard; the blade points along +x. Built cell by
+## cell once (_init) and outlined; `sunk` hides the end of the blade (driven
+## into something), `keep_from`/`keep_to` keep only a stretch of it (the two
+## pieces of a broken sword), `glow` sets it red hot, `quiver` shakes it,
+## `bob` lets it hang in the air, breathing and swaying, and `trail` leaves
+## fading copies of where it was a moment ago behind it as it moves.
+class SwordFx extends Control:
+	const PIXEL := 2.0
+	## The cell of the point, and where the blade gives way when it breaks.
+	const TIP := 38
+	const SNAP := 18
+	const OUTLINE := Color("0e0a0c")
+	const STEEL_LIT := Color("eef3fa")
+	const STEEL := Color("b8c2d0")
+	const STEEL_DARK := Color("6c7686")
+	const BRASS: Array[Color] = [Color("f2d488"), Color("c8962e"), Color("7a5418")]
+	const LEATHER: Array[Color] = [Color("8a4a24"), Color("5a2a14"), Color("3a180a")]
+	const HOT := Color("ff3a1a")
+	## How many frames of blur a moving sword leaves behind, and their tint.
+	const TRAIL := 6
+	const BLUR := Color("dfe9ff")
+
+	var sunk := 0.0:
+		set(value):
+			sunk = value
+			queue_redraw()
+	var keep_from := -99
+	var keep_to := 99
+	var glow := 0.0
+	var quiver := 0.0
+	var bob := false
+	var trail := 0.0
+
+	var _cells: Array = []  # [Vector2i, Color]
+	## Where it was over the last TRAIL frames, oldest first (parent space).
+	var _past: Array[Transform2D] = []
+	var _time := randf() * 10.0
+	var _shine := -1.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var inks := {}
+		# The blade, three rows that taper to one.
+		for x in range(1, TIP + 1):
+			inks[Vector2i(x, 0)] = STEEL
+			if x < TIP - 6:
+				inks[Vector2i(x, -1)] = STEEL_LIT
+			if x < TIP - 3:
+				inks[Vector2i(x, 1)] = STEEL_DARK
+		# The guard, swept back at both ends.
+		for y in range(-5, 6):
+			inks[Vector2i(0, y)] = BRASS[0] if y < 0 else BRASS[1]
+		for y in range(-4, 5):
+			inks[Vector2i(-1, y)] = BRASS[2]
+		inks[Vector2i(1, -5)] = BRASS[0]
+		inks[Vector2i(1, 5)] = BRASS[1]
+		inks[Vector2i(2, -5)] = BRASS[1]
+		inks[Vector2i(2, 5)] = BRASS[2]
+		# The grip, wrapped.
+		for x in range(-8, -1):
+			inks[Vector2i(x, -1)] = LEATHER[0]
+			inks[Vector2i(x, 0)] = LEATHER[1] if x % 2 == 0 else LEATHER[0]
+			inks[Vector2i(x, 1)] = LEATHER[2]
+		# The pommel.
+		for at: Vector2i in [Vector2i(-10, -2), Vector2i(-11, -1), Vector2i(-10, -1), Vector2i(-9, -1),
+				Vector2i(-11, 0), Vector2i(-10, 0), Vector2i(-9, 0), Vector2i(-11, 1), Vector2i(-10, 1), Vector2i(-9, 1), Vector2i(-10, 2)]:
+			inks[at] = BRASS[0] if at.y < 0 else (BRASS[1] if at.y == 0 else BRASS[2])
+		var rim := {}
+		for at: Vector2i in inks:
+			for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if not inks.has(at + step):
+					rim[at + step] = OUTLINE
+		for at: Vector2i in rim:
+			_cells.append([at, OUTLINE])
+		for at: Vector2i in inks:
+			_cells.append([at, inks[at]])
+
+	## A gleam runs down the blade, once.
+	func shine() -> void:
+		_shine = 0.0
+
+	func _process(delta: float) -> void:
+		_time += delta
+		if _shine >= 0.0:
+			_shine += delta * 2.2
+			if _shine > 1.2:
+				_shine = -1.0
+		if trail > 0.0:
+			_past.append(get_transform())
+			if _past.size() > TRAIL:
+				_past.pop_front()
+		elif not _past.is_empty():
+			_past.pop_front()
+		queue_redraw()
+
+	func _draw() -> void:
+		# The blur first, under the sword: each copy where it was, fainter
+		# the older it is.
+		var here := get_transform().affine_inverse()
+		for i in _past.size():
+			var fade := float(i + 1) / (_past.size() + 1) * 0.45 * maxf(trail, 0.3)
+			draw_set_transform_matrix(here * _past[i])
+			for cell: Array in _cells:
+				var at: Vector2i = cell[0]
+				if cell[1] != OUTLINE and at.x >= keep_from and at.x <= keep_to and at.x <= TIP - int(sunk):
+					draw_rect(Rect2((Vector2(at) - Vector2(0.5, 0.5)) * PIXEL, Vector2(PIXEL, PIXEL)), Color(BLUR, fade))
+		var drift := Vector2.ZERO
+		var sway := 0.0
+		if bob:
+			drift.y = sin(_time * 2.2) * 2.0
+			sway = sin(_time * 1.3) * 0.06
+		if quiver > 0.0:
+			drift += Vector2(randf_range(-1, 1), randf_range(-1, 1)) * 2.5 * quiver
+		draw_set_transform(drift.rotated(-rotation), sway)
+		var hidden := TIP - int(sunk)
+		var gleam := int(lerpf(1.0, TIP, _shine)) if _shine >= 0.0 else -999
+		var hot := clampf(glow, 0.0, 1.0)
+		if hot > 0.0:
+			# A red heat round all of it, flickering.
+			var halo := Color(HOT, 0.18 * hot * (0.8 + 0.2 * sin(_time * 25.0)))
+			for cell: Array in _cells:
+				var at: Vector2i = cell[0]
+				if at.x >= keep_from and at.x <= keep_to and at.x <= hidden:
+					draw_rect(Rect2((Vector2(at) - Vector2(1.5, 1.5)) * PIXEL, Vector2(3, 3) * PIXEL), halo)
+		for cell: Array in _cells:
+			var at: Vector2i = cell[0]
+			if at.x < keep_from or at.x > keep_to or at.x > hidden:
+				continue
+			var ink: Color = cell[1]
+			if ink != OUTLINE:
+				if hot > 0.0 and at.x > 0:
+					ink = ink.lerp(HOT.lightened(0.2 * float(at.y == -1)), hot * 0.7)
+				if absi(at.x - gleam) <= 1 and at.x > 0:
+					ink = ink.lerp(Color.WHITE, 0.8)
+			draw_rect(Rect2((Vector2(at) - Vector2(0.5, 0.5)) * PIXEL, Vector2(PIXEL, PIXEL)), ink)
+
+
+## The fury of a Berserk round a box: blocky flames licking up from its
+## edges, darker red at the root and yellow at the tips, as tall as `heat`.
+class FuryFx extends Control:
+	const CELL := 3.0
+	const INKS: Array[Color] = [Color("5a0a08"), Color("b3201a"), Color("e0261a"), Color("ff7a2a"), Color("ffd060")]
+
+	var rect := Rect2()
+	var heat := 0.0
+
+	var _time := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		_time += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		if heat <= 0.01:
+			return
+		var reach := 22.0 * heat
+		var r := Rect2(rect.position.snapped(Vector2(CELL, CELL)), rect.size.snapped(Vector2(CELL, CELL)))
+		# Along the top, flames go up; along the sides, they lean out.
+		var x := r.position.x
+		while x < r.end.x:
+			_flame(Vector2(x, r.position.y), Vector2.UP, reach, x * 0.13)
+			_flame(Vector2(x, r.end.y), Vector2.UP, reach * 0.4, x * 0.11 + 3.0)
+			x += CELL
+		var y := r.position.y
+		while y < r.end.y:
+			_flame(Vector2(r.position.x, y), Vector2(-0.6, -0.8), reach * 0.7, y * 0.17 + 7.0)
+			_flame(Vector2(r.end.x, y), Vector2(0.6, -0.8), reach * 0.7, y * 0.15 + 11.0)
+			y += CELL
+		# The box itself glows from inside.
+		draw_rect(r, Color(INKS[2], 0.12 * clampf(heat, 0.0, 1.0)))
+		draw_rect(r, Color(INKS[3], 0.7 * clampf(heat, 0.0, 1.0)), false, CELL)
+
+	func _flame(root: Vector2, way: Vector2, reach: float, phase: float) -> void:
+		var tall := reach * (0.45 + 0.55 * absf(sin(phase + _time * 7.0) * cos(phase * 0.7 + _time * 4.3)))
+		var steps := int(tall / CELL)
+		for i in steps:
+			var k := float(i) / maxf(steps, 1)
+			var ink: Color = INKS[clampi(1 + int(k * 3.99), 0, 4)]
+			ink.a = 1.0 - k * 0.6
+			var at := (root + way * i * CELL).snapped(Vector2(CELL, CELL))
+			draw_rect(Rect2(at, Vector2(CELL, CELL)), ink)
+
+
+## The crack a sword driven into the table leaves round its point: a few
+## jagged splits of dark wood radiating out, lit on one lip, in blocks of
+## CELL. `grow` takes them from nothing to their full length.
+class CrackFx extends Control:
+	const CELL := 2.0
+	const DARK := Color(0.08, 0.04, 0.02, 0.85)
+	const LIP := Color(0.85, 0.62, 0.38, 0.35)
+
+	var grow := 0.0:
+		set(value):
+			grow = value
+			queue_redraw()
+
+	var _splits: Array = []  # each an Array of Vector2, from the middle out
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var count := randi_range(5, 7)
+		for i in count:
+			var angle := TAU * (i + randf_range(-0.3, 0.3)) / count
+			var length := randf_range(18.0, 34.0)
+			var points: Array = [Vector2.ZERO]
+			var at := Vector2.ZERO
+			var steps := 4
+			for k in steps:
+				angle += randf_range(-0.5, 0.5)
+				at += Vector2.from_angle(angle) * length / steps
+				# Flattened: it is the table, seen from above at a slant.
+				points.append(Vector2(at.x, at.y * 0.55))
+			_splits.append(points)
+
+	func _draw() -> void:
+		for points: Array in _splits:
+			for k in points.size() - 1:
+				var a: Vector2 = points[k]
+				var b: Vector2 = points[k + 1]
+				var reach := clampf(grow * (points.size() - 1) - k, 0.0, 1.0)
+				if reach <= 0.0:
+					continue
+				b = a.lerp(b, reach)
+				var steps := maxi(int(a.distance_to(b) / CELL), 1)
+				for n in steps + 1:
+					var p := a.lerp(b, float(n) / steps).snapped(Vector2(CELL, CELL))
+					var thick := CELL * (2.0 if k == 0 else 1.0)
+					draw_rect(Rect2(p, Vector2(thick, thick)), DARK)
+					draw_rect(Rect2(p + Vector2(0, -CELL), Vector2(CELL, CELL)), LIP)
+		# The splintered hole the point is in.
+		draw_rect(Rect2(Vector2(-3, -2) * CELL, Vector2(6, 4) * CELL), Color(DARK, DARK.a * grow))
+
+
+## The skull of a Retaliation, seen from the front, in blocks of PIXEL, with
+## its middle at the origin. `formed` (0 to 1) sets it out of blood: cells
+## show up red in no order and turn to bone. `eyes` lights the sockets, whose
+## sparks look along `gaze`; `fire` is the green fire it burns in, streaming
+## back from where it is going; `jaw` opens it (`chatter` makes it rattle on
+## its own) and `trail` leaves faint copies of it behind as it flies.
+class SkullFx extends Control:
+	const PIXEL := 5.0
+	const CRANIUM: Array = [
+		"...KKKKK...",
+		"..KLLBBBK..",
+		".KLLBBBBSK.",
+		"KLBBBBBBBSK",
+		"KBEEEBEEESK",
+		"KBEEEBEEESK",
+		"KSBEEBEESSK",
+		".KSBBNBBSK.",
+		".KSSNNNSSK.",
+		"..KSSSSSK..",
+	]
+	const JAW: Array = [
+		"..KTKTKTK..",
+		"..KSBBBSK..",
+		"...KKKKK...",
+	]
+	const COLUMNS := 11
+	const INKS := {
+		"K": Color("2a2418"), "L": Color("fffaf0"), "B": Color("e8e0c8"), "S": Color("a89c80"),
+		"E": Color("0a0f0c"), "N": Color("1a1612"), "T": Color("f4efdc"),
+	}
+	const FLAME: Array = [Color("0f4a2a"), Color("1f8a4a"), Color("3fd070"), Color("8cff9e"), Color("e6ffe8")]
+	const GLOW := Color("7dff9a")
+	const BLOOD := Color("8a1410")
+	## How much of it is still smeared with blood once it has set.
+	const STAINED := 0.35
+	const GHOST_EVERY := 0.02
+	const GHOST_LIFE := 0.18
+
+	var speed := 1.0
+	var formed := 0.0
+	var eyes := 0.0
+	var fire := 0.0
+	var jaw := 0.0
+	var chatter := 0.0
+	var gaze := Vector2.ZERO
+	var trail := false
+	## 1: it comes out of the clot all smeared; it dries to STAINED.
+	var bloody := 1.0
+	var _clock := 0.0
+	var _was := Vector2.INF
+	var _lean := Vector2.ZERO
+	var _ghosts: Array = []  # {at, t}
+	var _since := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		var dt := delta * speed
+		_clock += dt
+		var moved := Vector2.ZERO if _was == Vector2.INF else position - _was
+		_was = position
+		# The fire streams back from the way it goes, and settles when it stops.
+		var pull := (-moved / maxf(dt, 0.001) * 0.012).limit_length(10.0)
+		_lean = _lean.lerp(pull, minf(1.0, dt * 12.0))
+		for ghost: Dictionary in _ghosts:
+			ghost.t += dt
+		_ghosts = _ghosts.filter(func(ghost: Dictionary) -> bool: return ghost.t < GHOST_LIFE)
+		_since += dt
+		if trail and moved.length() > 0.5 and _since >= GHOST_EVERY:
+			_since = 0.0
+			_ghosts.append({"at": position, "t": 0.0})
+		queue_redraw()
+
+	func _draw() -> void:
+		for ghost: Dictionary in _ghosts:
+			var left := 1.0 - float(ghost.t) / GHOST_LIFE
+			var local: Vector2 = ((ghost.at - position) / scale).rotated(-rotation)
+			_figure(local, Color(GLOW, 0.4 * left * left))
+		if fire > 0.0:
+			_draw_fire()
+		_figure(Vector2.ZERO)
+
+	## Tongues of fire round the crown, flickering, leaning with _lean.
+	func _draw_fire() -> void:
+		var top := -float(CRANIUM.size() + JAW.size()) / 2.0
+		for gy in range(-12, 8):
+			var rise := clampf(-float(gy) / 12.0, 0.0, 1.0)
+			var width := 9.0 - 6.0 * rise + 0.8 * sin(_clock * 7.0 + gy)
+			for gx in range(-11, 12):
+				var lean := _lean.x / PIXEL * rise * 1.4
+				var d := absf(gx - lean - sin(_clock * 5.0 + gy * 0.7) * rise * 1.2)
+				var lick := 0.5 + 0.5 * sin(_clock * 11.0 + gx * 1.9 + gy * 1.3)
+				var heat := (1.2 - d / width) * (1.0 - rise * 0.6) * (0.7 + 0.4 * lick)
+				if heat <= 0.05:
+					continue
+				var level := clampf(heat * 1.2, 0.0, 0.999) * (FLAME.size() - 1)
+				var ink: Color = FLAME[int(level)]
+				var at := Vector2(gx - 0.5, top + gy + 1.0 + _lean.y / PIXEL * rise) * PIXEL
+				draw_rect(Rect2(at, Vector2(PIXEL, PIXEL)), Color(ink, fire * minf(1.0, heat * 2.5)))
+
+	func _figure(at: Vector2, ink: Variant = null) -> void:
+		var rows := CRANIUM.size() + JAW.size()
+		var corner := at - Vector2(COLUMNS, rows) * PIXEL / 2.0
+		var opened := maxf(jaw, chatter * (0.5 + 0.5 * sin(_clock * 40.0)))
+		var drop := roundf(opened * 2.0) * PIXEL
+		var look := Vector2i(clampi(roundi(gaze.x * 1.2), -1, 1), -1 if gaze.y < -0.55 else 0)
+		for y in rows:
+			var row: String = CRANIUM[y] if y < CRANIUM.size() else JAW[y - CRANIUM.size()]
+			var down := drop if y >= CRANIUM.size() else 0.0
+			for x in COLUMNS:
+				var cell := row[x]
+				if cell == ".":
+					continue
+				var block := Rect2(corner + Vector2(x * PIXEL, y * PIXEL + down), Vector2(PIXEL, PIXEL))
+				if ink != null:
+					draw_rect(block, ink)
+					continue
+				var chance := fposmod(sin(x * 12.9898 + y * 78.233) * 43758.5453, 1.0)
+				if chance > formed + 0.3:
+					continue
+				var color: Color = INKS[cell]
+				if chance > formed:
+					color = BLOOD.lightened(0.15 * chance)
+				elif cell != "E" and cell != "K" and cell != "N":
+					# Smeared: blood in streaks running down from the crown.
+					var smear := fposmod(sin(x * 37.719 + floorf(y / 3.0) * 11.31) * 9137.13, 1.0)
+					if smear < bloody * 0.6:
+						color = color.lerp(BLOOD if smear > bloody * 0.25 else Color("5a0808"), 0.55 + 0.3 * bloody)
+				if cell == "E" and eyes > 0.0 and chance <= formed:
+					# The spark in each socket, and its light round it.
+					var core := (x == 3 + look.x or x == 7 + look.x) and y == 5 + look.y
+					color = color.lerp(GLOW, eyes * (1.0 if core else 0.25))
+					if core:
+						color = color.lerp(Color.WHITE, 0.4 * eyes)
+				draw_rect(block, color)
+		if ink == null and eyes > 0.0 and formed >= 1.0:
+			for socket: float in [3.0, 7.0]:
+				var middle := corner + Vector2((socket + look.x + 0.5) * PIXEL, (5.5 + look.y) * PIXEL)
+				var flicker := 0.75 + 0.25 * sin(_clock * 13.0 + socket)
+				draw_rect(Rect2(middle - Vector2(5, 5), Vector2(10, 10)), Color(GLOW, 0.22 * eyes * flicker))
+
+
+## A cord of blood from `a` to `b`: thick and fleshy, uneven along its
+## length, dark at the rims, glistening on top and twisted with sinew. It is
+## grown as far as `reach` (0 to 1), with a swollen head while it is still
+## lunging, and gone up to `eaten`, where it ends torn and spraying. It hangs
+## as loose as `slack` says; bulges run down it to the far end, as if it
+## pumped, and thick drops fall off it. All in blocks of CELL.
+class ThreadFx extends Control:
+	const CELL := 3.0
+	## How thick it is (its radius in px), and how much a bulge adds.
+	const GIRTH := 10.0
+	const BULGE := 6.0
+	const HEAD := 1.7
+	const RIM := Color("2a0303")
+	const DEEP := Color("6a0a0a")
+	const RED := Color("a8180f")
+	const BRIGHT := Color("d83020")
+	const SHINE := Color("ff9a80")
+
+	var speed := 1.0
+	var a := Vector2.ZERO
+	var b := Vector2.ZERO
+	var reach := 0.0
+	var eaten := 0.0
+	var slack := 12.0
+	var _clock := 0.0
+	var _drops: Array = []  # {p, v, t, s}
+	var _since := 0.0
+	var _was_eaten := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _point(t: float) -> Vector2:
+		var way := b - a
+		var side := way.orthogonal().normalized()
+		var wiggle := (sin(t * 13.0 - _clock * 11.0) + 0.35 * sin(t * 37.0 + _clock * 8.0)) * slack * sin(PI * t)
+		# It sags under its own weight.
+		return a + way * t + side * wiggle + Vector2(0.0, slack * 0.9 * sin(PI * t))
+
+	## Its radius at `t`: uneven, swelling where a bulge passes, a head at
+	## the front while it is still reaching and frayed where it was torn.
+	func _girth(t: float) -> float:
+		var length := maxf(a.distance_to(b), 1.0)
+		var r := GIRTH * (0.8 + 0.2 * sin(t * length / 23.0) + 0.12 * sin(t * length / 7.0 + 1.3))
+		var bulge := fposmod(t * 2.2 - _clock * 1.8, 1.0)
+		r += BULGE * exp(-pow((bulge - 0.5) / 0.07, 2.0))
+		if reach < 1.0:
+			r *= 1.0 + (HEAD - 1.0) * clampf(1.0 - (reach - t) * length / 18.0, 0.0, 1.0)
+		if eaten > 0.0:
+			r *= 1.0 + 0.6 * clampf(1.0 - (t - eaten) * length / 14.0, 0.0, 1.0)
+		# The ends taper into the skull and into the box it holds on to.
+		return r * clampf(minf(t, 1.0 - t) * length / 10.0 + 0.45, 0.0, 1.0)
+
+	func _process(delta: float) -> void:
+		var dt := delta * speed
+		_clock += dt
+		_since += dt
+		if reach > 0.2 and eaten < reach and _since > 0.045:
+			_since = 0.0
+			var at := _point(randf_range(eaten, reach))
+			_drops.append({"p": at, "v": Vector2(randf_range(-15, 15), 30), "t": 0.0, "s": 1.0 + randf()})
+		# Torn as it is eaten: the end sprays.
+		if eaten > _was_eaten and eaten < 1.0:
+			var at := _point(eaten)
+			for i in 3:
+				var out := Vector2.from_angle(randf() * TAU) * randf_range(60.0, 200.0) + Vector2(0, -60)
+				_drops.append({"p": at, "v": out, "t": 0.0, "s": 1.0 + randf() * 1.5})
+		_was_eaten = eaten
+		for drop: Dictionary in _drops:
+			drop.t += dt
+			drop.v.y += 700.0 * dt
+			drop.p += drop.v * dt
+		_drops = _drops.filter(func(drop: Dictionary) -> bool: return drop.t < 0.6)
+		queue_redraw()
+
+	func _draw() -> void:
+		var length := a.distance_to(b)
+		if length < 1.0 or reach <= 0.0:
+			return
+		var cells := {}
+		var steps := int(length / 2.5)
+		for i in steps + 1:
+			var t := float(i) / steps
+			if t > reach or t < eaten:
+				continue
+			var p := _point(t)
+			var ahead := _point(minf(t + 0.01, 1.0)) - _point(maxf(t - 0.01, 0.0))
+			var n := ahead.orthogonal().normalized()
+			if n.y > 0.0:
+				n = -n  # n points up: that side catches the light.
+			var r := _girth(t)
+			var v := -r
+			while v <= r:
+				var u := v / r  # -1 the top rim, 1 the bottom one
+				var ink := RED
+				if absf(u) > 0.78:
+					ink = RIM
+				elif u > 0.3:
+					ink = DEEP
+				elif u < -0.2:
+					ink = BRIGHT
+				# Sinew, twisting along it.
+				if fposmod(t * length / 9.0 + u * 0.8, 1.0) < 0.14 and absf(u) < 0.7:
+					ink = DEEP
+				# Wet: a glint that slides along the top.
+				if u > -0.62 and u < -0.36 and fposmod(t * length / 17.0 - _clock * 0.6, 1.0) < 0.3:
+					ink = SHINE
+				cells[Vector2i(((p - n * v) / CELL).floor())] = ink
+				v += CELL * 0.7
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * CELL, Vector2(CELL, CELL)), cells[cell])
+		for drop: Dictionary in _drops:
+			var corner: Vector2 = (drop.p / CELL).floor() * CELL
+			var stretch: float = clampf(absf(drop.v.y) / 250.0, 1.0, 2.2)
+			var size: Vector2 = Vector2(CELL, CELL * stretch) * drop.s
+			draw_rect(Rect2(corner - Vector2(1, 1), size + Vector2(2, 2)), Color(RIM, 1.0 - drop.t / 0.6))
+			draw_rect(Rect2(corner, size), Color(RED, 1.0 - drop.t / 0.6))
+
+## Bits of a skull flying apart: a few small bone shapes, turning, that fall,
+## bounce once on the table and lie there a moment before they fade.
+class ShardsFx extends Control:
+	const CELL := 3.0
+	const SHAPES: Array = [
+		[".##.", "####", "#..#"],
+		["##", "##", "#."],
+		["###.", ".###"],
+		["..#", ".##", "##."],
+		["#.#.#", "#####"],
+		["##", "#."],
+	]
+	const BONE := Color("e8e0c8")
+	const SHADE := Color("a89c80")
+	const EDGE := Color("2a2418")
+	const LIFE := 1.1
+
+	var speed := 1.0
+	var _pieces: Array = []  # {p, v, r, spin, shape, floor, hops, t, tone}
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	## Flung out from the origin, mostly along `way`.
+	func burst(way: Vector2) -> void:
+		for i in 16:
+			var out := (way * 0.6 + Vector2.from_angle(randf() * TAU)).normalized()
+			_pieces.append({
+				"p": Vector2.ZERO, "v": out * randf_range(140.0, 340.0) + Vector2(0, -160.0),
+				"r": randf() * TAU, "spin": randf_range(-14.0, 14.0), "shape": i % SHAPES.size(),
+				"floor": randf_range(26.0, 64.0), "hops": 0, "t": 0.0, "tone": randf_range(-0.12, 0.1),
+			})
+
+	func _process(delta: float) -> void:
+		var dt := delta * speed
+		var alive := false
+		for piece: Dictionary in _pieces:
+			piece.t += dt
+			if piece.hops < 2:
+				piece.v.y += 980.0 * dt
+				piece.p += piece.v * dt
+				piece.r += piece.spin * dt
+				if piece.p.y > piece.floor and piece.v.y > 0.0:
+					piece.p.y = piece.floor
+					piece.hops += 1
+					piece.v = Vector2(piece.v.x * 0.5, -piece.v.y * 0.3)
+					piece.spin *= 0.4
+			alive = alive or piece.t < LIFE
+		if not alive:
+			queue_free()
+		queue_redraw()
+
+	func _draw() -> void:
+		for piece: Dictionary in _pieces:
+			var fade := 1.0 - clampf((piece.t - LIFE * 0.6) / (LIFE * 0.4), 0.0, 1.0)
+			if fade <= 0.0:
+				continue
+			var shape: Array = SHAPES[piece.shape]
+			var middle := Vector2(shape[0].length(), shape.size()) * CELL / 2.0
+			draw_set_transform(piece.p, piece.r)
+			for pass_ in 2:
+				for y in shape.size():
+					var row: String = shape[y]
+					for x in row.length():
+						if row[x] == ".":
+							continue
+						var at := Vector2(x, y) * CELL - middle
+						if pass_ == 0:
+							draw_rect(Rect2(at - Vector2(1, 1), Vector2(CELL + 2.0, CELL + 2.0)), Color(EDGE, fade))
+						else:
+							var ink := (SHADE if y == shape.size() - 1 else BONE).lightened(piece.tone)
+							draw_rect(Rect2(at, Vector2(CELL, CELL)), Color(ink, fade))
+		draw_set_transform(Vector2.ZERO, 0.0)
+
+
+## A circle of summoning lying on the table, seen at a slant: two rings, a
+## five-pointed star between them and runes round it, all in green blocks
+## that flicker. It opens out to `radius` as `open` goes to 1, and turns,
+## the way `spin` says.
+class SigilFx extends Control:
+	const CELL := 2.0
+	const SQUASH := 0.42
+	const GLOW := Color("7dff9a")
+	const DEEP := Color("1f8a4a")
+	const RUNES: Array = [
+		["#.#", "###", ".#.", ".#.", ".#."],
+		["##.", "#.#", "##.", "#..", "#.."],
+		["#..", "##.", "#.#", "##.", "#.."],
+		[".#.", "#.#", ".#.", "#.#", ".#."],
+		["###", "..#", ".#.", "#..", "###"],
+		["#.#", "#.#", ".#.", "#.#", "#.#"],
+	]
+
+	var speed := 1.0
+	var radius := 60.0
+	var open := 0.0
+	var spin := 1.0
+	var _turn := 0.0
+	var _clock := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		_clock += delta * speed
+		_turn += delta * speed * 0.9 * spin
+		queue_redraw()
+
+	func _on(angle: float, r: float) -> Vector2:
+		return Vector2(cos(angle) * r, sin(angle) * r * SQUASH)
+
+	func _ring(cells: Dictionary, r: float) -> void:
+		var steps := maxi(int(TAU * r / CELL), 12)
+		for i in steps:
+			cells[Vector2i((_on(TAU * i / steps, r) / CELL).floor())] = true
+
+	func _stroke(cells: Dictionary, from: Vector2, to: Vector2) -> void:
+		var steps := maxi(int(from.distance_to(to) / CELL), 1)
+		for i in steps + 1:
+			cells[Vector2i((from.lerp(to, float(i) / steps) / CELL).floor())] = true
+
+	func _draw() -> void:
+		if open <= 0.0:
+			return
+		var r := radius * open
+		var alpha := clampf(open, 0.0, 1.0)
+		var cells := {}
+		_ring(cells, r)
+		_ring(cells, r * 0.8)
+		var points: Array[Vector2] = []
+		for i in 5:
+			points.append(_on(_turn + TAU * i / 5.0 - PI / 2.0, r * 0.78))
+		for i in 5:
+			_stroke(cells, points[i], points[(i + 2) % 5])
+		for i in RUNES.size():
+			var at := _on(-_turn * 0.6 + TAU * i / RUNES.size(), r * 0.9) / CELL
+			var rune: Array = RUNES[i]
+			for y in rune.size():
+				for x in 3:
+					if rune[y][x] == "#":
+						cells[Vector2i(floori(at.x) + x - 1, floori(at.y) + y - 2)] = true
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * CELL - Vector2(2, 2), Vector2(CELL + 4.0, CELL + 4.0)), Color(DEEP, 0.35 * alpha))
+		for cell: Vector2i in cells:
+			var flicker := 0.6 + 0.4 * sin(_clock * 7.0 + cell.x * 0.35 + cell.y * 0.8)
+			draw_rect(Rect2(Vector2(cell) * CELL, Vector2(CELL, CELL)), Color(GLOW, alpha * flicker))
+
+
+## A soul out of its body: a small ghost in blocks with hollow eyes and a
+## wailing mouth, its tail rippling under it. `struggle` makes it writhe,
+## `stretch` draws it out along `heading` (the way it is being pulled) and
+## `trail` leaves faint copies of it behind. circle() sets it going round a
+## point, flattened, as if over the table.
+class SoulFx extends Control:
+	const PIXEL := 4.0
+	const BODY := Color("d8fff0")
+	const RIM := Color("5fe0a0")
+	const HOLLOW := Color("0a1a14")
+	const SHAPE: Array = [
+		"...ooooo...",
+		"..owwwwwo..",
+		".owwwwwwwo.",
+		"owwKKwKKwwo",
+		"owwKKwKKwwo",
+		"owwwwwwwwwo",
+		"owwwwKwwwwo",
+		"owwwKKKwwwo",
+		"owwwwKwwwwo",
+		"owwwwwwwwwo",
+	]
+	const COLUMNS := 11
+	const TAIL := 4
+	const GHOST_EVERY := 0.025
+	const GHOST_LIFE := 0.3
+
+	var speed := 1.0
+	var struggle := 0.0
+	var stretch := 0.0
+	var heading := Vector2.ZERO
+	var trail := false
+	var _clock := 0.0
+	var _ghosts: Array = []  # {at, t}
+	var _since := 0.0
+	var _center := Vector2.ZERO
+	var _radius := 0.0
+	var _angle := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func circle(center: Vector2, radius: float) -> void:
+		_center = center
+		_radius = radius
+		_angle = (position - center).angle() if radius > 0.0 else 0.0
+
+	func _process(delta: float) -> void:
+		var dt := delta * speed
+		_clock += dt
+		if _radius > 0.0:
+			_angle += dt * 3.2
+			var at := _center + Vector2(cos(_angle), sin(_angle) * 0.5) * _radius
+			position = position.lerp(at, minf(1.0, dt * 8.0))
+		for ghost: Dictionary in _ghosts:
+			ghost.t += dt
+		_ghosts = _ghosts.filter(func(ghost: Dictionary) -> bool: return ghost.t < GHOST_LIFE)
+		_since += dt
+		if trail and _since >= GHOST_EVERY:
+			_since = 0.0
+			_ghosts.append({"at": position, "t": 0.0})
+		queue_redraw()
+
+	func _draw() -> void:
+		for ghost: Dictionary in _ghosts:
+			var left := 1.0 - float(ghost.t) / GHOST_LIFE
+			draw_set_transform(((ghost.at - position) / scale).rotated(-rotation), 0.0, Vector2(0.8, 0.8))
+			_figure(Color(RIM, 0.35 * left * left))
+		var wobble := Vector2(sin(_clock * 17.0) * 2.0 * struggle, sin(_clock * 13.0) * struggle)
+		var turn := sin(_clock * 11.0) * 0.16 * struggle
+		if heading.length() > 0.5:
+			turn = lerp_angle(turn, heading.angle() + PI / 2.0, stretch)
+		draw_set_transform(wobble, turn, Vector2(1.0 - 0.25 * stretch, 1.0 + 0.7 * stretch))
+		var glow := 0.75 + 0.25 * sin(_clock * 5.0)
+		draw_rect(Rect2(Vector2(-COLUMNS * 0.8, -9.0) * PIXEL, Vector2(COLUMNS * 1.6, 18.0) * PIXEL), Color(RIM, 0.08 * glow))
+		draw_rect(Rect2(Vector2(-COLUMNS * 0.65, -7.5) * PIXEL, Vector2(COLUMNS * 1.3, 15.0) * PIXEL), Color(RIM, 0.12 * glow))
+		_figure()
+		draw_set_transform(Vector2.ZERO, 0.0)
+
+	func _figure(ink: Variant = null) -> void:
+		var rows := SHAPE.size() + TAIL
+		var corner := -Vector2(COLUMNS, rows) * PIXEL / 2.0
+		# The mouth opens and shuts on the wail.
+		var wail := 0.5 + 0.5 * sin(_clock * 9.0)
+		for y in SHAPE.size():
+			var row: String = SHAPE[y]
+			for x in COLUMNS:
+				var cell := row[x]
+				if cell == ".":
+					continue
+				var color: Color = RIM if cell == "o" else (HOLLOW if cell == "K" else BODY)
+				if cell == "K" and y == 8 and wail < 0.4:
+					color = BODY
+				draw_rect(Rect2(corner + Vector2(x, y) * PIXEL, Vector2(PIXEL, PIXEL)), color if ink == null else ink)
+		# The tail: three tips rippling, thinning to nothing.
+		for k in TAIL:
+			for x in COLUMNS:
+				var ripple := sin(x * 1.7 - _clock * 9.0) * 0.5 + 0.5
+				if k >= int(ripple * TAIL + 0.5) or (k == TAIL - 1 and x % 4 == 1):
+					continue
+				var y := SHAPE.size() + k
+				var color: Color = RIM if x == 0 or x == COLUMNS - 1 or k == int(ripple * TAIL - 0.5) else BODY
+				color.a = 1.0 - 0.18 * k
+				if ink != null:
+					color = ink
+				draw_rect(Rect2(corner + Vector2(x, y) * PIXEL, Vector2(PIXEL, PIXEL)), color)
+
+
+## A green tendril reaching from `a` towards `b`, as far as `reach` (0 to 1),
+## writhing, thorned, with light running out along it to a bony claw at its
+## end, which closes as `grip` goes to 1.
+class TendrilFx extends Control:
+	const CELL := 3.0
+	const GLOW := Color("7dff9a")
+	const DEEP := Color("1f8a4a")
+	const DARK := Color("06140c")
+	const BONE := Color("e8e0c8")
+	const SHADE := Color("a89c80")
+	## Facing right, the fingers spread and closed.
+	const CLAWS: Array = [
+		[
+			".....BB.",
+			"...BB...",
+			"BBBB....",
+			"BBBBSSBB",
+			"BBBB....",
+			"...BB...",
+			".....BB.",
+		],
+		[
+			"..BBBB..",
+			"BBBB..B.",
+			"BBBB...B",
+			"BBBS....",
+			"BBBB...B",
+			"BBBB..B.",
+			"..BBBB..",
+		],
+	]
+
+	var speed := 1.0
+	var a := Vector2.ZERO
+	var b := Vector2.ZERO
+	var reach := 0.0
+	var grip := 0.0
+	var _clock := 0.0
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		_clock += delta * speed
+		queue_redraw()
+
+	func _draw() -> void:
+		if reach <= 0.0:
+			return
+		var tip := a.lerp(b, reach)
+		var way := tip - a
+		var length := way.length()
+		if length < 1.0:
+			return
+		var side := way.orthogonal() / length
+		var cells := {}  # cell -> light
+		var steps := int(length / 2.0)
+		var points: Array[Vector2] = []
+		for i in steps + 1:
+			var s := float(i) / steps
+			var p := a + way * s + side * sin(s * 9.0 - _clock * 10.0) * 10.0 * sin(PI * s)
+			points.append(p)
+			var thick := 3 if s < 0.35 else (2 if s < 0.75 else 1)
+			var light := 1.0 if fposmod(s * 2.5 - _clock * 3.0, 1.0) < 0.12 else 0.0
+			for ox in thick:
+				for oy in thick:
+					var cell := Vector2i((p / CELL).floor()) + Vector2i(ox - (thick >> 1), oy - (thick >> 1))
+					cells[cell] = maxf(cells.get(cell, 0.0), light)
+			# Thorns, every so often, alternating sides.
+			if i % 14 == 7 and s < 0.9:
+				var out := side * (1.0 if int(i / 14.0) % 2 == 0 else -1.0)
+				for k in range(1, 3):
+					cells[Vector2i(((p + out * CELL * (thick + k)) / CELL).floor())] = 0.0
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * CELL - Vector2(2, 2), Vector2(CELL + 4.0, CELL + 4.0)), Color(DARK, 0.8))
+		for cell: Vector2i in cells:
+			draw_rect(Rect2(Vector2(cell) * CELL, Vector2(CELL, CELL)), DEEP.lerp(GLOW, 0.45 + 0.55 * cells[cell]))
+		var facing := (points[-1] - points[maxi(points.size() - 4, 0)]).angle() if points.size() > 1 else way.angle()
+		var claw: Array = CLAWS[1 if grip > 0.5 else 0]
+		var middle := Vector2(0.0, claw.size() * CELL / 2.0)
+		draw_set_transform(tip, facing)
+		for pass_ in 2:
+			for y in claw.size():
+				var row: String = claw[y]
+				for x in row.length():
+					if row[x] == ".":
+						continue
+					var at := Vector2(x * CELL, y * CELL) - middle
+					if pass_ == 0:
+						draw_rect(Rect2(at - Vector2(1, 1), Vector2(CELL + 2.0, CELL + 2.0)), DARK)
+					else:
+						draw_rect(Rect2(at, Vector2(CELL, CELL)), SHADE if row[x] == "S" else BONE)
+		draw_set_transform(Vector2.ZERO, 0.0)

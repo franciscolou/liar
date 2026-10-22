@@ -16,9 +16,9 @@ const MATCH := &"match"
 ## Nothing: fades out whatever is on.
 const SILENCE := &""
 const TRACKS := {
-	LOBBY: {"path": "res://assets/sounds/ES_Five Miles High - Guto Lucena.mp3", "db": -8.0},
-	ENDING: {"path": "res://assets/sounds/ES_Epic Triumph - Elm Lake.mp3", "db": -8.0},
-	MATCH: {"path": "res://assets/sounds/background.mp3", "db": -10.0},
+	LOBBY: {"path": "res://assets/sounds/music/ES_Five Miles High - Guto Lucena.mp3", "db": -8.0},
+	ENDING: {"path": "res://assets/sounds/music/ES_Epic Triumph - Elm Lake.mp3", "db": -8.0},
+	MATCH: {"path": "res://assets/sounds/music/background.mp3", "db": -10.0},
 }
 ## Seconds one track takes to give way to the next.
 const FADE := 2.0

@@ -53,7 +53,7 @@ const SOUNDS := {
 const HOLD := 0.18
 ## A frame that took longer than this (the next scene loading) counts as this.
 const LONGEST_FRAME := 1.0 / 30.0
-const SOUND_DIR := "res://assets/sounds/"
+const Sounds := preload("res://scripts/ui/sounds.gd")
 const SIZE := Vector2(1152, 648)
 
 enum Phase { IDLE, COVER, HOLD, UNCOVER }
@@ -241,13 +241,7 @@ func _play(sound: String) -> void:
 		tree_entered.connect(_play.bind(sound), CONNECT_ONE_SHOT)
 		return
 	if not _sfx.has(sound):
-		var stream: AudioStream = null
-		var path := "%s%s.wav" % [SOUND_DIR, sound]
-		if ResourceLoader.exists(path):
-			stream = load(path)
-		elif FileAccess.file_exists(path):
-			# Not imported yet (the editor has not rescanned): read the file directly.
-			stream = AudioStreamWAV.load_from_file(path)
+		var stream := Sounds.stream(sound)
 		var player: AudioStreamPlayer = null
 		if stream != null:
 			player = AudioStreamPlayer.new()

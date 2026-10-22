@@ -1,4 +1,4 @@
-"""Synthesizes the game's short sound effects into assets/sounds/*.wav.
+"""Synthesizes the game's short sound effects into assets/sounds/**/*.wav.
 
 Standard library only: `python3 tools/gen_sfx.py [name ...]` (no names: all).
 Every sound is a function returning mono samples in -1..1; tweak and rerun.
@@ -13,6 +13,17 @@ import wave
 RATE = 44100
 OUT = os.path.join(os.path.dirname(__file__), "..", "assets", "sounds")
 TAU = math.tau
+
+
+def where(name, extension):
+    """Where `name`.`extension` lives: the sounds sit in a folder per character
+    or concept under assets/sounds (the shared ones at the root). A sound that
+    is not there yet starts at the root; move it to its folder."""
+    file = name + "." + extension
+    for folder, _, files in os.walk(OUT):
+        if file in files:
+            return os.path.join(folder, file)
+    return os.path.join(OUT, file)
 
 
 def silence(seconds):
@@ -1805,6 +1816,329 @@ def ui_strike():
     return out
 
 
+def steel_ring(seconds, pitch=1.0, gain=1.0, decay=0.5):
+    """The long, slightly beating ring of a blade that has been struck."""
+    out = silence(seconds)
+    for freq, g in ((2310, 0.5), (2334, 0.4), (3870, 0.3), (5610, 0.18), (7420, 0.1)):
+        mix(out, tone(freq * pitch, seconds, 0.001, decay * (2400 / freq) ** 0.5), 0.0, g * gain)
+    return out
+
+
+def fx_sword_draw():
+    """A sword out of its scabbard: the scrape up the throat and the ring."""
+    out = silence(0.9)
+    scrape = bandpass(noise(0.32, 0.04, 0.22, 401), lambda t: 1500 + 9000 * t, lambda t: 4500 + 22000 * t)
+    mix(out, scrape, 0.0, 0.8)
+    mix(out, steel_ring(0.6, 1.0, 0.8, 0.35), 0.28, 1.0)
+    return out
+
+
+def fx_sword_whoosh():
+    """A blade thrown hard across the room: one quick, falling cut of air."""
+    out = silence(0.4)
+    body = noise(0.35, 0.03, 0.12, 403)
+    mix(out, bandpass(body, 300, lambda t: 600 + 5000 * math.exp(-((t - 0.09) / 0.06) ** 2)), 0.0, 1.2)
+    return out
+
+
+def fx_sword_stick():
+    """A blade driven point first into the table: a heavy, deep thunk with
+    the wood splitting, and the steel humming as it quivers there."""
+    out = silence(1.5)
+    # The blow into the wood, felt as much as heard.
+    mix(out, tone(lambda t: 48 + 110 * math.exp(-t * 22.0), 0.45, 0.001, 0.22), 0.0, 2.2)
+    mix(out, lowpass(noise(0.09, 0.0005, 0.03, 405), 1500), 0.0, 1.6)
+    # The wood splitting under it.
+    mix(out, bandpass(noise(0.16, 0.001, 0.06, 406), 900, 4200), 0.008, 0.9)
+    for k, at in enumerate((0.03, 0.055, 0.09)):
+        mix(out, bandpass(noise(0.025, 0.0005, 0.008, 407 + k), 1500, 6000), at, 0.5)
+    # The blade quivers in the wood: the ring wavers in loudness and pitch.
+    ring = steel_ring(1.4, 0.82, 0.7, 0.6)
+    ring = [x * (0.55 + 0.45 * math.sin(TAU * (19.0 - 6.0 * i / RATE) * i / RATE)) for i, x in enumerate(ring)]
+    mix(out, ring, 0.01, 1.0)
+    return drive(out, 1.6)
+
+
+def fx_sword_impale():
+    """The sword going into a player: a low boom and a sub drop under it, the
+    steel shrieking as it bites, a wet punch and a long ring."""
+    out = silence(2.2)
+    mix(out, tone(lambda t: 32 + 90 * math.exp(-t * 6.0), 1.6, 0.002, 0.9), 0.0, 2.6)
+    mix(out, lowpass(noise(0.5, 0.0005, 0.2, 441), lambda t: 200 + 3000 * math.exp(-t * 10.0)), 0.0, 1.5)
+    mix(out, lowpass(noise(0.08, 0.0005, 0.03, 443), 700), 0.0, 1.8)
+    # The shriek of steel biting.
+    shriek = tone(lambda t: 2600 - 1400 * t, 0.35, 0.002, 0.2, shape="saw")
+    mix(out, bandpass(shriek, 1200, 5000), 0.0, 0.35)
+    mix(out, steel_ring(1.8, 0.7, 1.0, 0.9), 0.0, 1.0)
+    mix(out, steel_ring(1.8, 1.05, 0.6, 0.7), 0.02, 1.0)
+    return drive(out, 2.4)
+
+
+def fx_sword_spin():
+    """A sword turning over in the air: a fast whirr that rises and falls."""
+    out = silence(0.55)
+    body = noise(0.5, 0.05, 0.4, 445)
+    whirr = [x * (0.5 + 0.5 * math.sin(TAU * 22.0 * i / RATE)) for i, x in enumerate(body)]
+    mix(out, bandpass(whirr, 400, lambda t: 1200 + 3000 * math.sin(math.pi * min(t / 0.5, 1.0))), 0.0, 1.3)
+    return out
+
+
+def fx_heartbeat():
+    """A heart racing harder and faster: lub-dub, lub-dub, the gap closing
+    from a resting beat to a sprint in two seconds (PlayFx.FURY_BUILD),
+    louder each time."""
+    seconds = 2.0
+    out = silence(seconds + 0.3)
+    at = 0.0
+    gap = 0.62
+    k = 0
+    while at < seconds - 0.08:
+        loud = 0.55 + 0.45 * at / seconds
+        for beat, gain in ((0.0, 1.0), (0.13 * max(gap / 0.62, 0.45), 0.7)):
+            thump = tone(lambda t: 46 + 40 * math.exp(-t * 30.0), 0.2, 0.004, 0.09)
+            mix(out, thump, at + beat, gain * loud * 1.6)
+            mix(out, lowpass(noise(0.05, 0.002, 0.02, 451 + k), 300), at + beat, gain * loud * 0.6)
+            k += 1
+        at += gap
+        gap = max(gap * 0.82, 0.2)
+    return drive(out, 1.5)
+
+
+def fx_sword_clash():
+    """Two blades meeting full on and both giving way: the clang, the crack
+    and the pieces coming down."""
+    out = silence(1.4)
+    mix(out, highpass(noise(0.05, 0.0003, 0.02, 407), 2500), 0.0, 1.3)
+    mix(out, steel_ring(0.9, 1.0, 1.3, 0.3), 0.0, 1.0)
+    mix(out, steel_ring(0.9, 1.19, 1.0, 0.26), 0.0, 1.0)
+    mix(out, tone(lambda t: 90 + 120 * math.exp(-t * 18.0), 0.3, 0.001, 0.12), 0.0, 0.8)
+    # The snap.
+    mix(out, highpass(noise(0.04, 0.0003, 0.012, 409), 1800), 0.07, 1.2)
+    # Shards on the table.
+    rng = random.Random(411)
+    for i in range(7):
+        at = 0.45 + i * 0.09 + rng.uniform(-0.02, 0.02)
+        mix(out, steel_ring(0.12, rng.uniform(1.4, 2.2), 0.25, 0.05), at, 0.6)
+        mix(out, bandpass(noise(0.03, 0.001, 0.01, 413 + i), 1500, 6000), at, 0.35)
+    return drive(out, 1.4)
+
+
+def fx_sword_pierce():
+    """The blade going through something held: a punch, a crack, gone."""
+    out = silence(0.55)
+    mix(out, lowpass(noise(0.06, 0.0005, 0.02, 421), 2000), 0.0, 1.2)
+    mix(out, highpass(noise(0.12, 0.0005, 0.05, 423), 2500), 0.015, 0.8)
+    mix(out, steel_ring(0.45, 1.3, 0.5, 0.2), 0.0, 1.0)
+    return out
+
+
+def fx_fury():
+    """Rage building: a low growl that climbs and tightens, and a roar on top
+    as it breaks loose. The racing heart is fx_heartbeat, played with it."""
+    seconds = 2.0
+    out = silence(seconds + 0.4)
+    growl = noise(seconds, 0.6, 2.0, 431)
+    growl = lowpass(growl, lambda t: 180 + 900 * (t / seconds) ** 2)
+    growl = [x * (0.6 + 0.4 * math.sin(TAU * (9 + 14 * i / RATE) * i / RATE)) for i, x in enumerate(growl)]
+    mix(out, growl, 0.0, 1.4)
+    mix(out, tone(lambda t: 48 + 40 * t / seconds, seconds, 0.4, 3.0, shape="saw"), 0.0, 0.25)
+    mix(out, bandpass(noise(0.4, 0.01, 0.2, 433), 300, 2500), seconds - 0.08, 1.1)
+    return drive(out, 2.2)
+
+
+# --- the Necromancer ------------------------------------------------------------
+
+def bone_click(seed, pitch=1.0):
+    """Bone knocking on bone: dry, hollow, short."""
+    out = silence(0.08)
+    mix(out, bandpass(noise(0.02, 0.0003, 0.006, seed), 1200 * pitch, 6000 * pitch), 0.0, 1.0)
+    for freq, gain, decay in ((980, 0.5, 0.012), (1730, 0.35, 0.008), (2890, 0.2, 0.006)):
+        mix(out, tone(freq * pitch, 0.06, 0.0003, decay), 0.0, gain)
+    return out
+
+
+def ghost_voice(f0, seconds, glide, seed, vibrato=0.02):
+    """A voice that is not there: a hollow sine with its octave and a breath
+    of air shaped like a vowel, wavering. `glide(t)` multiplies `f0`."""
+    out = silence(seconds)
+    voice = tone(lambda t: f0 * glide(t) * (1.0 + vibrato * math.sin(TAU * 5.5 * t)), seconds, 0.12, seconds * 1.4)
+    mix(out, voice, 0.0, 1.0)
+    octave = tone(lambda t: 2.01 * f0 * glide(t) * (1.0 + vibrato * math.sin(TAU * 5.5 * t + 1.0)), seconds, 0.15, seconds)
+    mix(out, octave, 0.0, 0.3)
+    breath = bandpass(noise(seconds, 0.1, seconds, seed), lambda t: f0 * glide(t) * 1.5, lambda t: f0 * glide(t) * 4.0)
+    mix(out, breath, 0.0, 0.8)
+    return out
+
+
+def fx_necro_wound():
+    """The wound opening again: a wet tear and the blood welling up out of it."""
+    out = silence(0.55)
+    mix(out, lowpass(noise(0.12, 0.002, 0.05, 701), 900), 0.0, 1.2)
+    mix(out, tone(lambda t: 70 + 50 * math.exp(-t * 20.0), 0.2, 0.002, 0.1), 0.0, 1.0)
+    # The welling: bubbles of a wet sound rising.
+    rng = random.Random(703)
+    for i in range(9):
+        at = 0.08 + i * 0.045 + rng.uniform(-0.01, 0.01)
+        freq = 260 + i * 60 + rng.uniform(-20, 20)
+        mix(out, tone(lambda t, f=freq: f * (1.0 + 2.5 * t), 0.05, 0.003, 0.025), at, 0.35)
+        mix(out, bandpass(noise(0.03, 0.002, 0.01, 705 + i), 300, 1400), at, 0.3)
+    return out
+
+
+def fx_bone_rattle():
+    """The blood setting into bone: clicks coming faster and faster, over a
+    hum that rises out of nothing."""
+    seconds = 0.7
+    out = silence(seconds + 0.1)
+    rng = random.Random(711)
+    at = 0.0
+    gap = 0.09
+    k = 0
+    while at < seconds - 0.04:
+        mix(out, bone_click(713 + k, rng.uniform(0.8, 1.4)), at, 0.5 + 0.5 * at / seconds)
+        at += gap * rng.uniform(0.7, 1.2)
+        gap = max(gap * 0.88, 0.022)
+        k += 1
+    mix(out, swell(choir((110.0, 164.8, 233.1), seconds, 0.5, 0.6, 0.01), seconds * 0.8), 0.0, 0.35)
+    # It is done: the jaw shuts on it.
+    mix(out, bone_click(799, 0.7), seconds - 0.03, 1.2)
+    mix(out, lowpass(noise(0.06, 0.001, 0.03, 801), 500), seconds - 0.03, 0.6)
+    return out
+
+
+def fx_soul_flare():
+    """A green fire catching: the air sucked in, the whoomp, and a cold ring."""
+    out = silence(0.7)
+    mix(out, swell(bandpass(noise(0.18, 0.15, 0.2, 721), 300, lambda t: 600 + 5000 * t), 0.16), 0.0, 0.6)
+    mix(out, lowpass(noise(0.35, 0.002, 0.18, 723), lambda t: 2400 * math.exp(-t * 6.0) + 200), 0.15, 1.3)
+    mix(out, tone(lambda t: 55 + 60 * math.exp(-t * 14.0), 0.3, 0.003, 0.16), 0.15, 1.0)
+    for freq, gain in ((659.3, 0.3), (987.8, 0.2), (1318.5, 0.12)):
+        mix(out, tone(freq, 0.5, 0.01, 0.35, vibrato=0.006), 0.16, gain)
+    return out
+
+
+def fx_blood_thread():
+    """A thread of blood shot out and drawn tight: a wet zip and a twang."""
+    out = silence(0.55)
+    mix(out, bandpass(noise(0.22, 0.01, 0.12, 731), lambda t: 500 + 4000 * t, lambda t: 1500 + 9000 * t), 0.0, 0.7)
+    twang = tone(lambda t: 190 * (1.0 + 0.04 * math.sin(TAU * 26 * t) * math.exp(-t * 8.0)), 0.35, 0.002, 0.22, shape="saw")
+    mix(out, lowpass(twang, 1400), 0.2, 0.6)
+    mix(out, lowpass(noise(0.08, 0.002, 0.03, 733), 800), 0.2, 0.6)
+    return out
+
+
+def fx_skull_chatter():
+    """Teeth chattering, fast and angry."""
+    seconds = 0.45
+    out = silence(seconds + 0.05)
+    rng = random.Random(741)
+    k = 0
+    at = 0.0
+    while at < seconds:
+        mix(out, bone_click(743 + k, rng.uniform(1.2, 1.7)), at, rng.uniform(0.6, 1.0))
+        at += 1.0 / 26.0
+        k += 1
+    return out
+
+
+def fx_skull_scream():
+    """The skull let go: a shriek that falls as it flies, several throats at
+    once, none of them in tune, and the rush of air."""
+    out = silence(0.6)
+    for k, (f0, detune) in enumerate(((1350, 1.0), (1420, 1.03), (980, 0.97))):
+        shriek = tone(lambda t, f=f0, d=detune: f * d * (1.0 - 0.55 * t / 0.45) * (1.0 + 0.03 * math.sin(TAU * 13 * t)),
+                      0.5, 0.01, 0.4, shape="saw")
+        mix(out, bandpass(shriek, 500, 4000), 0.0, 0.35)
+    mix(out, bandpass(noise(0.45, 0.02, 0.3, 751), lambda t: 800 + 1500 * t, lambda t: 3000 + 6000 * t), 0.0, 0.6)
+    return drive(out, 1.6)
+
+
+def fx_skull_shatter():
+    """The skull bursting on a box: the crack, a heavy knock and the pieces
+    of bone coming down all round."""
+    out = silence(1.2)
+    mix(out, highpass(noise(0.05, 0.0003, 0.018, 761), 2200), 0.0, 1.4)
+    mix(out, lowpass(noise(0.1, 0.001, 0.05, 763), 700), 0.0, 1.3)
+    mix(out, tone(lambda t: 60 + 90 * math.exp(-t * 18.0), 0.35, 0.001, 0.16), 0.0, 1.2)
+    for freq, gain in ((523.3, 0.18), (622.3, 0.14), (784.0, 0.1)):
+        mix(out, tone(freq, 0.6, 0.01, 0.4, vibrato=0.01), 0.02, gain)
+    rng = random.Random(765)
+    for i in range(14):
+        at = 0.12 + i * 0.05 + rng.uniform(-0.02, 0.03) + (0.15 if i > 9 else 0.0)
+        mix(out, bone_click(767 + i, rng.uniform(0.7, 1.5)), at, rng.uniform(0.3, 0.8) * (1.0 - i / 20.0))
+    return drive(out, 1.3)
+
+
+def fx_necro_sigil():
+    """A circle drawn on the table opening: a low drone rising out of the
+    floor and a cold chime as it closes on itself."""
+    out = silence(1.1)
+    drone = choir((55.0, 82.4, 103.8), 1.0, 0.4, 0.9, 0.008, 0.002)
+    mix(out, swell(lowpass(drone, 900), 0.4), 0.0, 0.8)
+    mix(out, swell(bandpass(noise(0.9, 0.3, 0.6, 771), 200, 900), 0.4), 0.0, 0.35)
+    mix(out, bell(1046.5, 0.8, 0.6), 0.38, 0.25)
+    mix(out, bell(1567.98 * 1.007, 0.7, 0.5), 0.42, 0.15)
+    return out
+
+
+def fx_soul_wail():
+    """The soul pulled up out of the cards: a long, hollow wail that climbs
+    and sags."""
+    seconds = 0.9
+    out = silence(seconds + 0.1)
+    glide = lambda t: 1.0 + 0.45 * math.sin(math.pi * min(t / seconds, 1.0)) - 0.15 * t / seconds
+    mix(out, ghost_voice(330, seconds, glide, 781, 0.025), 0.0, 1.0)
+    mix(out, ghost_voice(392 * 1.01, seconds * 0.9, glide, 783, 0.03), 0.06, 0.45)
+    return out
+
+
+def fx_soul_reach():
+    """Something reaching out of the box: a creak and a rising hiss."""
+    out = silence(0.5)
+    mix(out, bandpass(noise(0.4, 0.05, 0.3, 791), 400, lambda t: 1200 + 6000 * t), 0.0, 0.7)
+    creak = tone(lambda t: 140 + 220 * t, 0.35, 0.02, 0.3, shape="saw")
+    creak = [x * (0.5 + 0.5 * math.sin(TAU * 38 * i / RATE)) for i, x in enumerate(creak)]
+    mix(out, lowpass(creak, 1200), 0.02, 0.35)
+    return out
+
+
+def fx_soul_grab():
+    """The claw shutting on the soul: a snap of bone and a gasp."""
+    out = silence(0.4)
+    mix(out, bone_click(811, 0.8), 0.0, 1.3)
+    mix(out, bone_click(813, 1.1), 0.012, 0.9)
+    mix(out, tone(lambda t: 90 * math.exp(-t * 6.0) + 40, 0.15, 0.001, 0.07), 0.0, 0.8)
+    mix(out, ghost_voice(520, 0.25, lambda t: 1.0 + 0.6 * t, 815, 0.04), 0.02, 0.5)
+    return out
+
+
+def fx_soul_drain():
+    """The soul reeled in round and round: a whirl of air drawn in, faster and
+    higher, with the wail going up inside it."""
+    seconds = 0.95
+    out = silence(seconds + 0.15)
+    whirl = bandpass(noise(seconds, 0.1, seconds * 2.0, 821), 200, lambda t: 700 + 5000 * (t / seconds) ** 2)
+    phase = 0.0
+    for i in range(len(whirl)):
+        t = i / RATE
+        phase += (3.0 + 14.0 * (t / seconds) ** 2) / RATE
+        whirl[i] *= 0.55 + 0.45 * math.sin(TAU * phase)
+    mix(out, swell(whirl, seconds * 0.6), 0.0, 1.0)
+    mix(out, ghost_voice(300, seconds, lambda t: 1.0 + 1.4 * (t / seconds) ** 2, 823, 0.04), 0.0, 0.6)
+    return out
+
+
+def fx_soul_absorb():
+    """The soul swallowed: a deep blow inside the box and a dark chord that
+    swells and hangs."""
+    out = silence(1.1)
+    mix(out, tone(lambda t: 48 + 70 * math.exp(-t * 10.0), 0.6, 0.002, 0.3), 0.0, 1.4)
+    mix(out, lowpass(noise(0.2, 0.002, 0.1, 831), 500), 0.0, 0.8)
+    mix(out, choir((146.8, 174.6, 220.0, 293.7), 0.9, 0.05, 0.7, 0.008), 0.02, 0.45)
+    mix(out, bell(880.0, 0.8, 0.5), 0.03, 0.15)
+    return out
+
+
 SOUNDS = {
     "shop_lever": shop_lever,
     "shop_reels": shop_reels,
@@ -1912,6 +2246,28 @@ SOUNDS = {
     "item_roulette_cock": item_roulette_cock,
     "item_roulette_shot": item_roulette_shot,
     "item_soul_swap": item_soul_swap,
+    "fx_sword_draw": fx_sword_draw,
+    "fx_sword_whoosh": fx_sword_whoosh,
+    "fx_sword_stick": fx_sword_stick,
+    "fx_sword_clash": fx_sword_clash,
+    "fx_sword_pierce": fx_sword_pierce,
+    "fx_fury": fx_fury,
+    "fx_sword_impale": fx_sword_impale,
+    "fx_sword_spin": fx_sword_spin,
+    "fx_heartbeat": fx_heartbeat,
+    "fx_necro_wound": fx_necro_wound,
+    "fx_bone_rattle": fx_bone_rattle,
+    "fx_soul_flare": fx_soul_flare,
+    "fx_blood_thread": fx_blood_thread,
+    "fx_skull_chatter": fx_skull_chatter,
+    "fx_skull_scream": fx_skull_scream,
+    "fx_skull_shatter": fx_skull_shatter,
+    "fx_necro_sigil": fx_necro_sigil,
+    "fx_soul_wail": fx_soul_wail,
+    "fx_soul_reach": fx_soul_reach,
+    "fx_soul_grab": fx_soul_grab,
+    "fx_soul_drain": fx_soul_drain,
+    "fx_soul_absorb": fx_soul_absorb,
 }
 PEAK = 0.7
 # Sounds that sit lower in the mix than the rest.
@@ -1935,6 +2291,10 @@ PEAKS = {
     "shop_lever": 0.6, "shop_reels": 0.32,
     "chevron": 0.32, "fx_brush": 0.5, "fx_splat": 0.6, "fx_palette": 0.5,
     "fx_paint_dip": 0.55, "fx_paint_flick": 0.5, "fx_paint_link": 0.55,
+    "fx_sword_draw": 0.55, "fx_sword_whoosh": 0.5, "fx_sword_stick": 0.9, "fx_sword_clash": 0.92,
+    "fx_sword_pierce": 0.75, "fx_fury": 0.6, "fx_sword_impale": 0.97, "fx_sword_spin": 0.45,
+    "fx_heartbeat": 0.95,
+    "fx_necro_wound": 0.7, "fx_bone_rattle": 0.55, "fx_soul_flare": 0.7, "fx_blood_thread": 0.55, "fx_skull_chatter": 0.45, "fx_skull_scream": 0.6, "fx_skull_shatter": 0.9, "fx_necro_sigil": 0.6, "fx_soul_wail": 0.55, "fx_soul_reach": 0.45, "fx_soul_grab": 0.6, "fx_soul_drain": 0.7, "fx_soul_absorb": 0.85,
 }
 
 
@@ -1947,7 +2307,7 @@ def write(name, samples):
     level = PEAKS.get(name, PEAK)
     peak = (max(abs(s) for s in samples) or 1.0) / level
     frames = b"".join(struct.pack("<h", int(s / peak * 32767)) for s in samples)
-    path = os.path.join(OUT, name + ".wav")
+    path = where(name, "wav")
     with wave.open(path, "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)

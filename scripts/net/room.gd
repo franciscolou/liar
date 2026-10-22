@@ -105,7 +105,7 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 34
+const PROTOCOL := 36
 const JOIN_TIMEOUT := 8.0
 ## Joining with no port given: how long each port of the range is tried, past
 ## the first, before the next one (the room may have passed to someone who

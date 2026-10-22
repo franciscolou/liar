@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://bsfj2fn7jaroq"
+path="res://.godot/imported/ES_Epic Triumph - Elm Lake.mp3-c29c337660eb1c1224e5596234533e76.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/ES_Epic Triumph - Elm Lake.mp3"
+dest_files=["res://.godot/imported/ES_Epic Triumph - Elm Lake.mp3-c29c337660eb1c1224e5596234533e76.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

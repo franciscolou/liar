@@ -30,6 +30,9 @@ const Room := preload("res://scripts/net/room.gd")
 const PORT := Room.PORT + Room.PORT_RANGE
 const MATCHES := 6
 const TIME_LIMIT := 90.0
+## The seed of the match the host leaves once out moves this far off the
+## usual one: it has to be a deal where the host's seat falls before the end.
+const DEAD_SHIFT := 1
 
 var _rooms: Array = []  # host first
 var _rng := RandomNumberGenerator.new()
@@ -151,14 +154,16 @@ func _until(condition: Callable, problem: String) -> String:
 
 ## Deals match `m` to every machine in the room, as Room.start does, and sets
 ## them all playing it.
-func _deal(m: int) -> Array:
+## `shift` moves the seed off the usual one for the match: a scene that needs
+## the dice to fall some way (the host out before the end) picks its own.
+func _deal(m: int, shift := 0) -> Array:
 	var host: Node = _rooms[0]
 	var dealt := GameConfig.new()
 	for seat: Dictionary in host.seats:
 		dealt.seats.append({"name": seat.name, "bot": seat.bot})
 	dealt.character_count = 4 + (m % MATCHES) * 2
 	dealt.max_turns = 400
-	dealt.rng_seed = 500 + m
+	dealt.rng_seed = 500 + m + shift
 	var peers: Array = host.seats.map(func(seat: Dictionary) -> int: return seat.peer)
 	var tables := []
 	_split = false
@@ -353,7 +358,7 @@ func _hand_over_match(m: int, comes_back: bool, dead := false) -> String:
 	if heard != "":
 		return heard
 	var host: Node = _rooms[0]
-	var tables := _deal(m)
+	var tables := _deal(m, DEAD_SHIFT if dead else 0)
 	var leaver: Machine = tables[0]
 	var left_seat: int = host.my_match_seat()
 	var under_way := await _until(func() -> bool:

@@ -6,7 +6,7 @@ extends CharacterDef
 ## time they pay for something, with that surcharge on it: it is ticked here.
 
 const GROGGY := &"groggy"
-const SURCHARGE := 2
+const SURCHARGE := 3
 
 
 func _init() -> void:

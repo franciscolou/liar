@@ -20,6 +20,8 @@ const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
 const Mirror := preload("res://scripts/ui/shattered_mirror.gd")
+const RankedScreen := preload("res://scripts/ui/ranked_screen.gd")
+const RANKED_SCENE := "res://scenes/ranked.tscn"
 const ROOM_SCENE := "res://scenes/room.tscn"
 const LOBBY_SCENE := "res://scenes/setup.tscn"
 const MENU_SCENE := "res://scenes/menu.tscn"
@@ -68,7 +70,10 @@ func _ready() -> void:
 	back_button.pressed.connect(_on_quit)
 	# Only the host deals; the others wait for it, here or in the lobby.
 	var room: Node = Room.current
-	if room != null and not room.hosting:
+	if room != null and room.ranked:
+		# At the house nobody deals: playing again is queueing again.
+		_rating_line()
+	elif room != null and not room.hosting:
 		again_button.disabled = true
 		again_button.mouse_default_cursor_shape = Control.CURSOR_ARROW
 		var waiting := UI.label("Only the host can deal again.", 15, PLATE_INK)
@@ -89,6 +94,9 @@ func _ready() -> void:
 				again_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 				_plates.erase(waiting)
 				waiting.queue_free())
+	if room != null and not room.ranked and room.house_match != "" and room.my_match_seat() >= 0:
+		# A ranked room: the house writes it down like one of its own tables.
+		_rating_line()
 	var settings := UI.button("SETTINGS", PLATE_BORDER, 15)
 	settings_button = settings
 	settings.size = UI.grown(Vector2(130, 34))
@@ -141,6 +149,9 @@ func _relabel() -> void:
 		UI.art_button(lobby_button, "BACK TO LOBBY", PLATE, PLATE_BORDER, PLATE_INK, 30))
 	# Nothing is painted under this one.
 	lobby_button.text = "BACK TO LOBBY"
+	if _ranked():
+		UI.native(func() -> void: UI.art_button(lobby_button, "BACK TO THE HOUSE", PLATE, PLATE_BORDER, PLATE_INK, 30))
+		lobby_button.text = "BACK TO THE HOUSE"
 	lobby_button.add_theme_stylebox_override("normal", UI.box(PLATE, PLATE_BORDER, 4, 4, 0))
 	lobby_button.add_theme_stylebox_override("hover", UI.box(PLATE.lightened(0.08), UI.GOLD, 4, 4, 0))
 	lobby_button.add_theme_stylebox_override("pressed", UI.box(PLATE.darkened(0.25), UI.GOLD, 4, 4, 0))
@@ -159,6 +170,11 @@ func _relabel() -> void:
 
 ## A new match with the rules of the last one.
 func _on_again() -> void:
+	if _ranked():
+		Room.current.leave()
+		RankedScreen.queue_on_open = true
+		Transition.go(RANKED_SCENE, Transition.GATHER)
+		return
 	if Room.current != null:
 		Room.current.start()
 	else:
@@ -169,6 +185,10 @@ func _on_again() -> void:
 ## the whole room along; anyone else just goes there to wait.
 func _on_lobby() -> void:
 	var room: Node = Room.current
+	if _ranked():
+		room.leave()
+		Transition.go(RANKED_SCENE, Transition.GATHER)
+		return
 	if room == null:
 		Transition.go(ROOM_SCENE, Transition.GATHER)
 	elif room.hosting:
@@ -181,6 +201,47 @@ func _on_quit() -> void:
 	if Room.current != null:
 		Room.current.leave()
 	Transition.go(MENU_SCENE, Transition.DOORS)
+
+
+func _ranked() -> bool:
+	return Room.current != null and Room.current.ranked
+
+
+## What the house made of the match for this member: their new rating. It may
+## come after this screen opens.
+func _rating_line() -> void:
+	var line := UI.label("The house is writing the match down...", 22, UI.GOLD, true)
+	# Under the winner's name, which takes the top of the screen.
+	line.position = Vector2(0, 118)
+	line.size = Vector2(1152, 34)
+	line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	line.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	line.add_theme_constant_override("shadow_offset_x", 2)
+	line.add_theme_constant_override("shadow_offset_y", 2)
+	add_child(line)
+	var room: Node = Room.current
+	var show := func(result: Dictionary) -> void:
+		if not is_instance_valid(line):
+			return
+		var seat: int = room.my_match_seat() if is_instance_valid(room) else -1
+		var mine: Dictionary = {}
+		for entry: Dictionary in result.get("seats", []):
+			if int(entry.get("seat", -1)) == seat:
+				mine = entry
+		if not result.get("recorded", false) or not mine.has("after"):
+			line.text = Loc.t("The house could not write this match down: no rating changed.")
+			line.add_theme_color_override("font_color", UI.MUTED)
+			return
+		var delta := int(mine.get("delta", 0))
+		# Digits are not bold: the font closes their holes.
+		line.add_theme_font_override("font", UI.font())
+		line.text = Loc.t("Rating %d, now %d  (%s)") % [int(mine.before), int(mine.after), ("+%d" % delta) if delta >= 0 else str(delta)]
+		line.add_theme_color_override("font_color", UI.GREEN if delta > 0 else (UI.RED if delta < 0 else UI.GOLD))
+		UI.pop(line, 1.15)
+	if not room.ranked_result.is_empty():
+		show.call(room.ranked_result)
+	else:
+		room.ranked_over.connect(show)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

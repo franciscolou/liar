@@ -313,6 +313,22 @@ func die() -> Array[StringName]:
 	return lost
 
 
+## A blow broke the chains of an Entropy, and the player is still there: the
+## chains go as they do when the player is out (see die), and nothing else.
+func snap_chains() -> void:
+	if _dead or _level.get(ENTROPY, 0.0) <= 0.0:
+		return
+	_chains.material = null
+	_borrowed.erase(ENTROPY)
+	_chains.snap()
+	_wanted[ENTROPY] = false
+	_level[ENTROPY] = 0.0
+	_chains.bound = 0.0
+	_chains.doomed = 0.0
+	_threat.erase(ENTROPY)
+	set_process(true)
+
+
 ## Whether status `id` was put on the player by a borrowed action: its look
 ## is torn and drained to purple like everything else the Impostor copies
 ## (see PlayFx.GlitchFx), until the status is put on again by something else.

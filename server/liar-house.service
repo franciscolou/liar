@@ -1,0 +1,18 @@
+# Without Docker: the API under systemd, from a checkout at /opt/liar-house,
+# with a venv at /opt/liar-house/venv and the exported server at
+# /opt/liar-house/game/liar_server.x86_64. Put HTTPS (Caddy, nginx) in front.
+[Unit]
+Description=LIAR! house (ranked API and match servers)
+After=network-online.target
+
+[Service]
+User=liar
+WorkingDirectory=/opt/liar-house/api
+EnvironmentFile=/opt/liar-house/.env
+Environment=LIAR_DATA=/var/lib/liar
+Environment=LIAR_SERVER_CMD="/opt/liar-house/game/liar_server.x86_64 --headless --"
+ExecStart=/opt/liar-house/venv/bin/uvicorn liar_api.main:app --host 127.0.0.1 --port 8080 --proxy-headers
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

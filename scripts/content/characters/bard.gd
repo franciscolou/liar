@@ -73,6 +73,10 @@ class SilverTongue extends Ability:
 		description = "Keep your coins: you are immune to abilities and items that steal."
 		trigger_text = "When someone steals coins from you"
 
+	# Their own coins.
+	func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
+		return true
+
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		# Coins already theirs, or still on their way to them (a Swindle).
 		return event.type == &"before_steal" and event.data.victim == player

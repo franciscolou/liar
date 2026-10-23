@@ -4,13 +4,18 @@ extends Control
 ##
 ## The screen is the top of a desk (noir_desk.gd): the name is the brass
 ## plate on it, and the two things to do are two papers lying side by side.
+## Next to them lies the house's card (house_props.gd), the way into the
+## ranked matches (ranked_screen.gd).
 
 const Room := preload("res://scripts/net/room.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
 const Desk := preload("res://scripts/ui/noir_desk.gd")
+const House := preload("res://scripts/ui/house_props.gd")
+const RankedApi := preload("res://scripts/net/ranked_api.gd")
 const MENU_SCENE := "res://scenes/menu.tscn"
 const LOBBY_SCENE := "res://scenes/setup.tscn"
+const RANKED_SCENE := "res://scenes/ranked.tscn"
 
 var _name: LineEdit
 var _address: LineEdit
@@ -19,6 +24,7 @@ var _join: Button
 var _status: Label
 var _desk: Desk
 var _create_note: Label
+var _house_note: Label
 var _things: Array = []
 
 
@@ -28,26 +34,28 @@ func _ready() -> void:
 	Jukebox.play(Jukebox.LOBBY)
 
 	_desk = Desk.desk()
-	_desk.props = [
-		{"kind": &"ring", "at": Vector2(232, 104)},
-		# A hand of cards thrown down, and what was riding on it.
-		{"kind": &"cards", "at": Vector2(98, 300), "scale": 1.2, "lay": [
-			[-30, -132, -0.5], [44, -62, 0.42], [-38, 14, -1.25], [36, 86, 0.16]]},
-		{"kind": &"coins", "at": Vector2(108, 510)},
-		# Whoever signs here has not been careful with the ink.
-		{"kind": &"ink", "at": Vector2(1004, 486), "size": 12.0},
-		{"kind": &"ink", "at": Vector2(1078, 392), "size": 7.0},
-		{"kind": &"ink", "at": Vector2(1010, 268), "size": 5.0},
-		{"kind": &"ink", "at": Vector2(1096, 538), "size": 4.0},
-	]
-	add_child(_desk)
-	# The pen is a thing of its own: its barbs give under the mouse.
-	add_child(Desk.quill(Vector2(1010, 478), -1.2))
-	add_child(TipLayer.new())
-
 	# On a phone (touch mode) the plates and papers are bigger, for the bigger
 	# text, and what the papers explain is said shorter.
 	var touch := UI.touch
+	# Three things to do lie across the desk; the odds and ends are along the
+	# foot of it, clear of them.
+	_desk.props = [
+		{"kind": &"ring", "at": Vector2(1050, 122)},
+		# A hand of cards thrown down, and what was riding on it.
+		# Both answer the mouse: the cards are pushed, the coins catch the light.
+		{"kind": &"cards", "at": Vector2(318, 602), "live": true, "lay": [
+			[-62, 2, 1.45], [-10, -8, 1.2], [44, 6, 1.64], [96, -2, 1.36]]},
+		{"kind": &"coins", "at": Vector2(550, 606), "live": true},
+		# Whoever signs here has not been careful with the ink.
+		{"kind": &"ink", "at": Vector2(698, 616), "size": 10.0},
+		{"kind": &"ink", "at": Vector2(664, 590), "size": 5.0},
+		{"kind": &"ink", "at": Vector2(752, 638), "size": 4.0},
+		{"kind": &"ink", "at": Vector2(1010, 628), "size": 3.0},
+	]
+	add_child(_desk)
+	# The pen is a thing of its own: its barbs give under the mouse.
+	add_child(Desk.quill(Vector2(712, 622), -0.18))
+	add_child(TipLayer.new())
 	var plaque: Desk = Desk.make(Desk.Kind.PLAQUE, Rect2(20, 12, 430, 58) if touch else Rect2(20, 12, 310, 46))
 	add_child(plaque)
 	var title := Desk.written("FIND A TABLE", 30, UI.INK, true)
@@ -82,16 +90,16 @@ func _ready() -> void:
 	TipLayer.attach(_name, "Click to change your name.")
 
 	# The two things to do here are two papers on the desk.
-	var deed: Desk = Desk.make(Desk.Kind.SHEET, Rect2(192, 182, 392, 384) if touch else Rect2(204, 190, 352, 320))
+	var deed: Desk = Desk.make(Desk.Kind.SHEET, Rect2(14, 178, 362, 372) if touch else Rect2(38, 192, 330, 320))
 	deed.rotation = -0.03
 	deed.aged = true
 	deed.torn = true
 	deed.tone = Desk.OLD_PAPER
 	deed.clip_at = 36.0
 	deed.margin = 20.0
-	deed.stain = Vector3(292, 60, 26)
+	deed.stain = Vector3(272, 60, 26)
 	# What the pen left on it: all of it out by the edges, clear of the writing.
-	deed.inked = [Vector3(330, 164, 3), Vector3(22, 258, 4), Vector3(334, 232, 2), Vector3(96, 302, -84), Vector3(170, 14, -46)]
+	deed.inked = [Vector3(308, 164, 3), Vector3(22, 258, 4), Vector3(312, 232, 2), Vector3(96, 302, -84), Vector3(170, 14, -46)]
 	var hosting := _write_on(deed, "CREATE A ROOM")
 	if touch:
 		hosting.add_child(_text("The match runs on this device. Friends on the same Wi-Fi join by your address.\n\nEmpty seats can be filled with bots."))
@@ -105,12 +113,12 @@ func _ready() -> void:
 	_create_note = _note()
 	hosting.add_child(_create_note)
 
-	var wire: Desk = Desk.make(Desk.Kind.SHEET, Rect2(606, 188, 392, 384) if touch else Rect2(596, 196, 352, 320))
+	var wire: Desk = Desk.make(Desk.Kind.SHEET, Rect2(392, 184, 362, 372) if touch else Rect2(400, 198, 330, 320))
 	wire.rotation = 0.025
 	wire.tone = Desk.OLD_TELEGRAM
 	wire.aged = true
 	wire.bordered = true
-	wire.inked = [Vector3(328, 44, 4), Vector3(24, 284, 3), Vector3(22, 120, 2), Vector3(188, 296, -96), Vector3(240, 18, -52)]
+	wire.inked = [Vector3(306, 44, 4), Vector3(24, 284, 3), Vector3(22, 120, 2), Vector3(188, 296, -96), Vector3(220, 18, -52)]
 	var joining := _write_on(wire, "JOIN A ROOM")
 	joining.add_child(_text("Type the address shown in the lobby of whoever created the room." if touch else "Ask whoever created the room for the address shown in their lobby and type it here."))
 	_address = _field(Settings.last_address, "26.0.0.0", 64)
@@ -126,6 +134,8 @@ func _ready() -> void:
 	joining.add_child(_join)
 	_status = _note()
 	joining.add_child(_status)
+
+	_lay_house_card(touch)
 
 	# Why the last room ended, if that is how the player got here.
 	_tell(Room.notice)
@@ -147,6 +157,70 @@ func _ready() -> void:
 	add_child(Desk.lamplight())
 	if Transition.desk_bare():
 		desk_slide(1.0)
+
+
+## The house's card, the third thing on the desk: black stock and gold foil,
+## sealed in wax. It says how busy the house is, if there is a house.
+func _lay_house_card(touch: bool) -> void:
+	var card: Control = House.of(House.Look.INVITE, Rect2(770, 172, 370, 404) if touch else Rect2(764, 182, 352, 350))
+	card.rotation = -0.02
+	card.lifts = true
+	add_child(card)
+	var box := VBoxContainer.new()
+	# Clear of the sunburst at the head of the frame.
+	box.position = Vector2(30, 44)
+	box.size = Vector2(card.size.x - 60.0, card.size.y - 104.0)
+	box.add_theme_constant_override("separation", 6)
+	card.add_child(box)
+	var heading := UI.label("RANKED", 32, House.FOIL_LIGHT, true)
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(heading)
+	var under := UI.label("THE HOUSE TABLE", 13, House.FOIL)
+	under.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(under)
+	# The card's rule of foil goes in this gap, wherever the heading ends.
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 22)
+	box.add_child(gap)
+	box.sort_children.connect(func(): card.parting = box.position.y + gap.position.y + gap.size.y / 2.0)
+	var text := UI.label("Strangers at the house's own tables. Every match goes in the ledger: your rating, your wins, your lies." if not touch
+			else "Strangers at the house's tables. Every match goes in the ledger.", 16, UI.CREAM)
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(text)
+	_house_note = UI.label("", 13, House.FOIL)
+	_house_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_house_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_house_note)
+	var enter := UI.button("ENTER THE HOUSE", UI.BORDER, 22)
+	enter.custom_minimum_size = Vector2(0, 64 if touch else 52)
+	Desk.stamp(enter, House.FOIL)
+	enter.add_theme_color_override("font_hover_color", House.FOIL_LIGHT)
+	enter.pressed.connect(_on_ranked)
+	box.add_child(enter)
+	_ask_the_house()
+
+
+## How many are at the house's tables, said under its card.
+func _ask_the_house() -> void:
+	if not RankedApi.configured():
+		_house_note.text = Loc.t("The house has not opened its doors yet.")
+		return
+	_house_note.text = Loc.t("Knocking on the house's door...")
+	var answer: Dictionary = await RankedApi.get_json("/v1/status", false)
+	if not is_instance_valid(_house_note):
+		return
+	if not answer.ok or not answer.data is Dictionary:
+		_house_note.text = Loc.t("The house does not answer right now.")
+		return
+	var data: Dictionary = answer.data
+	_house_note.text = Loc.t("%d at the tables, %d waiting for one") % [int(data.get("playing", 0)), int(data.get("queue", 0))]
+
+
+func _on_ranked() -> void:
+	_remember()
+	Transition.go(RANKED_SCENE, Transition.DESK)
 
 
 ## Puts `sheet` on the desk with its heading written on it, and gives back

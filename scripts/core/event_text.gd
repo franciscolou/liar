@@ -109,6 +109,8 @@ static func describe(e: GameEvent) -> String:
 		&"status_removed":
 			if d.get("reason", &"") == &"wasted":
 				return Loc.t("%s throws %s away.") % [d.player.name, _status(d.status)]
+			if d.get("reason", &"") == &"shattered":
+				return Loc.t("%s's chains take the blow and break.") % d.player.name
 			return Loc.t("%s: %s ends.") % [d.player.name, _status(d.status)]
 		&"counter_changed":
 			var def: Dictionary = Content.counters.get(d.counter, {})

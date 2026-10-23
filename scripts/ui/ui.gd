@@ -434,6 +434,8 @@ static func ability_tip(ability: Ability) -> String:
 	var body := ability.description
 	if ability.trigger_text != "":
 		body = "[color=%s]%s:[/color] %s" % [hex(BLUE), ability.trigger_text, body]
+	if ability.footnote != "":
+		body += "\n[color=%s]%s[/color]" % [hex(MUTED), ability.footnote]
 	return "%s\n%s\n" % [head, body]
 
 

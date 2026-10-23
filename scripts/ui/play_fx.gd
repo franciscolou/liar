@@ -3229,7 +3229,7 @@ var _duel: Dictionary = {}
 ## The cracks the swords left in the table (CrackFx), until the play is over.
 var _duel_marks: Array = []
 ## The sword of a Berserk and the fury round whoever went berserk:
-## {sword, fury, by, box, tint}, or empty.
+## {sword, fury, by, box, tint, loose}, or empty.
 var _berserk: Dictionary = {}
 
 
@@ -3634,8 +3634,8 @@ func drop_duel() -> void:
 
 ## The fury builds up in whoever goes berserk: their box turns red and burns,
 ## the table goes dark round it, and a sword comes out, red hot and shaking,
-## pointed at what it is going to go through. It waits there: the Morale is
-## given up as the play resolves (berserk_spent) and the items go one by one
+## pointed at what it is going to go through. It waits there: as the play
+## resolves the fury breaks loose (_unleash) and the items go one by one
 ## (item_pierced).
 func _fx_duelist_berserk(play: Play) -> void:
 	drop_berserk()
@@ -3691,16 +3691,21 @@ func berserking() -> bool:
 	return not _berserk.is_empty() and is_instance_valid(_berserk.sword)
 
 
-## The Morale of a Berserk goes, from `heart_at`: the heart bursts, the fury
-## breaks loose and the sword is drawn back to be thrown.
-func berserk_spent(who: PlayerState, heart_at: Vector2) -> void:
+## The fury of a Berserk breaks loose, once, just before the sword is thrown:
+## a burst over the box, "BERSERK!", the fury goes and the sword is drawn back.
+func _unleash() -> void:
+	if _berserk.get("loose", false):
+		return
+	_berserk.loose = true
 	var speed: float = table._speed
 	var sword: SwordFx = _berserk.sword
-	_snd("damage")
+	var who: PlayerState = _berserk.by
+	var middle := _box_rect(who).get_center()
+	_snd("fx_sword_draw")
 	flash(Color(FURY, 0.35), 0.3)
-	burst(heart_at, BLOOD, 24, 300.0, 0.6, 400.0, 6.0)
-	burst(heart_at, FURY.lightened(0.3), 10, 200.0, 0.4, 0.0, 4.0)
-	ring(heart_at, FURY, 6.0, 80.0, 0.3, 5.0)
+	burst(middle, EMBER, 24, 300.0, 0.6, 400.0, 6.0)
+	burst(middle, FURY.lightened(0.3), 10, 200.0, 0.4, 0.0, 4.0)
+	ring(middle, FURY, 6.0, 80.0, 0.3, 5.0)
 	table._float(Loc.t("BERSERK!"), _at(who) + Vector2(0, -34), FURY.lightened(0.25), 30)
 	table._shake_screen(14.0)
 	var fury: FuryFx = _berserk.fury
@@ -3722,6 +3727,7 @@ func berserk_spent(who: PlayerState, heart_at: Vector2) -> void:
 ## past it, where it waits for the next one. `gone` is called as it goes
 ## through: from then on the item is not in the inventory.
 func item_pierced(texture: Texture2D, at: Vector2, item_size: Vector2, gone: Callable) -> void:
+	await _unleash()
 	var sword: SwordFx = _berserk.sword
 	var speed: float = table._speed
 	var from := sword.position
@@ -3755,6 +3761,7 @@ func item_pierced(texture: Texture2D, at: Vector2, item_size: Vector2, gone: Cal
 ## The sword of a Berserk goes through where the items should be (`at`) and
 ## finds nothing: it carries on and off the table.
 func sword_missed(at: Vector2) -> void:
+	await _unleash()
 	var sword: SwordFx = _berserk.sword
 	var speed: float = table._speed
 	var from := sword.position

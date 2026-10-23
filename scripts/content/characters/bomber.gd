@@ -7,7 +7,7 @@ extends CharacterDef
 ## as a play of its own (GameEngine.carry_out).
 
 const TICKING := &"ticking"
-const DEFUSE_COST := 3
+const DEFUSE_COST := 4
 
 var _blast: Blast
 

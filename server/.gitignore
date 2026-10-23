@@ -1,0 +1,6 @@
+data/
+.env
+game/*.x86_64
+game/*.pck
+__pycache__/
+.pytest_cache/

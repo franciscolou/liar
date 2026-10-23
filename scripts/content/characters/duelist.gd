@@ -4,12 +4,14 @@ extends CharacterDef
 ##
 ## A Duel is a choice both sides make at once and in secret (GameEngine.ask_all):
 ## lay the sword down for the pot, or strike. It is shown to the table as one
-## event (duel_settled) before anything comes of it. Berserk is paid in Morale,
-## as a price (GameEngine.spend_morale), by whoever started it: a mirror sends
-## the sword back, not the bill.
+## event (duel_settled) before anything comes of it. Berserk is paid in coins,
+## as it is claimed, by whoever started it: a mirror sends the sword back, not
+## the bill.
 
 ## What each side of a Duel gets when both lay their swords down.
-const POT := 5
+const POT := 3
+## What a Berserk costs.
+const BERSERK_COST := 7
 ## Why the coins of a Duel come (coins.reason).
 const DUEL := &"duel"
 ## The two answers of a Duel, in the order of the options.
@@ -102,18 +104,16 @@ class Dilemma extends Ability:
 
 
 ## The sword goes through everything the target holds. A shield stops it and
-## a mirror sends it back at the Duelist's own items; either way the Morale
-## is the Duelist's to give up.
+## a mirror sends it back at the Duelist's own items; either way the coins
+## are the Duelist's to give up.
 class Berserk extends Ability:
 	func _init() -> void:
 		id = &"duelist.berserk"
 		display_name = "Berserk"
-		description = "Sacrifice 1 Morale to destroy every item a player of your choice holds. It can't be used with your last Morale."
+		description = "Destroy every item a player of your choice holds."
 		on_turn = true
+		cost = BERSERK_COST
 		targeting = Targeting.OPPONENT
-
-	func can_use(player: PlayerState, _engine: GameEngine) -> String:
-		return Loc.t("Not with your last Morale") if player.morale <= 1 else ""
 
 	func target_candidates(play: Play) -> Array:
 		return play.engine.targetable_opponents(play.actor).filter(
@@ -122,10 +122,6 @@ class Berserk extends Ability:
 	func resolve(play: Play) -> void:
 		var engine := play.engine
 		var victim := play.target
-		# Whoever went berserk: the one aimed at, if a mirror turned it round.
-		var berserker := berserker_of(play)
-		if not await engine.spend_morale(berserker, 1, play) or engine.over or not victim.alive:
-			return
 		if victim.items.is_empty():
 			return
 		# They may keep what they hold out of reach (see GameEngine.reach_items).
@@ -138,12 +134,7 @@ class Berserk extends Ability:
 			if i < victim.items.size():
 				await engine.break_item(victim, victim.items[i])
 
-	static func berserker_of(play: Play) -> PlayerState:
-		return play.target if play.reflected else play.actor
-
 	func ai_weight(player: PlayerState, engine: GameEngine) -> float:
-		if player.morale < engine.config.start_morale:
-			return 0.2
 		var most := 0
 		for p: PlayerState in engine.targetable_opponents(player):
 			most = maxi(most, p.items.size())

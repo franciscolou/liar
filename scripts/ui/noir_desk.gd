@@ -124,6 +124,22 @@ const SLIDE_PAST := 90.0
 ## How far to either side of its place a prop of the desk may reach (the
 ## coins and the thrown cards are the widest).
 const PROP_REACH := 150.0
+## Props marked `live` answer the mouse. Thrown cards: how much of the mouse's
+## speed a card under it picks up, how fast that is lost on the felt-less wood,
+## how much an off-centre push turns it, and how far from where it was thrown
+## down it may be pushed.
+const CARD_CATCH := 0.45
+const CARD_DRAG := 7.0
+const CARD_TORQUE := 0.00004
+const CARD_ROAM := 90.0
+const CARD_TWIST := 0.6
+const CARD_FASTEST := 2400.0
+## How close to the edge of the screen the middle of a card may be pushed.
+const CARD_MARGIN := 36.0
+## Coins: how closely the glint follows the mouse, and how fast it comes and
+## goes.
+const GLINT_FOLLOW := 18.0
+const GLINT_FADE := 6.0
 const BRASS := Color("b98a2e")
 const BRASS_LIGHT := Color("e6bc4c")
 const BRASS_DARK := Color("7d5616")
@@ -264,6 +280,11 @@ var bare := 0.0:
 		queue_redraw()
 
 var _lift := 0.0
+## DESK: what the live props are doing, by their index in `props`: for cards,
+## each card's push (`off`, `vel`, `spin`, `twirl`); for coins, the glint
+## (`at`, `shine`) and where the tops of the coins were last drawn (`tops`).
+var _stir: Dictionary = {}
+var _mouse := Vector2.INF
 var _home := Vector2.ZERO
 var _homed := false
 var _wood: ColorRect
@@ -326,7 +347,8 @@ func _init() -> void:
 
 
 func _ready() -> void:
-	set_process(lifts or kind == Kind.QUILL)
+	var live := kind == Kind.DESK and props.any(func(prop: Dictionary) -> bool: return prop.get("live", false))
+	set_process(lifts or kind == Kind.QUILL or live)
 
 
 func _notification(what: int) -> void:
@@ -354,6 +376,9 @@ func _process(delta: float) -> void:
 	if kind == Kind.QUILL:
 		_ruffle(delta)
 		return
+	if kind == Kind.DESK:
+		_stir_props(delta)
+		return
 	if not _homed:
 		_home = position
 		_homed = true
@@ -366,6 +391,104 @@ func _process(delta: float) -> void:
 	# Only up and down: a sheet may be on its way across the desk (see `slide`).
 	position.y = _home.y - _lift
 	queue_redraw()
+
+
+## The live props of the desk under the mouse: a thrown card it runs over is
+## pushed the way it went, and the coins catch the light where it is.
+func _stir_props(delta: float) -> void:
+	var at := get_local_mouse_position()
+	# Measured over the frame's own time, and only so fast: a mouse coming
+	# back into the window, or a slow frame, is not a flick.
+	var speed := Vector2.ZERO if _mouse == Vector2.INF or delta <= 0.0 else ((at - _mouse) / delta).limit_length(CARD_FASTEST)
+	_mouse = at
+	delta = minf(delta, 1.0 / 30.0)
+	var moving := false
+	for index in props.size():
+		var prop: Dictionary = props[index]
+		if not prop.get("live", false):
+			continue
+		match prop.kind:
+			&"cards":
+				moving = _push_cards(index, prop, at, speed, delta) or moving
+			&"coins":
+				moving = _shine_coins(index, at, delta) or moving
+	if moving:
+		queue_redraw()
+
+
+func _cards_stir(index: int, count: int) -> Dictionary:
+	if not _stir.has(index):
+		var still: Array[Vector2] = []
+		still.resize(count)
+		still.fill(Vector2.ZERO)
+		var turns: Array[float] = []
+		turns.resize(count)
+		turns.fill(0.0)
+		_stir[index] = {"off": still, "vel": still.duplicate(), "spin": turns, "twirl": turns.duplicate()}
+	return _stir[index]
+
+
+## Only the card on top under the mouse is pushed; true while any still moves.
+func _push_cards(index: int, prop: Dictionary, at: Vector2, speed: Vector2, delta: float) -> bool:
+	var lay: Array = _lay_of(prop)
+	var stir := _cards_stir(index, lay.size())
+	var grown: float = prop.get("scale", 1.0)
+	var card := Rect2(Vector2(-27.5, -50), Vector2(55, 100))
+	if bare <= 0.0 and speed.length() > 30.0:
+		for i in range(lay.size() - 1, -1, -1):
+			var place: Array = lay[i]
+			var spot: Vector2 = prop.at + Vector2(place[0], place[1]) + stir.off[i]
+			var turn: float = prop.get("turn", 0.0) + place[2] + stir.spin[i]
+			var local := Transform2D(turn, Vector2(grown, grown), 0.0, spot).affine_inverse() * at
+			if not card.has_point(local):
+				continue
+			var catch := minf(1.0, delta * 25.0)
+			stir.vel[i] += (speed * CARD_CATCH - stir.vel[i]) * catch
+			# Pushed off its middle, it turns as well.
+			var arm := at - spot
+			stir.twirl[i] += (arm.x * speed.y - arm.y * speed.x) * CARD_TORQUE * catch
+			break
+	var moving := false
+	var drag := exp(-CARD_DRAG * delta)
+	for i in lay.size():
+		if stir.vel[i].length() < 2.0 and absf(stir.twirl[i]) < 0.02:
+			stir.vel[i] = Vector2.ZERO
+			stir.twirl[i] = 0.0
+			continue
+		moving = true
+		stir.off[i] += stir.vel[i] * delta
+		stir.spin[i] = clampf(stir.spin[i] + stir.twirl[i] * delta, -CARD_TWIST, CARD_TWIST)
+		# Never far from the hand it was thrown down with, nor off the desk.
+		if stir.off[i].length() > CARD_ROAM:
+			stir.off[i] = stir.off[i].limit_length(CARD_ROAM)
+			var out: Vector2 = stir.off[i].normalized()
+			stir.vel[i] -= out * maxf(stir.vel[i].dot(out), 0.0)
+		var home: Vector2 = prop.at + Vector2(lay[i][0], lay[i][1])
+		var room := Rect2(Vector2(CARD_MARGIN, CARD_MARGIN), size - Vector2(CARD_MARGIN, CARD_MARGIN) * 2.0)
+		var spot: Vector2 = home + stir.off[i]
+		var kept := spot.clamp(room.position, room.end)
+		if kept != spot:
+			stir.off[i] = kept - home
+			if kept.x != spot.x:
+				stir.vel[i].x = 0.0
+			if kept.y != spot.y:
+				stir.vel[i].y = 0.0
+		stir.vel[i] *= drag
+		stir.twirl[i] *= drag
+	return moving
+
+
+## True while the glint is to be seen.
+func _shine_coins(index: int, at: Vector2, delta: float) -> bool:
+	if not _stir.has(index):
+		_stir[index] = {"at": at, "shine": 0.0, "tops": []}
+	var stir: Dictionary = _stir[index]
+	var over: bool = bare <= 0.0 and stir.tops.any(func(top: Vector2) -> bool: return top.distance_to(at) < 16.0)
+	if over:
+		stir.at = at if stir.shine <= 0.0 else stir.at.lerp(at, minf(1.0, delta * GLINT_FOLLOW))
+	var was: float = stir.shine
+	stir.shine = move_toward(stir.shine, 1.0 if over else 0.0, delta * GLINT_FADE)
+	return stir.shine > 0.0 or was > 0.0
 
 
 ## The barbs follow a finger run along the vane, part where it goes across
@@ -422,6 +545,7 @@ func _draw() -> void:
 					# A prop has no box: it is taken to be this wide round its place.
 					prop.at = at + Vector2(_dragged(at.x - PROP_REACH, PROP_REACH * 2.0, index, bare), 0.0)
 				prop.salt = int(at.x * 3.0 + at.y)
+				prop.index = index
 				_draw_prop(prop)
 		Kind.SHEET:
 			_sheet(Rect2(Vector2.ZERO, size))
@@ -1038,19 +1162,20 @@ func _draw_prop(prop: Dictionary) -> void:
 			draw_set_transform(Vector2.ZERO)
 		&"cards":
 			var back := UI.tex(UI.CARD_BACK)
-			var count: int = prop.get("count", 3)
-			var lay: Array = prop.get("lay", [])
-			if lay.is_empty():
-				for index in count:
-					var fan: float = prop.get("fan", 0.22)
-					lay.append([index * 9.0, -absf(index - (count - 1) / 2.0) * 2.0, (index - (count - 1) / 2.0) * fan])
+			var lay := _lay_of(prop)
 			var card := Rect2(Vector2(-27.5, -50), Vector2(55, 100))
 			var grown: float = prop.get("scale", 1.0)
-			for place: Array in lay:
+			var stir: Dictionary = _stir.get(prop.get("index", -1), {})
+			for i in lay.size():
+				var place: Array = lay[i]
 				var spot := at + Vector2(place[0], place[1])
-				draw_set_transform(spot + Vector2(4, 5), turn + place[2], Vector2(grown, grown))
+				var spun: float = turn + place[2]
+				if not stir.is_empty():
+					spot += stir.off[i]
+					spun += stir.spin[i]
+				draw_set_transform(spot + Vector2(4, 5), spun, Vector2(grown, grown))
 				draw_rect(card, Color(0, 0, 0, 0.35))
-				draw_set_transform(spot, turn + place[2], Vector2(grown, grown))
+				draw_set_transform(spot, spun, Vector2(grown, grown))
 				if back != null:
 					draw_texture_rect(back, card, false)
 			draw_set_transform(Vector2.ZERO)
@@ -1068,6 +1193,20 @@ func _draw_prop(prop: Dictionary) -> void:
 			_coin(at + Vector2(88, 26), 1, 8, 1)
 			_glint(at + Vector2(-8, -48))
 			_glint(at + Vector2(40, 22))
+			var stir: Dictionary = _stir.get(prop.get("index", -1), {})
+			if prop.get("live", false):
+				# Where the tops are, for the glint to know what is metal.
+				var tops: Array = []
+				for coin: Array in [[Vector2(2, -12), 7, 1], [Vector2(-30, -2), 4, 2], [Vector2(32, 0), 5, 3],
+						[Vector2(-56, 14), 1, 4], [Vector2(-2, 18), 2, 5], [Vector2(-32, 30), 1, 6],
+						[Vector2(30, 32), 1, 7], [Vector2(88, 26), 1, 8]]:
+					tops.append(_coin_top(at + coin[0], coin[1], coin[2]))
+				if stir.is_empty():
+					_stir[prop.index] = {"at": Vector2.ZERO, "shine": 0.0, "tops": tops}
+				else:
+					stir.tops = tops
+					if stir.shine > 0.0:
+						_cursor_glint(stir.at, stir.shine, tops)
 		&"quill":
 			var length: float = prop.get("length", 240.0)
 			draw_set_transform(at + Vector2(6, 8), turn)
@@ -1126,6 +1265,42 @@ func _coin(at: Vector2, high: int, salt: int, face := 0) -> void:
 	_b(top.x - 14.0, top.y - 10.0, PX, 6, Color(1, 1, 0.9))
 
 
+## Where the face of the top coin of a stack drawn by `_coin` is.
+func _coin_top(at: Vector2, high: int, salt: int) -> Vector2:
+	var layer := high - 1
+	return at + Vector2(roundf((_roll(salt * 9 + layer) - 0.5) * 2.0) * PX, -layer * 4.0)
+
+
+## The lamp caught by the coins where the mouse is: the gold under it lit,
+## only where there is a face of a coin, and a star of light over it.
+func _cursor_glint(at: Vector2, shine: float, tops: Array) -> void:
+	var centre := (at / PX).floor() * PX
+	var twinkle := 0.8 + 0.2 * sin(Time.get_ticks_msec() * 0.012)
+	var reach := 14.0
+	var y := -reach
+	while y <= reach:
+		var x := -reach
+		while x <= reach:
+			var cell := centre + Vector2(x, y)
+			var near := 1.0 - Vector2(x, y).length() / reach
+			if near > 0.0 and tops.any(func(top: Vector2) -> bool: return top.distance_to(cell + Vector2(1, 1)) < 15.0):
+				# Stepped like the lamp elsewhere: brighter in rings towards the middle.
+				var step := ceilf(near * 3.0) / 3.0
+				draw_rect(Rect2(cell, Vector2(PX, PX)), Color(1, 0.96, 0.78, step * 0.7 * shine))
+			x += PX
+		y += PX
+	var arm := roundf(12.0 * twinkle / PX) * PX
+	var light := Color(1, 1, 0.92, 0.95 * shine)
+	_b(centre.x - arm, centre.y, arm * 2.0 + PX, PX, light)
+	_b(centre.x, centre.y - arm, PX, arm * 2.0 + PX, light)
+	# Shorter rays across, as the lamp breaks on a milled edge.
+	for d in [-4.0, -2.0, 2.0, 4.0]:
+		_b(centre.x + d, centre.y + d, PX, PX, Color(1, 1, 0.92, 0.55 * shine))
+		_b(centre.x + d, centre.y - d, PX, PX, Color(1, 1, 0.92, 0.55 * shine))
+	_b(centre.x - PX, centre.y - PX, PX * 3.0, PX * 3.0, Color(1, 1, 0.95, 0.6 * shine))
+	_b(centre.x, centre.y, PX, PX, Color(1, 1, 1, shine))
+
+
 ## A coin on its edge, leaning on the stack to its left: seen almost side on.
 func _leaning_coin(at: Vector2) -> void:
 	_oval(at + Vector2(6, 12), 12.0, 6.0, Color(0, 0, 0, 0.38))
@@ -1136,6 +1311,18 @@ func _leaning_coin(at: Vector2) -> void:
 	_oval(at + Vector2(PX, 0), 4.0, 10.0, COIN.darkened(0.08))
 	_b(at.x - 6.0, at.y - 10.0, PX, 8, Color(1, 1, 0.9))
 	_b(at.x - 4.0, at.y - 14.0, PX, 4, Color(1, 1, 0.9))
+
+
+## The places of the thrown cards of a &"cards" prop: [x, y, turn] each.
+func _lay_of(prop: Dictionary) -> Array:
+	var lay: Array = prop.get("lay", [])
+	if not lay.is_empty():
+		return lay
+	var count: int = prop.get("count", 3)
+	var fan: float = prop.get("fan", 0.22)
+	for index in count:
+		lay.append([index * 9.0, -absf(index - (count - 1) / 2.0) * 2.0, (index - (count - 1) / 2.0) * fan])
+	return lay
 
 
 ## A star of light, where the lamp catches an edge.

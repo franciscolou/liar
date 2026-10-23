@@ -3,7 +3,10 @@ extends CharacterDef
 ##
 ## Entropy is a status its own user carries into their next turn, where it
 ## pays out by itself (on_event). Until then they are to keep still: reacting
-## is fine, but a LIAR! call throws the chains away, unpaid. Materialize is paid in Morale, not as a blow
+## is fine only for looking after themselves (Playable.for_oneself): a LIAR!
+## call, or any claim or item that reaches out (a Side Bet, a Swindle, Last
+## Rites...), throws the chains away, unpaid, and a blow breaks them instead
+## of landing (nothing is paid then either). Materialize is paid in Morale, not as a blow
 ## but as a price (GameEngine.spend_morale): nothing gets to stop it.
 
 const ENTROPY := &"entropy"
@@ -13,6 +16,8 @@ const ENTROPY_COINS := 3
 const MORALE_WORTH := 2
 ## Why the chains go when they go for nothing (status_removed.reason).
 const WASTED := &"wasted"
+## Why the chains go when a blow breaks them (status_removed.reason).
+const SHATTERED := &"shattered"
 
 
 func _init() -> void:
@@ -24,11 +29,14 @@ func _init() -> void:
 	status_defs = {
 		ENTROPY: {
 			"name": "Entropy",
-			"description": "In chains until this player's next turn starts. Then they break into 1 Morale and %d coins; Morale that can't be recovered becomes %d more coins. Calling LIAR! before that throws it all away.", "args": [ENTROPY_COINS, MORALE_WORTH],
+			"description": "In chains until this player's next turn starts. Then they break into 1 Morale and %d coins; Morale that can't be recovered becomes %d more coins. Calling LIAR!, or claiming or using anything that isn't in their own defense, before that throws it all away; damage taken before that breaks the chains instead, and nothing is paid.", "args": [ENTROPY_COINS, MORALE_WORTH],
 			"color": Color("7f8cff"),
 			# For whoever is about to call LIAR! with it on, and for the bots.
 			"doubt_warning": "You are in chains: calling LIAR! throws your Entropy away, with nothing for it.",
 			"ai_doubt": 0.2,
+			# The same for any other reaction that is not for themselves.
+			"react_warning": "You are in chains: this throws your Entropy away, with nothing for it.",
+			"ai_react": 0.2,
 		},
 	}
 	_add(Entropy.new())
@@ -39,6 +47,19 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 	if event.type == &"doubt_declared":
 		# Whoever is in chains was to keep still: the call costs them all of it.
 		await engine.remove_status(event.data.doubter, ENTROPY, WASTED)
+		return
+	if event.type in [&"claim_declared", &"item_used"]:
+		# Reaching out from the chains: anything but looking after themselves.
+		var play: Play = event.data.play
+		if play != null and play.actor.has_status(ENTROPY) and not play.source.for_oneself(play.event, play.actor):
+			await engine.remove_status(play.actor, ENTROPY, WASTED)
+		return
+	if event.type == &"before_morale_loss":
+		# A blow on someone in chains breaks the chains, not them.
+		var hit: PlayerState = event.data.target
+		if event.data.cause == &"damage" and not event.cancelled and hit.has_status(ENTROPY):
+			event.cancelled = true
+			await engine.remove_status(hit, ENTROPY, SHATTERED)
 		return
 	if event.type != &"turn_started":
 		return
@@ -58,7 +79,7 @@ class Entropy extends Ability:
 	func _init() -> void:
 		id = &"entity.entropy"
 		display_name = "Entropy"
-		describe("Spend your entire turn. When your next turn begins, recover 1 Morale and gain %d coins. If your Morale is full, receive %d additional coins. Calling LIAR! before receiving them cancels the effect, forfeiting the rewards.", [ENTROPY_COINS, MORALE_WORTH])
+		describe("Spend your entire turn. When your next turn begins, recover 1 Morale and gain %d coins. If your Morale is full, receive %d additional coins. Calling LIAR! or using a reaction that isn't in your own defense before receiving them cancels the effect, forfeiting the rewards. Taking damage before then also cancels it, and the damage is not taken.", [ENTROPY_COINS, MORALE_WORTH])
 		on_turn = true
 		fresh_turn = true
 

@@ -52,8 +52,8 @@ static func run() -> int:
 		"drain gives back the Morale of a kill": _drain.bind(2),
 		"drain is not offered at full Morale": _drain.bind(3),
 		"one kill answered by two characters: drain and streak thirst": _drain_and_streak,
-		"berserk breaks every item for 1 Morale": _berserk.bind(&""),
-		"a shield stops a berserk, and it costs nothing": _berserk.bind(&"shield"),
+		"berserk breaks every item for its coins": _berserk.bind(&""),
+		"a shield stops a berserk, and the coins are spent": _berserk.bind(&"shield"),
 		"a mirror sends a berserk back at the duelist's items": _berserk.bind(&"mirror"),
 		"a shield stops a time bomb as it is planted": _time_bomb.bind(&"shield"),
 		"a mirror sends a time bomb back as it is planted": _time_bomb.bind(&"mirror"),
@@ -68,6 +68,9 @@ static func run() -> int:
 		"entropy takes the whole turn": _entropy_whole_turn,
 		"entropy is thrown away by a LIAR! call": _entropy_wasted.bind(true),
 		"entropy survives a claim let pass": _entropy_wasted.bind(false),
+		"entropy breaks instead of taking a blow": _entropy_shattered,
+		"entropy is thrown away by a Swindle": _entropy_reaching.bind(&"bard.swindle", true),
+		"entropy survives a Street Bargain": _entropy_reaching.bind(&"vagabond.street_bargain", false),
 		"a Morale becomes an item, and the change": _materialize.bind(&"shield", 1),
 		"a dearer item is paid for on top of the Morale": _materialize.bind(&"potion", -4),
 		"the last Morale is not for sale": _materialize_last,
@@ -76,6 +79,8 @@ static func run() -> int:
 		"an untraceable hand keeps its copy through a last call": _untraceable.bind(&"recall"),
 		"a last call asks a hand with no copy too, and it may vanish": _untraceable_no_copy.bind(true),
 		"a last call asks a hand with no copy too, and it may stay": _untraceable_no_copy.bind(false),
+		"a proven untraceable trades its card once the hand is back (peek)": _untraceable_proven.bind(&"peek"),
+		"a proven untraceable trades its card once the hand is back (recall)": _untraceable_proven.bind(&"recall"),
 		"nobody is untraceable from themselves": _untraceable_own,
 		"nobody slips out of their own last call": _untraceable_own_recall,
 		"an item thrown away costs nothing and takes no turn": _discard,
@@ -114,10 +119,11 @@ static func run() -> int:
 		"a street bargain on the cuff is doubted once (lie)": _bargain_on_cuff.bind(false),
 		"a proven cover story is not traded again": _cover_story_proven,
 		"a disguised sold out trades the impostor, once": _disguised_sold_out,
-		"all is color: items sold, one bought, the shelf restocked after": _all_is_color,
+		"all is color: items sold, one bought, the shelf restocked": _all_is_color,
 		"all is color: what was bought can't be sold in the same go": _all_is_color_fresh,
-		"monochrome: reaching outside the paint, the bank pays the painter": _monochrome.bind(false),
-		"monochrome: dealing with the partner costs nothing": _monochrome.bind(true),
+		"monochrome: reaching the partner, the bank pays the painter": _monochrome.bind(true),
+		"monochrome: reaching anyone else costs nothing": _monochrome.bind(false),
+		"monochrome: the painter reaching his own partner is paid nothing": _monochrome_self,
 		"monochrome: the paint comes off after the later one's clean turn": _monochrome_wears_off,
 		"monochrome: a LIAR! is no reaching out": _monochrome_doubt,
 	}
@@ -291,9 +297,9 @@ static func _duel(a: int, b: int) -> String:
 	return ""
 
 
-## Player 0, on 3 Morale, goes berserk on player 1, who holds `defence` and
-## two potions. A mirror sends the sword back at player 0's own items, and
-## player 0 still pays the Morale; a shield stops it before anything is paid.
+## Player 0 goes berserk on player 1, who holds `defence` and two potions.
+## Player 0 pays the coins whatever happens: a shield stops the sword, and a
+## mirror sends it back at player 0's own items.
 static func _berserk(defence: StringName) -> String:
 	var table := Table.new(true, [&"duelist"])
 	var engine := table.engine
@@ -303,13 +309,16 @@ static func _berserk(defence: StringName) -> String:
 	table.give(0, [&"potion"])
 	table.give(1, ([defence] if defence != &"" else []) + [&"potion", &"potion"])
 	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return victim
+	duelist.coins = 10
+	victim.coins = 10
 	var morale := [duelist.morale, victim.morale]
 	await engine.claim(duelist, table.ability(&"duelist.berserk"))
-	var paid := 0 if defence == &"shield" else 1
-	if duelist.morale != morale[0] - paid:
-		return "the duelist went from %d to %d Morale" % [morale[0], duelist.morale]
-	if victim.morale != morale[1]:
-		return "the target lost Morale"
+	if duelist.coins != 10 - preload("res://scripts/content/characters/duelist.gd").BERSERK_COST:
+		return "the duelist has %d coins" % duelist.coins
+	if victim.coins != 10:
+		return "the target has %d coins" % victim.coins
+	if duelist.morale != morale[0] or victim.morale != morale[1]:
+		return "someone lost Morale"
 	match defence:
 		&"":
 			return "" if table.held(1) == [] and table.held(0) == [&"potion"] else "kept %s and %s" % [table.held(0), table.held(1)]
@@ -371,6 +380,45 @@ static func _entropy(morale: int, healed: int, coins: int) -> String:
 	if p.morale != morale + healed:
 		return "%d Morale" % p.morale
 	return "" if p.coins == 20 + coins else "gained %d coins" % (p.coins - 20)
+
+
+## Player 0 is in chains and player 1 deals them a blow: the chains break
+## in its place, the Morale stays, and the next turn pays nothing.
+static func _entropy_shattered() -> String:
+	var table := Table.new(true, [&"entity"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	p.morale = 2
+	await engine.add_status(p, &"entropy", {"by": p.id})
+	if await engine.deal_damage(engine.players[1], p):
+		return "the blow landed"
+	if p.morale != 2:
+		return "%d Morale" % p.morale
+	if p.has_status(&"entropy"):
+		return "still in chains"
+	await engine.fire(&"turn_started", {"player": p})
+	if p.morale != 2 or p.coins != 20:
+		return "paid %d Morale, %d coins" % [p.morale - 2, p.coins - 20]
+	# Out of chains, the next blow lands as ever.
+	await engine.deal_damage(engine.players[1], p)
+	return "" if p.morale == 1 else "the second blow missed"
+
+
+## Player 0 is in chains and claims `ability` in answer to something: the
+## chains go if it is not for themselves (Playable.for_oneself).
+static func _entropy_reaching(ability: StringName, thrown: bool) -> String:
+	var table := Table.new(true, [&"entity", &"bard", &"vagabond"])
+	var engine := table.engine
+	var p: PlayerState = engine.players[0]
+	await engine.add_status(p, &"entropy", {"by": p.id})
+	var play := Play.new()
+	play.engine = engine
+	play.actor = p
+	play.source = table.ability(ability)
+	await engine.fire(&"claim_declared", {"play": play})
+	if p.has_status(&"entropy") == thrown:
+		return "still in chains" if thrown else "the chains are gone"
+	return ""
 
 
 static func _entropy_whole_turn() -> String:
@@ -882,6 +930,37 @@ static func _untraceable(how: StringName) -> String:
 	if missed.size() != 1 or missed[0].data.owner != spy or missed[0].data.how != how:
 		return "missed %d times" % missed.size()
 	return ""
+
+
+## Player 1 answers a peek or a Last Call with an Untraceable and player 2
+## calls LIAR! on it: the card proven is traded only after whatever came for
+## the hand has missed (out of a Last Call, after the recall), so the new card
+## never lands in a hand that is off the table.
+static func _untraceable_proven(how: StringName) -> String:
+	var table := Table.new(true, [&"spy"])
+	var engine := table.engine
+	var seen := Witness.new()
+	engine.observers.append(seen)
+	var spy: PlayerState = engine.players[1]
+	spy.cards = [&"spy", &"judge"]
+	table.puppets[1].answers[Decision.Kind.REACT] = _vanishes
+	table.puppets[2].answers[Decision.Kind.DOUBT] = func(d: Decision) -> Variant:
+		return d.options[0] if d.context.play.source.id == &"spy.untraceable" and not d.options.is_empty() else false
+	if how == &"peek":
+		table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return spy
+		await engine.claim(engine.players[0], table.ability(&"spy.sneak_peek"))
+	else:
+		table.puppets[0].answers[Decision.Kind.PICK] = _names.bind(&"judge")
+		await engine.claim(engine.players[0], table.ability(LAST_CALL))
+	var traded := seen.events.filter(func(e: GameEvent) -> bool:
+		return e.type == &"cards_changed" and e.data.get("reason") == &"proven" and e.data.get("player") == spy)
+	if traded.size() != 1:
+		return "the proven card was traded %d times" % traded.size()
+	var after := seen.events.find(traded[0])
+	var last := &"hand_missed" if how == &"peek" else &"cards_recalled"
+	if seen.events.find(seen.of(last)[0]) > after:
+		return "the card was traded before %s" % last
+	return "" if traded[0].data.old == &"spy" and spy.cards.has(&"judge") else "hand %s" % [spy.cards]
 
 
 ## Player 1 holds no copy of what the Last Call names and is asked about
@@ -1419,7 +1498,7 @@ static func _vanishes(d: Decision) -> Variant:
 
 ## The Painter (player 0) holds two Russian Roulettes and 3 coins: he sells
 ## both and buys a Shield with the 7 coins, and the slot he bought out of the
-## shelf is restocked only once he is done.
+## shelf is restocked right after, as after any purchase.
 static func _all_is_color() -> String:
 	var table := Table.new(true, [&"painter"])
 	var engine := table.engine
@@ -1485,8 +1564,8 @@ static func _all_is_color_fresh() -> String:
 
 
 ## The Painter (player 0) paints players 1 and 2, chosen after the doubt
-## window. On their turn, player 1 spikes player 0 (outside the paint: the
-## bank gives the Painter 4 coins) or player 2 (`partner`: nothing).
+## window. On their turn, player 1 spikes player 2 (`partner`: the bank
+## gives the Painter 4 coins) or player 0 (nothing).
 static func _monochrome(partner: bool) -> String:
 	var table := Table.new(true, [&"painter"])
 	var engine := table.engine
@@ -1508,7 +1587,7 @@ static func _monochrome(partner: bool) -> String:
 	var aim: PlayerState = engine.players[2] if partner else painter
 	table.puppets[1].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return aim
 	await engine.claim(one, table.ability(MICKEY_FINN))
-	var toll := 0 if partner else 4
+	var toll := 4 if partner else 0
 	if one.coins != 20 or painter.coins != 20 + toll:
 		return "coins: %d / %d" % [one.coins, painter.coins]
 	if not one.has_status(&"painted"):
@@ -1517,9 +1596,9 @@ static func _monochrome(partner: bool) -> String:
 	return "" if engine.claim_block_reason(painter, table.ability(&"painter.monochrome")) != "" else "offered with one left to paint"
 
 
-## Players 1 and 2 are painted. On player 1's turn the Painter (player 0)
-## claims a Mickey Finn on player 2 he can't back up, and player 1 calls LIAR!
-## on him: the Painter gets nothing for it.
+## Players 1 and 2 are painted. On player 1's turn player 2 claims a Mickey
+## Finn on the Painter (player 0) he can't back up, and player 1 calls LIAR!
+## on his partner: the Painter gets nothing for it.
 static func _monochrome_doubt() -> String:
 	var table := Table.new(false, [&"painter"])
 	var engine := table.engine
@@ -1532,16 +1611,39 @@ static func _monochrome_doubt() -> String:
 		return "nobody was painted"
 	engine.current = one
 	one.turn = {}
-	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return engine.players[2]
+	var two: PlayerState = engine.players[2]
+	two.cards = [&"painter", &"judge"]
+	table.puppets[2].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return painter
 	table.puppets[1].answers[Decision.Kind.DOUBT] = func(_d: Decision) -> Variant: return &"coins"
-	await engine.claim(painter, table.ability(MICKEY_FINN))
-	if painter.morale != engine.config.start_morale - 1:
+	await engine.claim(two, table.ability(MICKEY_FINN))
+	if two.morale != engine.config.start_morale - 1:
 		return "the lie was not caught"
 	return "" if painter.coins == 20 else "the painter got %d coins" % (painter.coins - 20)
 
 
+## The Painter paints himself with player 1 and, on his own turn, spikes
+## player 1: nobody pays him for it, and the paint stays.
+static func _monochrome_self() -> String:
+	var table := Table.new(true, [&"painter"])
+	var engine := table.engine
+	var painter: PlayerState = engine.players[0]
+	var one: PlayerState = engine.players[1]
+	painter.cards = [&"painter", &"judge"]
+	table.puppets[0].answers[Decision.Kind.PICK] = func(_d: Decision) -> int: return 0
+	await engine.claim(painter, table.ability(&"painter.monochrome"))
+	if not painter.has_status(&"painted") or not one.has_status(&"painted"):
+		return "nobody was painted"
+	engine.current = painter
+	painter.turn = {}
+	table.puppets[0].answers[Decision.Kind.TARGET] = func(_d: Decision) -> PlayerState: return one
+	await engine.claim(painter, table.ability(MICKEY_FINN))
+	if not one.has_status(GROGGY):
+		return "the drink was not served"
+	return "" if painter.coins == 20 else "the painter got %d coins" % (painter.coins - 20)
+
+
 ## The paint comes off the two only at the end of the later one's turn, once
-## both have played one, and only if that turn stayed inside the paint.
+## both have played one, and only if that turn left the partner alone.
 static func _monochrome_wears_off() -> String:
 	var table := Table.new(true, [&"painter"])
 	var engine := table.engine
@@ -1563,12 +1665,12 @@ static func _monochrome_wears_off() -> String:
 	await engine.fire(&"turn_ended", {"player": one})
 	if not one.has_status(&"painted") or not painter.has_status(&"painted"):
 		return "came off before both had played"
-	# The painter's turn reached outside the paint: it stays.
+	# The painter's turn reached the partner: it stays.
 	engine.turn_count = 8
 	painter.turn = {"paint_tolled": [RefCounted.new()]}
 	await engine.fire(&"turn_ended", {"player": painter})
 	if not painter.has_status(&"painted"):
-		return "came off after a turn outside the paint"
+		return "came off after a turn on the partner"
 	engine.turn_count = 9
 	one.turn = {}
 	await engine.fire(&"turn_ended", {"player": one})

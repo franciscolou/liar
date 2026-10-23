@@ -6,6 +6,7 @@ extends Control
 const HelpPanel := preload("res://scripts/ui/help_panel.gd")
 const Jukebox := preload("res://scripts/ui/jukebox.gd")
 const Transition := preload("res://scripts/ui/transition.gd")
+const MatchServer := preload("res://scripts/net/match_server.gd")
 # The plates, in the wood and brass of the room in the artwork.
 const PLATE := Color("21130c", 0.9)
 const PLATE_BORDER := Color("86603a")
@@ -25,6 +26,10 @@ const TOUCH_HEIGHT := 66.0
 
 
 func _ready() -> void:
+	# Started by the house as a ranked table: no menu, no window to speak of.
+	if MatchServer.wanted():
+		get_tree().change_scene_to_file.call_deferred("res://scenes/server.tscn")
+		return
 	Settings.ensure_loaded()
 	theme = UI.theme()
 	Jukebox.play(Jukebox.LOBBY)

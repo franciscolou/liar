@@ -50,6 +50,10 @@ class ContemptOfCourt extends Ability:
 		describe("Take %d coins from the player who doubted you. Whatever they can't pay comes from the bank.", [FINE])
 		trigger_text = "When you are doubted and were telling the truth"
 
+	# Their own claim, doubted.
+	func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
+		return true
+
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		return event.type == &"doubt_failed" and event.data.defender == player
 

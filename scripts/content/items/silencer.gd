@@ -15,6 +15,14 @@ func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bo
 	return event.type == &"claim_resolving" and event.data.play.actor != player
 
 
+# Stopping what is aimed at them is looking after themselves.
+func for_oneself(event: GameEvent, player: PlayerState) -> bool:
+	if event == null or not event.data.has("play"):
+		return false
+	var incoming: Play = event.data.play
+	return incoming.whom() == player or incoming.aimed().whom() == player
+
+
 func resolve(play: Play) -> void:
 	play.event.cancelled = true
 

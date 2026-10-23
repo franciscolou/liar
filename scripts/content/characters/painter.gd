@@ -6,17 +6,18 @@ extends CharacterDef
 ## buys from the shop with whatever he has (two Russian Roulettes and a few
 ## coins are a Death). It does not end his turn, so what he bought can be
 ## used at once. So that it is no free way to go through the whole shop, it
-## is once per turn, nothing bought in it can be sold again in the same go,
-## and a slot emptied in it is only restocked once he is done.
+## is once per turn and nothing bought in it can be sold again in the same
+## go (a slot bought out is restocked at once, as after any purchase).
 ##
 ## Monochrome paints two players who are not painted yet (he may be one of
 ## them) the same colour, chosen once the table has let the claim pass.
-## During their own turns they are only to deal with each other: whenever a
-## painted player reaches somebody else on their turn, the bank gives the
-## Painter TOLL coins, and the paint stays. It comes off the two of them once
-## both have played a turn in it, at the end of the later one's turn, and
-## only if that turn stayed inside the paint; if not, it waits for the next
-## clean turn of either.
+## During their own turns they are to keep their hands off each other:
+## whenever a painted player reaches the one they were painted with on their
+## turn, the bank gives the Painter TOLL coins, and the paint stays (the
+## Painter reaching his own partner is paid nothing). It comes off the two of
+## them once both have played a turn in it, at the end of the later one's
+## turn, and only if that turn left the partner alone; if not, it waits for
+## the next clean turn of either.
 
 const PAINTED := &"painted"
 const TOLL := 4
@@ -37,9 +38,9 @@ func _init() -> void:
 	status_defs = {
 		PAINTED: {
 			"name": "Painted",
-			"description": "Painted the same colour as another player. On their own turn they are to deal only with that player: whenever they reach anyone else, the bank gives the Painter %d coins. It comes off both once each has played a turn, if the last of those turns stayed inside the paint.", "args": [TOLL],
+			"description": "Painted the same colour as another player. On their own turn they are to keep away from that player: whenever they reach them, the bank gives the Painter %d coins. It comes off both once each has played a turn, if the last of those turns left the other one alone.", "args": [TOLL],
 			"color": PAINTS[0],
-			# Bots steer clear of anyone else on their own turn (BotController._target).
+			# Bots steer clear of the partner on their own turn (BotController._target).
 			"ai_stray": 0.12,
 		},
 	}
@@ -77,7 +78,7 @@ func on_event(event: GameEvent, engine: GameEngine) -> void:
 
 ## `wearer`'s turn is over. A turn played in the paint counts (not the one it
 ## was put on in); once both of the pair have played one, it comes off the
-## two of them, unless this turn reached outside it.
+## two of them, unless this turn reached the partner.
 func _wear(wearer: PlayerState, engine: GameEngine) -> void:
 	if engine.over or not wearer.alive or not wearer.has_status(PAINTED):
 		return
@@ -96,7 +97,7 @@ func _wear(wearer: PlayerState, engine: GameEngine) -> void:
 
 
 ## Charges the toll if `event` is a painted player, on their own turn,
-## reaching somebody other than the one they were painted with.
+## reaching the one they were painted with.
 func _check_toll(event: GameEvent, engine: GameEngine) -> void:
 	if engine.over:
 		return
@@ -110,7 +111,7 @@ func _check_toll(event: GameEvent, engine: GameEngine) -> void:
 	if doer.turn.has("paint_doubting") and event.type != &"play_effect":
 		return
 	var partner := partner_of(doer, engine)
-	if not reached.any(func(p: PlayerState) -> bool: return p != doer and p != partner):
+	if partner == null or not reached.has(partner):
 		return
 	# Whatever a play goes on to do is still that one play: one thing done is
 	# one toll. What was charged for is kept with the turn being played.
@@ -119,11 +120,11 @@ func _check_toll(event: GameEvent, engine: GameEngine) -> void:
 	if tolled.has(key):
 		return
 	tolled.append(key)
-	# The Painter himself out of his own paint: there is nobody to pay him.
+	# The Painter reaching the one he painted himself with: nobody pays him.
 	var painter := engine.player_by_id(doer.statuses[PAINTED].get("by", -1))
 	if painter == null or not painter.alive or painter == doer:
 		return
-	await engine.note(doer, "%s steps outside the paint.", false, &"paint_toll")
+	await engine.note(doer, "%s smudges the paint.", false, &"paint_toll")
 	if not engine.over and painter.alive:
 		await engine.gain_coins(painter, TOLL, &"paint")
 
@@ -165,7 +166,8 @@ class AllIsColor extends Ability:
 	func _init() -> void:
 		id = &"painter.all_is_color"
 		display_name = "All Is Color"
-		description = "Trade with the shop using your items as coins, at their price: turn them into coins and buy whatever you can pay for, as many times as you like. What you buy here can't be turned back into coins in the same go, and the shelves are only restocked once you are done. Once per turn; it does not consume the turn, so what you bought can be used right away."
+		description = "Once you use this ability on your turn, you may turn your items back into coins, at the shop's price.\nThis ability does not end your turn, and the items you buy can be used right away."
+		footnote = "Items bought with a surcharge don't sell for more coins."
 		on_turn = true
 		# What he bought is for using in the same turn.
 		ends_turn = false
@@ -188,8 +190,6 @@ class AllIsColor extends Ability:
 		var painter := play.actor
 		# Bought in this go: not for sale again until it is over.
 		var fresh: Array = []
-		# Slots bought out in this go: restocked once it is over.
-		var emptied: Array = []
 		for step: int in MAX_TRADES:
 			if engine.over or not painter.alive:
 				break
@@ -215,15 +215,9 @@ class AllIsColor extends Ability:
 						await engine.sell_item(painter, option.instance, option.coins)
 				&"buy":
 					var before := painter.items.size()
-					if await engine.buy_item(painter, option.item, option.slot, false):
+					if await engine.buy_item(painter, option.item, option.slot):
 						if painter.items.size() > before:
 							fresh.append(painter.items.back())
-						if option.slot >= 0:
-							emptied.append(option.slot)
-		for slot: int in emptied:
-			if engine.over:
-				return
-			await engine.restock_slot(slot)
 
 	## What the Painter may do right now: sell what he held before this go,
 	## buy what is on the shelves.
@@ -277,7 +271,7 @@ class Monochrome extends Ability:
 	func _init() -> void:
 		id = &"painter.monochrome"
 		display_name = "Monochrome"
-		describe("Once the table lets this pass, choose two players who are not painted yet (you may be one of them) and paint them the same colour. On their own turns they can only deal with each other: whenever they reach anyone else, the bank gives you %d coins, and the paint stays. It comes off both once each has played a turn, if the last of those turns stayed inside the paint.", [TOLL])
+		describe("Choose two players to be painted the same colour (you may be one of them). You can't repaint a player.\nWhen they play, if they deal with the other player painted the same colour, you get %d coins and the effect stays.\nIf they keep the peace, the effect ends when the last player painted this colour ends their turn.", [TOLL])
 		on_turn = true
 		inflicts = true
 
@@ -341,7 +335,7 @@ class Monochrome extends Ability:
 		return engine.player_by_id(player.statuses[PAINTED].get("partner", -1))
 
 	## How much a bot likes painting `p`: two strong opponents, to keep them
-	## busy with each other; itself now and then, with a weak one.
+	## off each other; itself now and then, with a weak one.
 	func _ai_pick(play: Play, p: PlayerState) -> float:
 		if p == play.actor:
 			return 0.25

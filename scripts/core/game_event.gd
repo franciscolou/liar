@@ -22,7 +22,7 @@ extends RefCounted
 ##     &"blank": the price of an empty Bang! back to the Clown, with the claim
 ##     the coins were put down for in `play`; &"sold": an item turned into
 ##     coins; &"paint": what the bank gives the Painter when a painted
-##     player reaches outside the paint, see painter.gd; &"duel": the pot of
+##     player reaches their partner, see painter.gd; &"duel": the pot of
 ##     a Duel both sides contributed to, see duelist.gd)
 ##   payment_short {player, amount, allowed, play}  set allowed to let the player go into debt; play = the claim being paid for, if any
 ##   before_steal {thief, victim, amount, play} cancellable (also fired by a Swindle,
@@ -86,7 +86,7 @@ extends RefCounted
 ##   note {player, text, good, tag}             news from content that no other event
 ##     carries: `text` is an English key with one %s for the player's name
 ##     (tag &"side_bet": a Side Bet settled; &"doll_awake": a Voodoo doll woke up;
-##     &"paint_toll": a painted player reached outside the paint)
+##     &"paint_toll": a painted player reached their partner)
 ##   status_added {player, status} / status_removed {player, status, reason, was}
 ##     (reason: &"" when it just ended, &"wasted" when it was thrown away;
 ##     was: what the status held, now that the player has it no more)

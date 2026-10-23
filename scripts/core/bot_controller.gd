@@ -120,7 +120,7 @@ func _stray(candidate: PlayerState) -> float:
 	var factor := 1.0
 	for status_id: StringName in player.statuses:
 		var def: Dictionary = Content.statuses.get(status_id, {})
-		if def.has("ai_stray") and player.statuses[status_id].get("partner", -1) != candidate.id:
+		if def.has("ai_stray") and player.statuses[status_id].get("partner", -1) == candidate.id:
 			factor *= float(def.ai_stray)
 	return factor
 
@@ -174,6 +174,15 @@ static func doubt_restraint(who: PlayerState) -> float:
 	return left
 
 
+## How much of its wish to react `who` keeps under the statuses they carry,
+## for anything not played for themselves (`ai_react` of a status).
+static func react_restraint(who: PlayerState) -> float:
+	var left := 1.0
+	for status_id: StringName in who.statuses:
+		left *= float(Content.statuses.get(status_id, {}).get("ai_react", 1.0))
+	return left
+
+
 ## What a bot that isn't sure would put up, or &"" if nothing is worth it.
 static func doubt_stake(who: PlayerState, stakes: Array) -> StringName:
 	if stakes.has(GameEngine.STAKE_COINS):
@@ -198,6 +207,9 @@ func _react(d: Decision) -> Variant:
 				chance *= 0.2
 		else:
 			chance = option.item.def.ai_react_weight(event, player, engine)
+		var played: Playable = option.ability if option.kind == &"ability" else option.item.def
+		if not played.for_oneself(event, player):
+			chance *= react_restraint(player)
 		if _dice().randf() < chance:
 			return option
 	return null

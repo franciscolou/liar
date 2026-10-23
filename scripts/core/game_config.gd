@@ -80,8 +80,14 @@ func to_wire() -> Dictionary:
 static func from_wire(data: Dictionary) -> GameConfig:
 	var c := GameConfig.new()
 	for field: String in WIRE_FIELDS:
-		if typeof(data.get(field)) == typeof(c.get(field)):
-			c.set(field, data[field])
+		var value: Variant = data.get(field)
+		# Read from JSON (the house's rules), every number is a float.
+		if value is float and c.get(field) is int and value == roundf(value):
+			value = int(value)
+		elif value is int and c.get(field) is float:
+			value = float(value)
+		if typeof(value) == typeof(c.get(field)):
+			c.set(field, value)
 	for id: Variant in data.get("character_ids", []):
 		c.character_ids.append(StringName(str(id)))
 	for id: Variant in data.get("item_ids", []):

@@ -1,0 +1,9 @@
+# HTTPS for the API at the domain in LIAR_DOMAIN (.env). The match servers
+# are not behind it: the game reaches them over UDP, at the ports of the range.
+{$LIAR_DOMAIN} {
+	encode gzip
+	# The match servers report from inside the container, never from outside.
+	@internal path /internal/*
+	respond @internal 404
+	reverse_proxy house:8080
+}

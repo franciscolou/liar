@@ -22,6 +22,10 @@ class StreetBargain extends Ability:
 		trigger_text = "When you would lose Morale"
 		cost = 6
 
+	# Their own Morale.
+	func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
+		return true
+
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		if event.type != &"before_morale_loss" or event.data.target != player:
 			return false
@@ -49,6 +53,10 @@ class OnTheCuff extends Ability:
 		display_name = "On the Cuff"
 		describe("Pay for something you can't afford, down to a balance of %d coins.", [DEBT_LIMIT])
 		trigger_text = "When you are short on coins"
+
+	# Paying for what they owe.
+	func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
+		return true
 
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		return (event.type == &"payment_short" and event.data.player == player

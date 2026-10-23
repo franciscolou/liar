@@ -70,8 +70,6 @@ const COIN_FLIGHT := 0.42
 const COIN_STAGGER := 0.11
 ## The Voodooist's dolls at work: see PlayFx.curse_flush.
 const PUPPET_STRINGS := &"voodooist.puppet_strings"
-## The Duelist's "Berserk": its Morale and the items it breaks have their own look.
-const BERSERK := &"duelist.berserk"
 ## The Clown's gun: what it costs stays down until it is shown (_holds_round).
 const CLOWN_BANG := &"clown.bang"
 ## The item whose use is staged as a spin of the cylinder (_anim_roulette).
@@ -333,6 +331,8 @@ func _ready() -> void:
 			_replaying = true
 			engine.hurry = true
 			_room.caught_up.connect(_end_replay)
+	if _room != null:
+		_room.watch_match(engine)
 	engine.polled.connect(_on_polled)
 	engine.asking.connect(_on_asking)
 	engine.settled.connect(_on_settled)
@@ -1372,7 +1372,7 @@ func _on_character_clicked(def: CharacterDef, view: CardView) -> void:
 			"text": text, "tip": tip, "enabled": option.enabled,
 			"accent": UI.GREEN if option.legit else UI.RED,
 			"action": _answer_turn.bind(option), "reason": option.reason,
-			"note": ability.description, "cost": cost,
+			"note": ability.description, "footnote": ability.footnote, "cost": cost,
 		})
 	if options != null:
 		for extra: Dictionary in options.extras:
@@ -1835,8 +1835,11 @@ func _doubt_buttons(d: Decision) -> Array:
 func _reaction_button(option: Dictionary) -> Dictionary:
 	if option.kind != &"ability":
 		var item: ItemDef = option.item.def
+		var item_tip := UI.item_tip(item)
+		if option.get("caution", "") != "":
+			item_tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
 		return {
-			"text": Loc.t("Use %s") % item.display_name, "tip": UI.item_tip(item),
+			"text": Loc.t("Use %s") % item.display_name, "tip": item_tip,
 			"accent": UI.BLUE, "action": _answer.bind(option),
 		}
 	var ability: Ability = option.ability
@@ -1862,11 +1865,15 @@ func _prompt_react(d: Decision) -> void:
 	# What a reaction puts at risk beyond the usual, said in the prompt itself:
 	# nobody should find it out from a tooltip.
 	var cautions := ""
+	var warned := []
 	for option: Dictionary in d.options:
 		if option.kind == &"ability" and not triggers.has(option.ability.trigger_text):
 			triggers.append(option.ability.trigger_text)
-		if option.get("caution", "") != "":
-			cautions += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
+		# Each line once: the chains of an Entropy warn on every option.
+		for line: String in String(option.get("caution", "")).split("\n", false):
+			if not warned.has(line):
+				warned.append(line)
+				cautions += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), line]
 		buttons.append(_reaction_button(option))
 	buttons.append({"text": "Pass", "action": _answer.bind(null)})
 	var why := ". ".join(triggers)
@@ -1895,6 +1902,8 @@ func _prompt_bet(d: Decision) -> void:
 			Loc.t("You hold %s: this is the truth." if legit else "You don't hold %s: this is a bluff.") % def.display_name]
 		if option.get("credit", false):
 			text += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
+		if option.get("caution", "") != "":
+			text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
 		for i: int in d.options.size():
 			buttons.append({
 				"text": d.options[i].label, "tip": UI.ability_tip(ability),
@@ -2549,6 +2558,13 @@ func _open_popup(anchor: Rect2, title: String, subtitle: String, subtitle_color:
 			note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			note.custom_minimum_size = UI.grown(Vector2(270, 0))
 			box.add_child(note)
+		if spec.get("footnote", "") != "":
+			# A side remark: fainter than what the button does.
+			var aside := UI.label(spec.footnote, 12, UI.MUTED.darkened(0.25) if b.disabled else UI.MUTED)
+			aside.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			aside.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			aside.custom_minimum_size = UI.grown(Vector2(270, 0))
+			box.add_child(aside)
 		if spec.get("reason", "") != "":
 			box.add_child(UI.label(spec.reason, 12, UI.RED))
 	panel.reset_size()
@@ -2883,13 +2899,19 @@ func _toggle_pause() -> void:
 			Room.current.leave()
 		Transition.go(MENU_SCENE, Transition.DOORS, true)
 	var asks := "Leave the match and go back to the menu?"
-	if _room != null and _room.hosting:
+	if _room != null and _room.ranked:
+		asks = "Leave the ranked match? A bot takes your seat soon, and if you are not back when the match ends, you are placed last."
+	elif _room != null and _room.house_match != "" and not _watching():
+		asks = "Leave the ranked match? If you are not back in your seat when the match ends, you are placed last."
+	elif _room != null and _room.hosting:
 		asks = "Leave the match and go back to the menu? Another player takes the room over."
 	elif _watching():
 		asks = "Stop watching and go back to the menu?"
 	quit.pressed.connect(_confirm.bind(asks, "Quit to menu", leave))
 	if _watching():
 		TipLayer.attach(quit, "Leaves the room. You were only watching: the match goes on without you.")
+	elif _room != null and _room.ranked:
+		TipLayer.attach(quit, "Leaves the table. Your seat waits a minute for you, then a bot plays it: come back from the ranked screen to take it again.")
 	elif _room != null:
 		TipLayer.attach(quit, "Leaves the room, which passes to another player. Your seat waits for you, unless the new host gives it to a bot or kicks you out." if _room.hosting else "Leaves the room. Your seat waits for you, unless the host gives it to a bot or kicks you out.")
 	box.add_child(quit)
@@ -4242,10 +4264,6 @@ func _anim_morale_spent(d: Dictionary) -> void:
 		var def: ItemDef = play.params.item
 		await _play_fx.spaghettify(p, box.heart_spot(p.morale), UI.tex(def.texture_path), "+ %s" % def.display_name.to_upper())
 		return
-	if play is Play and play.source.id == BERSERK and _play_fx.berserking():
-		# The fury breaks loose with the heart, and the sword with it.
-		await _play_fx.berserk_spent(p, box.heart_spot(p.morale) if box != null else _anchor(p))
-		return
 	_play_sfx("spend")
 	_float(Loc.t("-%d MORALE") % d.amount, _anchor(p), UI.PURPLE.lightened(0.3), 22)
 	await _wait(0.5)
@@ -5122,6 +5140,15 @@ func _anim_status_broken(d: Dictionary) -> void:
 	if d.status == &"entropy":
 		# The chains do not crumble: they go all at once, and what is left
 		# of them hangs in the air to be made into what they pay.
+		if d.get("reason", &"") == &"shattered":
+			# A blow broke them: they go as they do when the player is out,
+			# plain iron and nothing to be paid in.
+			box.chains_snapped()
+			box.sync()
+			_play_sfx("fx_chains_break")
+			_shake_screen(5.0)
+			await _wait(0.6)
+			return
 		var links: Array[Vector2] = box.status_pieces(d.status)
 		var borrowed: bool = box.status_is_borrowed(d.status)
 		box.sync()

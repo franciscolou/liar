@@ -52,6 +52,26 @@ extends Node
 ## answer, but sits nowhere and answers nothing (`watchers`, `watching`). Back
 ## in the lobby they get a seat like anyone joining. A watcher does not take
 ## the room over: if the host leaves, so do they.
+##
+## A ranked match is played in a room of the house (server/ and
+## match_server.gd): there the host is the house's own process, `dedicated`,
+## which sits nowhere and plays no part but the host's. Its seats were dealt
+## before anyone joined, one to each member the queue put at the table, each
+## with the hash of its ticket as its `key`; a member's machine (`ranked`)
+## joins with the ticket among its keys (see join_ranked) and takes the seat
+## it opens. Once every seat is taken, or after a while, the house deals: the
+## match is the same lockstep match as anywhere else. A seat whose player
+## drops out of it waits for them `away_seconds`, and then a bot plays it
+## until they come back. The room never passes to anyone: it is the house's.
+##
+## A room of friends may be ranked too (`rated`, the host's switch in the
+## lobby): every seat a member of the house, played by the house's rules, no
+## bots. Dealing it asks the house for a match first (`_start_rated`, the
+## house's rooms.py), whose id goes out with the deal (`house_match`); from
+## there it is a room like any other, and each member's machine tells the
+## house it is at the table and, at the end, how it ended (house_report.gd).
+## Each seat says who it is at the house (`member`), as its machine told the
+## host (`_member_up`).
 
 signal changed
 ## A player left in the middle of a match; the host answers for that seat.
@@ -87,11 +107,22 @@ signal watcher(who: String, on: bool)
 ## Guest: the room has a match on, and its host was asked to let this machine
 ## watch it.
 signal watch_pending
+## Ranked: the house said how the match ended for everyone, with the new
+## ratings (see ranked_result).
+signal ranked_over(result: Dictionary)
+## Dedicated: the player of `seat` sat down at the table before the deal.
+signal arrived(seat: int)
+## Host of a ranked room: what the house said, or what is missing, while the
+## room was turned ranked or dealt ("" once it is all right).
+signal rated_note(text: String)
 signal _tail_came
 
 const Transition := preload("res://scripts/ui/transition.gd")
+const RankedApi := preload("res://scripts/net/ranked_api.gd")
+const HouseReport := preload("res://scripts/net/house_report.gd")
 const PATH := "res://scripts/net/room.gd"
 const SCREEN := "res://scenes/room.tscn"
+const RANKED_SCREEN := "res://scenes/ranked.tscn"
 const LOBBY := "res://scenes/setup.tscn"
 const GAME := "res://scenes/main.tscn"
 const PORT := 24565
@@ -105,8 +136,10 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 36
+const PROTOCOL := 43
 const JOIN_TIMEOUT := 8.0
+## Joining a table of the house: its process may still be starting.
+const RANKED_JOIN_TIMEOUT := 20.0
 ## Joining with no port given: how long each port of the range is tried, past
 ## the first, before the next one (the room may have passed to someone who
 ## opened it on another, see _take_over).
@@ -148,7 +181,8 @@ var handing_over := false
 ## False once the others tried and could not get through to this machine: if
 ## the host leaves, the room cannot pass to it (most likely a firewall).
 var reachable := true
-## [{name: String, bot: bool, peer: int}]; peer is 0 for a bot.
+## [{name: String, bot: bool, peer: int, member: String}]; peer is 0 for a
+## bot, member is the name at the house of whoever sits there ("" for none).
 var seats: Array = []
 ## The rules as the host has them set. They stay between matches.
 var config: GameConfig
@@ -176,6 +210,30 @@ var watching := false
 ## Whether the room changes scenes on its own when the network says so. The
 ## tests, which have no scenes, turn it off.
 var scenes := true
+## This room is the house's (see the top): `dedicated` on its own process,
+## `ranked` on a member's machine.
+var dedicated := false
+var ranked := false
+## Dedicated: how long the seat of someone who dropped out waits before a bot
+## plays it.
+var away_seconds := 60.0
+## Ranked: what the house said when the match ended: {seats: [{seat, place,
+## before, after, delta}]} (see ranked_over). Empty until then.
+var ranked_result: Dictionary = {}
+## Ranked: the key to this member's seat, given by the queue. It is the only
+## key shown to the house: the others this machine keeps are for rooms of
+## friends (and two games on one computer would show each other's).
+var ticket := ""
+## The room is ranked (see the top): the host's switch in the lobby.
+var rated := false
+## The house's id of the ranked match being played in this room, or "".
+var house_match := ""
+## Who this machine is at the house: the member signed in on it, unless a
+## test gives another one (several members in one process).
+var house_name := ""
+var house_token := ""
+## Host: asking the house for a ranked match, between the press and the deal.
+var _asking_house := false
 
 var _match_id := 0
 var _joined := false
@@ -264,6 +322,8 @@ class Ticket extends RefCounted:
 	var wire: Variant
 	## Whether this machine has put it to whoever answers it here.
 	var asked := false
+	## When it was opened (Time.get_ticks_msec), for the house's patience.
+	var opened := 0
 
 
 # --- opening and leaving -----------------------------------------------------------
@@ -293,7 +353,7 @@ func hosted(player_name: String, at: int, bots := 3) -> void:
 	_player_name = clean_name(player_name)
 	_nonce = randi_range(1, 0x7fffffff)
 	config = GameConfig.new()
-	seats = [{"name": _player_name, "bot": false, "peer": 1, "mark": _mark()}]
+	seats = [{"name": _player_name, "bot": false, "peer": 1, "mark": _mark(), "member": _member()}]
 	for i in bots:
 		add_bot()
 
@@ -322,9 +382,56 @@ static func join(address: String, player_name: String) -> String:
 	return ""
 
 
+## Dedicated: opens the room of a ranked table on `at`, its seats dealt to
+## `players` ([{name, ticket_hash}]) and nobody in them yet. Returns "" or
+## what went wrong.
+static func serve(at: int, players: Array) -> String:
+	var peer := ENetMultiplayerPeer.new()
+	if peer.create_server(at, MAX_SEATS * 2) != OK:
+		return "port %d is taken" % at
+	_enter(peer).served(at, players)
+	return ""
+
+
+## This machine has just opened the house's room on `at` (see serve).
+func served(at: int, players: Array) -> void:
+	hosting = true
+	dedicated = true
+	port = at
+	_me = 1
+	_nonce = randi_range(1, 0x7fffffff)
+	config = GameConfig.new()
+	seats = []
+	for player: Dictionary in players:
+		seats.append({"name": clean_name(str(player.name)), "bot": false, "peer": 0, "mark": "", "key": str(player.ticket_hash)})
+
+
+## Ranked: joins the table the house dealt this member, at `address`:`at`,
+## with the ticket of their seat. Like `join`, returns "" or what went wrong
+## at once; what goes wrong later ends in `notice`, on the ranked screen.
+static func join_ranked(address: String, at: int, ticket: String, player_name: String) -> String:
+	var peer := ENetMultiplayerPeer.new()
+	if peer.create_client(address, at) != OK:
+		return Loc.t("Could not reach the house.")
+	var room := _enter(peer)
+	room.ranked = true
+	room.ticket = ticket
+	room._player_name = clean_name(player_name)
+	room._address = address
+	room._knocking = at
+	room._scanning = false
+	room._wait_at_door()
+	return ""
+
+
+## Dedicated: whether everyone dealt a seat has sat down.
+func all_seated() -> bool:
+	return seats.all(func(seat: Dictionary) -> bool: return seat.peer > 1)
+
+
 func _wait_at_door() -> void:
 	_try += 1
-	var patience := SCAN_TIMEOUT if _scanning and _knocking != PORT else JOIN_TIMEOUT
+	var patience := SCAN_TIMEOUT if _scanning and _knocking != PORT else (RANKED_JOIN_TIMEOUT if ranked else JOIN_TIMEOUT)
 	get_tree().create_timer(patience).timeout.connect(_on_join_timeout.bind(_try))
 
 
@@ -428,7 +535,7 @@ func leave() -> void:
 ## one, for the room screen: the room may have moved since it was typed (it
 ## passed to someone else, or is about to, as this host walks out).
 func _keep_address() -> void:
-	if current != self:
+	if current != self or ranked:
 		return
 	var back := _where
 	if hosting:
@@ -449,8 +556,9 @@ func _fail(reason: String) -> void:
 	if current != self:
 		return
 	notice = reason
+	var back := RANKED_SCREEN if ranked else SCREEN
 	leave()
-	_show(SCREEN, Transition.DESK)
+	_show(back, Transition.DESK)
 
 
 func _on_join_timeout(attempt: int) -> void:
@@ -485,7 +593,7 @@ func _on_connected() -> void:
 	if handing_over:
 		_resume.rpc_id(1, _nonce, _token, _player_name, _build(), known_keys(), _history.size(), _sent.duplicate())
 	else:
-		_hello.rpc_id(1, _player_name, _build(), known_keys(), _mark())
+		_hello.rpc_id(1, _player_name, _build(), [ticket] if ranked else known_keys(), _mark())
 
 
 func _on_connection_failed() -> void:
@@ -519,6 +627,11 @@ func _on_peer_disconnected(peer: int) -> void:
 	var seat := _seat_of(peer)
 	if seat < 0:
 		return
+	if dedicated and not in_match:
+		# The seat was dealt to them: it stays theirs until the deal.
+		seats[seat].peer = 0
+		_push()
+		return
 	seats.remove_at(seat)
 	var played := match_peers.find(peer) if in_match else -1
 	if played >= 0:
@@ -526,6 +639,8 @@ func _on_peer_disconnected(peer: int) -> void:
 		_seat_left(_match_id, played)
 		# The seat waits for them, doing nothing, until the host says otherwise.
 		_set_away(played, &"idle")
+		if dedicated:
+			_bench_later(played)
 	_push()
 	_rank()
 
@@ -569,6 +684,8 @@ func _seat_of(peer: int) -> int:
 func rename(seat: int, text: String) -> void:
 	if seat < 0 or seat >= seats.size() or seats[seat].bot or seats[seat].peer != my_peer():
 		return
+	if rated and seats[seat].get("member", "") != "":
+		return
 	if name_taken(seat, text):
 		return
 	if hosting:
@@ -580,7 +697,7 @@ func rename(seat: int, text: String) -> void:
 
 
 func add_bot() -> void:
-	if not hosting or seats.size() >= MAX_SEATS:
+	if not hosting or seats.size() >= MAX_SEATS or rated:
 		return
 	var taken := seats.map(func(seat: Dictionary) -> String: return seat.name)
 	var bot_name: String = BOT_NAMES[0]
@@ -643,6 +760,19 @@ func _greet(peer: int, player_name: String, build: int, keys: Array, mark: Strin
 	if build != _build():
 		_refused.rpc_id(peer, "That room is running another version of the game.")
 		return
+	if dedicated and not in_match:
+		var dealt := _dealt_seat(keys)
+		if dealt < 0:
+			_refused.rpc_id(peer, "That table was dealt to other players.")
+			return
+		seats[dealt].peer = peer
+		seats[dealt].mark = mark
+		_push()
+		arrived.emit(dealt)
+		return
+	if dedicated and _seat_with_key(keys) < 0:
+		_refused.rpc_id(peer, "Ranked matches cannot be watched.")
+		return
 	if in_match:
 		var back := _seat_with_key(keys)
 		if back >= 0 and away.get(back) == &"kick":
@@ -669,8 +799,30 @@ func _sit(peer: int, seat_name: String, mark: String) -> bool:
 	if seats.size() >= MAX_SEATS:
 		seats.erase(bots.back())
 	# Somebody here has the name already: they keep it, the newcomer gets a number.
-	seats.append({"name": _free_name(seat_name), "bot": false, "peer": peer, "mark": mark})
+	seats.append({"name": _free_name(seat_name), "bot": false, "peer": peer, "mark": mark, "member": ""})
 	return true
+
+
+## Dedicated, before the deal: the seat whose ticket is among `keys`, or -1.
+func _dealt_seat(keys: Array) -> int:
+	var hashes := keys.filter(func(key: Variant) -> bool: return key is String).map(_hash)
+	var taken := -1
+	for i in seats.size():
+		if seats[i].get("key", "") != "" and hashes.has(seats[i].key):
+			if seats[i].peer == 0:
+				return i
+			# Theirs, from a connection that is on its way out.
+			taken = i
+	return taken
+
+
+## Dedicated: a seat left empty in the match is played by a bot once its
+## player has been away for `away_seconds` (they may still come back to it).
+func _bench_later(seat: int) -> void:
+	var id := _match_id
+	get_tree().create_timer(away_seconds).timeout.connect(func() -> void:
+		if id == _match_id and absent(seat) and away.get(seat) == &"idle":
+			_set_away(seat, &"bot"))
 
 
 ## Host: the empty seat of the match whose key is among `keys`, or -1.
@@ -693,7 +845,7 @@ func _mark() -> String:
 
 ## What everyone in the room is sent of it: the seats and the rules.
 func _state() -> Dictionary:
-	return {"seats": seats, "config": config.to_wire(), "nonce": _nonce}
+	return {"seats": seats, "config": config.to_wire(), "nonce": _nonce, "rated": rated}
 
 
 ## Host: `peer` comes back to the seat they left. They get the deal and every
@@ -793,6 +945,11 @@ func _watcher_down(who: String, on: bool) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _rename(text: String) -> void:
+	var from := _seat_of(multiplayer.get_remote_sender_id())
+	if dedicated or (rated and from >= 0 and seats[from].get("member", "") != ""):
+		# The names at a ranked table are the members'.
+		_push()
+		return
 	var seat := _seat_of(multiplayer.get_remote_sender_id())
 	if hosting and seat >= 0 and name_taken(seat, text):
 		# Somebody got there first: the room tells them their name as it is.
@@ -808,6 +965,7 @@ func _lobby(state: Dictionary) -> void:
 	seats = state.seats
 	config = GameConfig.from_wire(state.config)
 	_nonce = state.nonce
+	rated = state.get("rated", false)
 	if handing_over:
 		# Back in the room too late to be waited for: let in again instead.
 		handing_over = false
@@ -815,7 +973,11 @@ func _lobby(state: Dictionary) -> void:
 	if not _joined:
 		_joined = true
 		_waiting = false
-		_show(LOBBY, Transition.DESK)
+		# At the house there is no lobby: the ranked screen waits for the deal.
+		if not ranked:
+			_show(LOBBY, Transition.DESK)
+			# Who this machine is at the house, for a ranked room.
+			_member_up.rpc_id(1, _member())
 	changed.emit()
 	_announce()
 
@@ -826,6 +988,17 @@ func _lobby(state: Dictionary) -> void:
 func start() -> void:
 	if not hosting or seats.size() < 2:
 		return
+	if dedicated:
+		_deal_ranked()
+		return
+	if rated:
+		_start_rated()
+		return
+	_deal()
+
+
+## Host: deals the match; `house_match` is the house's id of it, if ranked.
+func _deal(house_id := "") -> void:
 	var dealt := GameConfig.from_wire(config.to_wire())
 	dealt.seats = []
 	for i in seats.size():
@@ -833,6 +1006,9 @@ func start() -> void:
 		dealt.seats.append({"name": seat.name if seat.name != "" else "Player %d" % (i + 1), "bot": seat.bot})
 	# The seed is what makes every machine deal the same match.
 	dealt.rng_seed = randi_range(1, 0x7fffffff)
+	var wire := dealt.to_wire()
+	if house_id != "":
+		wire["house_match"] = house_id
 	var peers := seats.map(func(seat: Dictionary) -> int: return seat.peer)
 	# Each person gets a key to their seat, the host too (the room may pass to
 	# someone else, and they may want to come back), and nobody else sees it:
@@ -844,11 +1020,157 @@ func start() -> void:
 	var hashes := keys.map(func(key: String) -> String: return _hash(key) if key != "" else "")
 	for i in peers.size():
 		if peers[i] > 1:
-			_start.rpc_id(peers[i], _match_id + 1, dealt.to_wire(), peers, keys[i], hashes)
+			_start.rpc_id(peers[i], _match_id + 1, wire, peers, keys[i], hashes)
 	# Whoever watched the last match watches this one.
 	for peer: int in watchers:
-		_start.rpc_id(peer, _match_id + 1, dealt.to_wire(), peers, "", hashes)
-	_start(_match_id + 1, dealt.to_wire(), peers, keys[peers.find(1)], hashes)
+		_start.rpc_id(peer, _match_id + 1, wire, peers, "", hashes)
+	_start(_match_id + 1, wire, peers, keys[peers.find(1)], hashes)
+
+
+# --- ranked rooms ------------------------------------------------------------------
+
+## Who this machine is at the house: its member's name, or "" if it is not
+## signed in; and the token it signs in with.
+func _member() -> String:
+	if house_name != "":
+		return house_name
+	return Settings.ranked_name if RankedApi.signed_in() else ""
+
+
+func member_token() -> String:
+	return house_token if house_token != "" else Settings.ranked_token
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _member_up(member: String) -> void:
+	var seat := _seat_of(multiplayer.get_remote_sender_id())
+	if not hosting or seat < 0 or seats[seat].bot:
+		return
+	seats[seat].member = clean_name(member) if member.length() <= 64 else ""
+	if rated:
+		_name_members()
+	_push()
+
+
+## Ranked: every member sits by their name at the house. Whoever else had it
+## gets a number after it.
+func _name_members() -> void:
+	for i in seats.size():
+		var member: String = seats[i].get("member", "")
+		if member == "" or seats[i].name == member:
+			continue
+		seats[i].name = member
+		for j in seats.size():
+			if j != i and seats[j].name.to_lower() == member.to_lower():
+				seats[j].name = _free_name(seats[j].name)
+
+
+## Why the ranked room cannot be dealt as it is, or "".
+func rated_problem() -> String:
+	if not RankedApi.configured():
+		return Loc.t("The house has not opened its doors yet.")
+	if seats.any(func(seat: Dictionary) -> bool: return seat.bot):
+		return Loc.t("A ranked table has no bots.")
+	for seat: Dictionary in seats:
+		if seat.get("member", "") == "":
+			return Loc.t("%s is not signed in to the house.") % seat.name
+	if seats.size() < 2:
+		return Loc.t("A ranked table needs at least 2 members.")
+	return ""
+
+
+## Host: the room turns ranked (`on`) or back. Ranked, it is played by the
+## house's rules, which it asks the house for, and the bots leave.
+func set_rated(on: bool) -> void:
+	if not hosting or in_match or _asking_house or on == rated:
+		return
+	if not on:
+		rated = false
+		rated_note.emit("")
+		_push()
+		return
+	if member_token() == "":
+		rated_note.emit(Loc.t("Sign in at the house first: RANKED, on the room screen."))
+		return
+	_asking_house = true
+	rated_note.emit(Loc.t("Knocking on the house's door..."))
+	var answer: Dictionary = await RankedApi.get_json("/v1/status", false)
+	_asking_house = false
+	if not is_instance_valid(self) or current != self or in_match:
+		return
+	if not answer.ok or not answer.data is Dictionary or not answer.data.get("rules") is Dictionary:
+		rated_note.emit(Loc.t(answer.get("error", "")) if answer.get("error", "") != "" else Loc.t("The house does not answer right now."))
+		return
+	config = GameConfig.from_wire(answer.data.rules)
+	rated = true
+	seats = seats.filter(func(seat: Dictionary) -> bool: return not seat.bot)
+	seats[_seat_of(1)].member = _member()
+	_name_members()
+	rated_note.emit("")
+	_push()
+
+
+## Host: asks the house for the ranked match of this table, then deals it.
+func _start_rated() -> void:
+	if _asking_house:
+		return
+	var problem := rated_problem()
+	if problem != "":
+		rated_note.emit(problem)
+		return
+	_asking_house = true
+	rated_note.emit(Loc.t("The house is opening its book for this table..."))
+	var answer: Dictionary = await RankedApi.post_json("/v1/rooms", {
+		"build": _build(), "seats": seats.map(func(seat: Dictionary) -> String: return seat.member),
+		"config": config.to_wire(),
+	}, true, member_token())
+	_asking_house = false
+	if not is_instance_valid(self) or current != self or in_match or not rated:
+		return
+	if not answer.ok or not answer.data is Dictionary:
+		rated_note.emit(Loc.t(answer.error))
+		return
+	rated_note.emit("")
+	_deal(str(answer.data.get("match", "")))
+
+
+## The table has its engine: in a ranked room, this member's machine tells
+## the house about the match (house_report.gd).
+func watch_match(engine: GameEngine) -> void:
+	if house_match != "" and my_match_seat() >= 0:
+		HouseReport.watch(self, engine)
+
+
+## Dedicated: deals the match to the seats as they were dealt by the queue.
+## Nobody holds a key the house does not have: the tickets were given out by
+## the queue, and only their hashes are here. A seat nobody came to is played
+## by a bot from the start (they may still come and take it).
+func _deal_ranked() -> void:
+	var dealt := GameConfig.from_wire(config.to_wire())
+	dealt.seats = seats.map(func(seat: Dictionary) -> Dictionary: return {"name": seat.name, "bot": false})
+	dealt.rng_seed = randi_range(1, 0x7fffffff)
+	var peers := seats.map(func(seat: Dictionary) -> int: return seat.peer)
+	var hashes := seats.map(func(seat: Dictionary) -> String: return seat.key)
+	for peer: int in peers:
+		if peer > 1:
+			_start.rpc_id(peer, _match_id + 1, dealt.to_wire(), peers, "", hashes)
+	_start(_match_id + 1, dealt.to_wire(), peers, "", hashes)
+	for i in peers.size():
+		if peers[i] == 0:
+			_set_away(i, &"bot")
+
+
+## Dedicated: tells everyone at the table what the house made of the match.
+func ranked_finish(result: Dictionary) -> void:
+	if dedicated:
+		_send(_ranked_down, [_match_id, result])
+
+
+@rpc("authority", "call_remote", "reliable")
+func _ranked_down(id: int, result: Dictionary) -> void:
+	if id == _match_id:
+		ranked_result = result
+		ranked_over.emit(result)
 
 
 ## Host: everyone leaves the match (played out or not) and goes back to the
@@ -881,6 +1203,7 @@ func _start(id: int, dealt: Dictionary, peers: Array, key: String, hashes: Array
 
 func _start_dealt(id: int, dealt: Dictionary, peers: Array) -> void:
 	_begin(id, peers, dealt)
+	house_match = str(dealt.get("house_match", ""))
 	GameConfig.current = GameConfig.from_wire(dealt)
 
 
@@ -905,12 +1228,16 @@ func _begin(id: int, peers: Array, dealt: Dictionary = {}) -> void:
 	_reported.clear()
 	_next_ticket = 0
 	_split = false
+	house_match = ""
+	ranked_result = {}
 
 
 @rpc("authority", "call_remote", "reliable")
 func _to_lobby() -> void:
 	in_match = false
 	watching = false
+	if not hosting:
+		_member_up.rpc_id(1, _member())
 	_show(LOBBY, Transition.GATHER)
 
 
@@ -990,6 +1317,7 @@ func open(decision: Decision, controller: Controller) -> Ticket:
 	ticket.number = _next_ticket
 	ticket.decision = decision
 	ticket.controller = controller
+	ticket.opened = Time.get_ticks_msec()
 	_next_ticket += 1
 	_tickets[ticket.number] = ticket
 	# The answer may have got here before the question.
@@ -1233,7 +1561,7 @@ func host_name() -> String:
 ## Guest: listens for the test packets, on a port of the room's range (the
 ## room may be opened on it one day), and tells the host where.
 func _announce() -> void:
-	if hosting or watching or not _unannounced:
+	if hosting or watching or ranked or not _unannounced:
 		return
 	if _probe == null:
 		_probe = PacketPeerUDP.new()
@@ -1394,7 +1722,8 @@ func _reach_note(ok: bool) -> void:
 ## on other computers got through to, then the ones this machine got through
 ## to, in the order they sit. Everyone gets the list.
 func _rank() -> void:
-	if not hosting or _taking_over:
+	# The house's room never passes to anyone: there is nobody to rank.
+	if not hosting or _taking_over or dedicated:
 		return
 	var entries := []
 	var machines := {}
@@ -1430,6 +1759,10 @@ func _succession_down(entries: Array, machines: Dictionary) -> void:
 ## can be reached; this machine takes it if that is itself.
 func _on_host_gone() -> void:
 	if _leaving or hosting:
+		return
+	if ranked:
+		# The house's room never passes to anyone.
+		_fail("The house closed the table.")
 		return
 	if watching or _waiting:
 		# Only those with a seat take the room over.

@@ -42,6 +42,10 @@ class Antidote extends Ability:
 		description = "Get rid of it."
 		trigger_text = "When another player puts an effect on you"
 
+	# A status put on them.
+	func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
+		return true
+
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		if event.type != &"status_added" or event.data.player != player:
 			return false

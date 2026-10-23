@@ -19,6 +19,7 @@ run/main_scene="uid://cqyrcvtip5mmd"
 config/quit_on_go_back=false
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://assets/icon.png"
+run/main_scene.dedicated_server="res://scenes/server.tscn"
 
 [autoload]
 

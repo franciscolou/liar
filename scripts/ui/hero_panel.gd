@@ -343,6 +343,11 @@ func status_threatened(id: StringName, on: bool) -> void:
 	_status_fx.threaten(id, on)
 
 
+## A blow broke the chains of an Entropy (see StatusFx.snap_chains).
+func chains_snapped() -> void:
+	_status_fx.snap_chains()
+
+
 ## The player is out: whatever their statuses looked like comes apart (see
 ## StatusFx.die), and the chips go with them. Returns the looks that were
 ## showing.

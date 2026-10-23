@@ -60,6 +60,10 @@ class Untraceable extends Ability:
 		description = "Your cards and items can't be seen or manipulated."
 		trigger_text = "When another player is about to see or mess with your cards or your items"
 
+	# Their own hand and items.
+	func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
+		return true
+
 	func reacts_to(event: GameEvent, player: PlayerState, _engine: GameEngine) -> bool:
 		# Their hand (GameEngine.reach_hand) or what they hold (reach_items).
 		return (event.type == &"before_hand_reach" or event.type == &"before_item_reach") and event.data.owner == player

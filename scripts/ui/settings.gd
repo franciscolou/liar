@@ -24,6 +24,11 @@ static var fullscreen := false
 ## Who the player is in a room, and the last room they joined.
 static var player_name := "Player"
 static var last_address := ""
+## The house ranked matches are played on (ranked_api.gd): where it is, if
+## not where the game says, and the member signed in there.
+static var ranked_url := ""
+static var ranked_token := ""
+static var ranked_name := ""
 static var _loaded := false
 
 
@@ -42,6 +47,9 @@ static func ensure_loaded() -> void:
 		fullscreen = bool(file.get_value("video", "fullscreen", fullscreen))
 		player_name = str(file.get_value("room", "name", player_name))
 		last_address = str(file.get_value("room", "address", last_address))
+		ranked_url = str(file.get_value("ranked", "url", ranked_url))
+		ranked_token = str(file.get_value("ranked", "token", ranked_token))
+		ranked_name = str(file.get_value("ranked", "name", ranked_name))
 	if not Loc.LANGUAGES.has(language):
 		language = Loc.DEFAULT
 	_apply_volume(MUSIC_BUS, music, music_muted, MUSIC_GAIN)
@@ -96,6 +104,10 @@ static func save() -> void:
 	file.set_value("video", "fullscreen", fullscreen)
 	file.set_value("room", "name", player_name)
 	file.set_value("room", "address", last_address)
+	if ranked_url != "":
+		file.set_value("ranked", "url", ranked_url)
+	file.set_value("ranked", "token", ranked_token)
+	file.set_value("ranked", "name", ranked_name)
 	file.save(PATH)
 
 

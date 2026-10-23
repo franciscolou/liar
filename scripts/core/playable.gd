@@ -20,6 +20,10 @@ var description := "":
 	get:
 		return Loc.fill(description, description_args)
 var description_args: Array = []
+## A side remark under the description, shown fainter than it.
+var footnote := "":
+	get:
+		return Loc.t(footnote)
 var targeting := Targeting.NONE
 ## Free-form labels. Statuses can block tags (a hexed player can't use
 ## anything tagged &"damage" or &"heal").
@@ -63,6 +67,14 @@ func resolve(_play: Play) -> void:
 
 ## True when `player` may play this in response to `event`.
 func reacts_to(_event: GameEvent, _player: PlayerState, _engine: GameEngine) -> bool:
+	return false
+
+
+## True when playing this in answer to `event` (null if not known yet) is
+## `player` looking after themselves: their own Morale, coins, cards, items,
+## statuses or claim. Whoever is to keep still (the chains of an Entropy) may
+## still do that; anything else reaches out and costs them (entity.gd).
+func for_oneself(_event: GameEvent, _player: PlayerState) -> bool:
 	return false
 
 

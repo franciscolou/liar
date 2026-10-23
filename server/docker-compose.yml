@@ -1,0 +1,34 @@
+# The house on one VPS: the API (with the match servers inside it) behind
+# Caddy, which gets and renews the HTTPS certificate by itself.
+#   cp .env.example .env   # and fill it in
+#   docker compose up -d --build
+services:
+  house:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    env_file: .env
+    volumes:
+      - house-data:/data
+    ports:
+      # The match servers: UDP, one port per table. Keep in step with
+      # LIAR_PORT_FIRST / LIAR_PORT_COUNT in .env.
+      - "24600-24631:24600-24631/udp"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - house
+    restart: unless-stopped
+
+volumes:
+  house-data:
+  caddy-data:

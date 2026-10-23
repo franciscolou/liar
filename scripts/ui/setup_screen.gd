@@ -20,6 +20,8 @@ const Desk := preload("res://scripts/ui/noir_desk.gd")
 const TouchMode := preload("res://scripts/ui/touch_mode.gd")
 const Sounds := preload("res://scripts/ui/sounds.gd")
 const LogView := preload("res://scripts/ui/log_view.gd")
+const House := preload("res://scripts/ui/house_props.gd")
+const RankedApi := preload("res://scripts/net/ranked_api.gd")
 const ROOM_SCENE := "res://scenes/room.tscn"
 ## Width of the character grid, and the most cards it shows in a single row.
 const GRID_WIDTH := 664.0
@@ -168,7 +170,15 @@ static var _rules_open := false
 static var _page := 0
 
 var _room: Node
+## Whether this machine hosts the room, and whether it may change the table:
+## the host, unless the room is ranked (the house's rules, no bots).
+var _hosting := false
 var _host := false
+## What the room was (ranked or not) when this screen was built.
+var _rated := false
+var _rated_card: Control
+## What the house said last, for the host: shown where the problems are.
+var _note := ""
 var _config: GameConfig
 var _seat_rows: Array = []  # {row, name, tag, remove}
 var _seated: Array = []  # who was in each seat when the rows were last filled
@@ -265,7 +275,9 @@ func _ready() -> void:
 		# Nobody gets here without a room; the screen before this one opens it.
 		get_tree().change_scene_to_file.call_deferred(ROOM_SCENE)
 		return
-	_host = _room.hosting
+	_hosting = _room.hosting
+	_rated = _room.rated
+	_host = _hosting and not _rated
 	_config = _room.config
 	_read_config()
 
@@ -284,8 +296,9 @@ func _ready() -> void:
 	# The host left and the room passed to this machine: the screen is the
 	# host's now.
 	_room.host_changed.connect(func() -> void:
-		if _room.hosting != _host:
+		if _room.hosting != _hosting:
 			get_tree().reload_current_scene())
+	_room.rated_note.connect(_on_rated_note)
 	_room.reach_checked.connect(_on_reach_checked)
 	if not _room.reachable:
 		_on_reach_checked(false)
@@ -302,7 +315,8 @@ func _build_desktop() -> void:
 	add_child(plaque)
 	plaque.add_child(_plaque_title())
 
-	_build_address(self, Rect2(204, 590, 330, 46))
+	_build_address(self, Rect2(204, 590, 290, 46))
+	_build_rated_card(self, Rect2(506, 588, 168, 50))
 	_build_players(self, CLIPBOARD)
 	_build_rules()
 	_build_case()
@@ -313,8 +327,8 @@ func _build_desktop() -> void:
 	var settings: Button = made.settings
 	settings.position = Vector2(264, 8)
 	_start.position = Vector2(1132 - _start.size.x, 636 - _start.size.y)
-	_problem.size = Vector2(314, _start.size.y)
-	_problem.position = _start.position - Vector2(_problem.size.x + 12.0, 0)
+	_problem.size = Vector2(180, _start.size.y + 4.0)
+	_problem.position = _start.position - Vector2(_problem.size.x + 12.0, 2)
 	if made.waiting != null:
 		var waiting: Label = made.waiting
 		waiting.size = Vector2(400, _start.size.y)
@@ -322,7 +336,7 @@ func _build_desktop() -> void:
 
 
 func _plaque_title() -> Label:
-	var title := Desk.written("SET THE TABLE", 24, UI.INK, true)
+	var title := Desk.written("RANKED TABLE" if _rated else "SET THE TABLE", 24, UI.INK, true)
 	title.set_anchors_preset(Control.PRESET_FULL_RECT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -336,7 +350,7 @@ func _build_buttons(parent: Control) -> Dictionary:
 	back.size = UI.grown(Vector2(170, 46))
 	Desk.brass(back)
 	back.pressed.connect(_on_leave)
-	if _host:
+	if _hosting:
 		TipLayer.attach(back, "Leaves the room, which passes to another player.")
 	parent.add_child(back)
 	var settings := UI.button("SETTINGS", UI.BORDER, 15)
@@ -348,7 +362,7 @@ func _build_buttons(parent: Control) -> Dictionary:
 	_start.size = UI.grown(Vector2(260, 46))
 	Desk.brass(_start, true)
 	_start.pressed.connect(_on_start)
-	_start.visible = _host
+	_start.visible = _hosting
 	parent.add_child(_start)
 	_problem = UI.label("", 13 if UI.touch else 14, UI.RED.lightened(0.25))
 	_problem.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -356,7 +370,7 @@ func _build_buttons(parent: Control) -> Dictionary:
 	_problem.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	parent.add_child(_problem)
 	var waiting: Label = null
-	if not _host:
+	if not _hosting:
 		waiting = UI.label("Waiting for the host to deal...", 18, UI.CREAM, true)
 		waiting.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		waiting.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -411,7 +425,8 @@ func _build_touch() -> void:
 		_page_looks.append({"sockets": [] as Array[Rect2], "ridges": [TOUCH_TABS.end.y] as Array[float]})
 	_build_touch_characters(_pages[0])
 	_build_touch_items(_pages[1])
-	_build_address(_pages[2], Rect2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 50.0, TOUCH_LEFT.size.x, 50))
+	_build_address(_pages[2], Rect2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 50.0, TOUCH_LEFT.size.x - 212.0, 50))
+	_build_rated_card(_pages[2], Rect2(TOUCH_LEFT.end.x - 200.0, TOUCH_LEFT.end.y - 54.0, 200, 58))
 	_build_players(_pages[2], Rect2(TOUCH_LEFT.position, Vector2(TOUCH_LEFT.size.x, TOUCH_LEFT.size.y - 60.0)))
 	_build_touch_rules(_pages[2], TOUCH_RIGHT)
 	_show_page(_page)
@@ -744,7 +759,7 @@ func _build_address(parent: Control, rect: Rect2) -> void:
 	line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	slip.add_child(line)
 	_address_line = line
-	if not _host:
+	if not _hosting:
 		return
 	var addresses: Array = Room.addresses()
 	Desk.ink(line, Desk.INK)
@@ -761,10 +776,85 @@ func _build_address(parent: Control, rect: Rect2) -> void:
 		return tip + "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % _room.port)
 
 
+## The house's little card, by the address: the host's switch that makes the
+## room ranked (Room.set_rated), and for the others what it is. The whole
+## card is the switch.
+func _build_rated_card(parent: Control, rect: Rect2) -> void:
+	var card: Control = House.of(House.Look.BADGE, rect)
+	card.rotation = 0.015
+	card.lit = _rated
+	parent.add_child(card)
+	_rated_card = card
+	var title := UI.label("RANKED", 18, House.FOIL_LIGHT if _rated else House.FOIL, true)
+	title.position = Vector2(16, 0)
+	title.size = Vector2(rect.size.x - 24.0 - _rated_switch_size().x, rect.size.y)
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	card.add_child(title)
+	var lever := Button.new()
+	lever.flat = true
+	lever.toggle_mode = true
+	lever.focus_mode = Control.FOCUS_NONE
+	lever.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for state: String in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+		lever.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	lever.set_pressed_no_signal(_rated)
+	lever.disabled = not _hosting
+	lever.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _hosting else Control.CURSOR_ARROW
+	lever.draw.connect(_draw_rated_switch.bind(lever))
+	lever.mouse_entered.connect(lever.queue_redraw)
+	lever.mouse_exited.connect(lever.queue_redraw)
+	lever.toggled.connect(func(on: bool) -> void:
+		# The room says when it is ranked: the screen is built again then.
+		lever.set_pressed_no_signal(_rated)
+		lever.queue_redraw()
+		_room.set_rated(on))
+	card.add_child(lever)
+	var tip := "A ranked table: every seat a member of the house, by the house's rules, with no bots. The match goes in the house's ledger, as at its own tables."
+	if not _hosting:
+		tip += "\n" + Loc.t("Only the host makes the table ranked.")
+	elif not RankedApi.signed_in():
+		tip += "\n" + Loc.t("Sign in at the house first: RANKED, on the room screen.")
+	TipLayer.attach(lever, tip)
+
+
+func _rated_switch_size() -> Vector2:
+	return SWITCH * (1.3 if UI.touch else 1.0)
+
+
+## The switch of the card: a groove of black stock rimmed in foil and a gold
+## knob, the book's switch in the house's colours.
+func _draw_rated_switch(b: Button) -> void:
+	var grow := _rated_switch_size().x / SWITCH.x
+	var at := Vector2(b.size.x - _rated_switch_size().x - 12.0, roundf((b.size.y - _rated_switch_size().y) / 4.0) * 2.0)
+	b.draw_set_transform(at, 0.0, Vector2.ONE * grow)
+	var rim := House.FOIL_LIGHT if _rated or (b.is_hovered() and _hosting) else House.FOIL_DARK
+	var groove := House.WAX_DARK if _rated else House.STOCK_LIGHT
+	for layer in 2:
+		var inset := 2.0 * layer
+		var ink := rim if layer == 0 else groove
+		b.draw_rect(Rect2(inset + 4.0, inset, SWITCH.x - inset * 2.0 - 8.0, SWITCH.y - inset * 2.0), ink)
+		b.draw_rect(Rect2(inset + 2.0, inset + 2.0, SWITCH.x - inset * 2.0 - 4.0, SWITCH.y - inset * 2.0 - 4.0), ink)
+		b.draw_rect(Rect2(inset, inset + 4.0, SWITCH.x - inset * 2.0, SWITCH.y - inset * 2.0 - 8.0), ink)
+	var metal := House.FOIL if _rated else House.FOIL_DARK
+	var knob := Vector2(SWITCH.x - 18.0 if _rated else 4.0, 4.0)
+	for y in KNOB.size():
+		for x in KNOB[y].length():
+			var bit := KNOB[y][x]
+			if bit != ".":
+				var ink := metal.lightened(0.45) if bit == "o" else metal.darkened(0.3) if bit == "x" else metal
+				b.draw_rect(Rect2(knob + Vector2(x, y) * 2.0, Vector2(2, 2)), ink)
+	b.draw_set_transform(Vector2.ZERO)
+
+
+func _on_rated_note(text: String) -> void:
+	_note = text
+	_redraw()
+
+
 ## Whether the room could pass to this machine if the host left (see
 ## Room.reachable): a guest's slip says so when it could not.
 func _on_reach_checked(ok: bool) -> void:
-	if _host or _address_line == null:
+	if _hosting or _address_line == null:
 		return
 	if ok:
 		_address_line.text = "Only the host changes the table. You may change your name."
@@ -782,7 +872,7 @@ func _on_reach_checked(ok: bool) -> void:
 
 ## The host's line is formatted here, so it does not translate itself.
 func _write_address() -> void:
-	if not _host:
+	if not _hosting:
 		return
 	var addresses: Array = Room.addresses()
 	if addresses.is_empty():
@@ -1925,6 +2015,10 @@ func _refresh() -> void:
 
 
 func _on_room_changed() -> void:
+	# Turned ranked, or back: the whole screen is another one.
+	if _room.rated != _rated:
+		get_tree().reload_current_scene()
+		return
 	if not _host:
 		_config = _room.config
 		_read_config()
@@ -1998,7 +2092,12 @@ func _redraw_seats() -> void:
 		edit.mouse_filter = Control.MOUSE_FILTER_STOP if mine else Control.MOUSE_FILTER_IGNORE
 		row.tag.text = "BOT" if seat.bot else ("YOU" if seat.peer == me else ("HOST" if seat.peer == 1 else ""))
 		row.tag.add_theme_color_override("font_color", Desk.INK_RED if seat.peer == me else Desk.INK_FADED)
-		row.remove.visible = _host and (seat.bot or seat.peer > 1)
+		row.remove.visible = _hosting and (seat.bot or seat.peer > 1)
+		# Not a member of the house, at a ranked table: it can't be dealt with them.
+		var stranger: bool = _rated and seat.get("member", "") == ""
+		if stranger and not edit.has_focus():
+			edit.add_theme_color_override("font_color", Desk.INK_RED)
+		edit.add_theme_color_override("font_uneditable_color", Desk.INK_RED if stranger else Desk.INK_FADED)
 
 
 func _redraw() -> void:
@@ -2040,8 +2139,10 @@ func _redraw() -> void:
 		problem = "Pick at least 3 characters."
 	elif _room.seats.size() < 2:
 		problem = "A table needs at least 2 players. Add a bot or wait for someone to join."
-	_problem.text = problem if _host else ""
-	_start.disabled = problem != ""
+	if _rated:
+		problem = _room.rated_problem()
+	_problem.text = (problem if problem != "" else _note) if _hosting else ""
+	_start.disabled = problem != "" or _room._asking_house
 	for reset: Dictionary in _resets:
 		reset.button.visible = _host and not reset.is_default.call()
 

@@ -57,6 +57,7 @@ func _take_bets(event: GameEvent, engine: GameEngine) -> void:
 		var keen := _side_bet.ai_react_weight(event, p, engine)
 		if not p.has_character(id):
 			keen *= 0.25 / BotController.oath_caution(p, engine)
+		keen *= BotController.react_restraint(p)
 		var d := Decision.new(Decision.Kind.PICK, p)
 		d.prompt = Loc.t("%s calls LIAR! on %s. Do you place a Side Bet?") % [doubter.name, doubted.actor.name]
 		d.cancellable = true

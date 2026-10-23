@@ -20,6 +20,9 @@ signal finished(winner: PlayerState)
 ## One with context.private is nobody else's business.
 signal asking(decision: Decision)
 signal settled(decision: Decision)
+## What `decision` was answered with, as the engine got it: for a record of
+## the match (match_log.gd). Nothing in the rules listens.
+signal answered(decision: Decision, answer: Variant)
 ## Several players are being asked the same thing at once (a doubt window, a
 ## round of side bets): `state` is &"asked" as it opens for `player`, &"passed"
 ## once they let it go, and &"closed" (with no player) when it is over.
@@ -57,6 +60,11 @@ var tree: SceneTree
 var hurry := false
 
 var _reaction_depth := 0
+## Proven cards whose trade waits for a reach to be over (see _owe_renewal):
+## {player, card}.
+var _owed_renewals: Array = []
+## Above 0 while a recall_cards() is reaching into the hands.
+var _recalling := 0
 ## How many plays are being made ready and not announced yet (their target,
 ## whatever prepare() asks): what is asked meanwhile is the asker's secret.
 var _unannounced := 0
@@ -401,7 +409,8 @@ func reaction_options(player: PlayerState, event: GameEvent) -> Array:
 		var def := instance.def
 		if def.kind == ItemDef.Kind.REACTION and def.reacts_to(event, player, self):
 			if item_lock_reason(instance) == "" and blocked_reason(player, def.tags) == "" and def.can_use(player, self) == "":
-				out.append({"kind": &"item", "item": instance, "enabled": true, "reason": ""})
+				out.append({"kind": &"item", "item": instance, "enabled": true, "reason": "",
+						"caution": forfeit_warning(player, def, event)})
 	return out
 
 
@@ -429,6 +438,7 @@ func ask(decision: Decision) -> Variant:
 	asking.emit(decision)
 	var answer: Variant = await controllers[decision.player.id].decide(decision)
 	settled.emit(decision)
+	answered.emit(decision, answer)
 	return answer
 
 
@@ -545,8 +555,27 @@ func ability_option(player: PlayerState, ability: Ability) -> Dictionary:
 		"kind": &"ability", "ability": ability, "enabled": reason == "", "reason": reason,
 		"legit": player.has_character(ability.character_id), "credit": cost > player.coins,
 		"cost": cost, "detail": ability.detail(player, self),
-		"caution": ability.caution(player, self),
+		"caution": _join_lines([ability.caution(player, self),
+				forfeit_warning(player, ability) if current != player else ""]),
 	}
+
+
+## What playing `playable` (in answer to `event`) would cost `player` under
+## the statuses they carry, "" if nothing: the `react_warning` of a status
+## (entity.gd), for anything not played for themselves (Playable.for_oneself).
+func forfeit_warning(player: PlayerState, playable: Playable, event: GameEvent = null) -> String:
+	if playable.for_oneself(event, player):
+		return ""
+	var lines := PackedStringArray()
+	for status_id: StringName in player.statuses:
+		var warning: String = Content.statuses.get(status_id, {}).get("react_warning", "")
+		if warning != "":
+			lines.append(Loc.t(warning))
+	return "\n".join(lines)
+
+
+static func _join_lines(lines: Array) -> String:
+	return "\n".join(PackedStringArray(lines.filter(func(line: String) -> bool: return line != "")))
 
 
 ## What statuses add to every price `player` pays (the `surcharge` of a
@@ -717,7 +746,10 @@ func claim(actor: PlayerState, ability: Ability, trigger: GameEvent = null, para
 	# even when what was drawn in its place is the same character again).
 	var shed := play.shed or play.aimed().shed
 	if proven and not play.stand_in and not shed and actor.cards.count(ability.character_id) >= copies:
-		await renew_proven_card(actor, ability.character_id)
+		if _owe_renewal(trigger):
+			_owed_renewals.append({"player": actor, "card": ability.character_id})
+		else:
+			await renew_proven_card(actor, ability.character_id)
 	await fire(&"claim_resolved", {"play": play})
 	# Riding on its host, the lie is the host's: it stands or falls with it.
 	if not play.truthful and doubter == null and not play.failed and not over and actor.alive and host == null:
@@ -1410,6 +1442,23 @@ func redraw_hand(player: PlayerState) -> void:
 	await fire(&"hand_redrawn", {"player": player, "count": count})
 
 
+## True when a card proven in answer to `trigger` is traded only once the
+## reach is over: an Untraceable takes the hand (or the items) off the table
+## until whatever came for it has missed, and a card drawn in the meantime
+## would land in a hand that is not there (see reach_hand).
+func _owe_renewal(trigger: GameEvent) -> bool:
+	return trigger != null and (trigger.type == &"before_hand_reach" or trigger.type == &"before_item_reach")
+
+
+## The proven cards that waited for a reach are traded now.
+func _renew_owed() -> void:
+	var owed := _owed_renewals.duplicate()
+	_owed_renewals.clear()
+	for entry: Dictionary in owed:
+		if entry.player.cards.has(entry.card):
+			await renew_proven_card(entry.player, entry.card)
+
+
 ## A doubt showed the whole table that `player` holds `character_id`: the card
 ## goes back to the deck and they draw another one.
 func renew_proven_card(player: PlayerState, character_id: StringName) -> void:
@@ -1425,10 +1474,13 @@ func recall_cards(by: PlayerState, card: StringName) -> void:
 	# asked, copy or not: asking only those who hold one would tell whoever
 	# called it who does.
 	var kept: Array = []
+	_recalling += 1
 	for p: PlayerState in seat_order(by):
 		if not await reach_hand(by, p, &"recall", card):
 			kept.append(p)
+	_recalling -= 1
 	if over:
+		_owed_renewals.clear()
 		return
 	var hands: Array = []
 	for p: PlayerState in seat_order(by):
@@ -1450,6 +1502,8 @@ func recall_cards(by: PlayerState, card: StringName) -> void:
 	for i: int in hands.size():
 		hands[i].player.cards[hands[i].index] = drawn[i]
 	await fire(&"cards_recalled", {"player": by, "card": card, "hands": hands})
+	# A hand kept out of it is back on the table once the tray is gone.
+	await _renew_owed()
 
 
 ## Before `by` sees, takes or replaces cards in the hand of `owner` (`how`:
@@ -1464,11 +1518,13 @@ func reach_hand(by: PlayerState, owner: PlayerState, how: StringName, card := &"
 	if how == &"recall":
 		data.card = card
 	var reach := await fire(&"before_hand_reach", data)
-	if not reach.cancelled:
-		return true
-	if not over:
+	if reach.cancelled and not over:
 		await fire(&"hand_missed", data.duplicate())
-	return false
+	# A proven Untraceable trades its card now, with the hand back in sight
+	# (out of a Last Call, once the recall is over).
+	if _recalling == 0:
+		await _renew_owed()
+	return not reach.cancelled
 
 
 ## Before `by` takes or destroys an item `owner` holds (`how`: &"steal",
@@ -1479,11 +1535,10 @@ func reach_items(by: PlayerState, owner: PlayerState, how: StringName) -> bool:
 		return true
 	var data := {"owner": owner, "by": by, "how": how}
 	var reach := await fire(&"before_item_reach", data)
-	if not reach.cancelled:
-		return true
-	if not over:
+	if reach.cancelled and not over:
 		await fire(&"items_missed", data.duplicate())
-	return false
+	await _renew_owed()
+	return not reach.cancelled
 
 
 ## `a` is who trades: `b` may keep their hand out of it (see reach_hand),

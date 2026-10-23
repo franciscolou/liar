@@ -89,6 +89,9 @@ signal out_of_step(turn: int)
 signal emoted(seat: int, kind: int)
 ## The player at `seat` of the match typed something to the table.
 signal said(seat: int, text: String)
+## A line typed in the lobby's chat by the player at `peer`, whose name was
+## `who` (see lobby_talk).
+signal lobby_said(peer: int, who: String, text: String)
 ## The host left: the room is trying to pass to `heir` (the player's name),
 ## who may be this machine (`mine`). Once for each one it tries.
 signal passing(heir: String, mine: bool)
@@ -136,7 +139,7 @@ const NAME_LENGTH := 12
 ## How long a line typed to the table may be (the same as Emotes.SAY_LENGTH).
 const SAY_LENGTH := 60
 ## Bump when machines running different builds could no longer play together.
-const PROTOCOL := 43
+const PROTOCOL := 44
 const JOIN_TIMEOUT := 8.0
 ## Joining a table of the house: its process may still be starting.
 const RANKED_JOIN_TIMEOUT := 20.0
@@ -1502,6 +1505,50 @@ func _say_relay(seat: int, text: String) -> void:
 func _say_down(id: int, seat: int, text: String) -> void:
 	if id == _match_id and in_match:
 		said.emit(seat, _clean_line(text))
+
+
+## The lobby's chat, which every machine keeps as it hears it, for the lobby
+## screen to show again when it comes back (from a match, or reloaded):
+## {peer, name, text}, the last LOBBY_TALK_KEPT, latest last. Nobody who
+## comes in later is sent what was said before.
+const LOBBY_TALK_KEPT := 60
+var lobby_talk: Array = []
+
+
+## Says a line in the lobby's chat for everyone in the room.
+func lobby_say(text: String) -> void:
+	var line := _clean_line(text)
+	if line == "" or in_match:
+		return
+	if hosting:
+		_lobby_relay(my_peer(), line)
+	elif not handing_over:
+		_lobby_say_up.rpc_id(1, line)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _lobby_say_up(text: String) -> void:
+	var peer := multiplayer.get_remote_sender_id()
+	var line := _clean_line(text)
+	if hosting and not in_match and _seat_of(peer) >= 0 and line != "":
+		_lobby_relay(peer, line)
+
+
+func _lobby_relay(peer: int, text: String) -> void:
+	var seat := _seat_of(peer)
+	if seat < 0:
+		return
+	_send(_lobby_said_down, [peer, seats[seat].name, text])
+	_lobby_said_down(peer, seats[seat].name, text)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _lobby_said_down(peer: int, who: String, text: String) -> void:
+	var line := _clean_line(text)
+	lobby_talk.append({"peer": peer, "name": clean_name(who), "text": line})
+	if lobby_talk.size() > LOBBY_TALK_KEPT:
+		lobby_talk.pop_front()
+	lobby_said.emit(peer, clean_name(who), line)
 
 
 ## A typed line as it may go round: one line, no longer than SAY_LENGTH.

@@ -67,6 +67,24 @@ const OPEN_ICON: Array[String] = [
 	"..###..",
 	"...#...",
 ]
+## The arrow of the chat, folded: it opens upwards.
+const RISE_ICON: Array[String] = [
+	"...#...",
+	"..###..",
+	".#####.",
+	"#######",
+]
+## The chat of the room, on a slip of paper beside the button that leaves:
+## how tall it is open, how long it takes to open, and how long a line said
+## stays beside the name of who said it, on the clipboard.
+const CHAT_OPEN := 250.0
+const CHAT_TIME := 0.16
+const CHAT_SAID := 5.0
+const TOUCH_CHAT_OPEN := 300.0
+## The balloon of a line said, on the clipboard: how far its tail reaches to
+## the left, towards the name, and the room left and right of the words.
+const BALLOON_TAIL := 6.0
+const BALLOON_PAD := 6.0
 ## The character being read, behind the text: its art printed on the paper
 ## in one faded ink (the dark of the picture is the ink, the light of it is
 ## the paper), melting away on the left, where the text is.
@@ -209,7 +227,14 @@ var _summary: Label
 var _start: Button
 var _resets: Array = []  # {button, is_default: Callable}
 var _problem: Label
-var _address_line: Label
+var _chat: Desk  # the slip of the chat
+var _chat_rect: Rect2  # where the slip lies folded
+var _chat_log: RichTextLabel
+var _chat_line: LineEdit
+var _chat_arrow: Button
+var _chat_open := false
+var _chat_unread := false
+var _chat_tween: Tween
 var _rules: VBoxContainer
 var _rules_arrow: Control
 ## Where the abilities of a character are read, in the place of the rules.
@@ -308,6 +333,7 @@ func _ready() -> void:
 			get_tree().reload_current_scene())
 	_room.rated_note.connect(_on_rated_note)
 	_room.reach_checked.connect(_on_reach_checked)
+	_room.lobby_said.connect(_on_lobby_said)
 	if not _room.reachable:
 		_on_reach_checked(false)
 	_refresh()
@@ -323,11 +349,12 @@ func _build_desktop() -> void:
 	add_child(plaque)
 	plaque.add_child(_plaque_title())
 
-	_build_address(self, Rect2(204, 590, 290, 46))
 	_build_rated_card(self, Rect2(506, 588, 168, 50))
 	_build_players(self, CLIPBOARD)
 	_build_rules()
 	_build_case()
+	# Last, so that it opens over the sheet of the rules.
+	_build_chat(self, Rect2(204, 590, 290, 46))
 
 	var made := _build_buttons(self)
 	var back: Button = made.back
@@ -433,9 +460,9 @@ func _build_touch() -> void:
 		_page_looks.append({"sockets": [] as Array[Rect2], "ridges": [TOUCH_TABS.end.y] as Array[float]})
 	_build_touch_characters(_pages[0])
 	_build_touch_items(_pages[1])
-	_build_address(_pages[2], Rect2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 50.0, TOUCH_LEFT.size.x - 212.0, 50))
 	_build_rated_card(_pages[2], Rect2(TOUCH_LEFT.end.x - 200.0, TOUCH_LEFT.end.y - 54.0, 200, 58))
 	_build_players(_pages[2], Rect2(TOUCH_LEFT.position, Vector2(TOUCH_LEFT.size.x, TOUCH_LEFT.size.y - 60.0)))
+	_build_chat(_pages[2], Rect2(TOUCH_LEFT.position.x, TOUCH_LEFT.end.y - 50.0, TOUCH_LEFT.size.x - 212.0, 50))
 	_build_touch_rules(_pages[2], TOUCH_RIGHT)
 	_show_page(_page)
 
@@ -746,42 +773,214 @@ func _exit_tree() -> void:
 ## itself are written again.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_TRANSLATION_CHANGED and is_node_ready() and _summary != null:
-		_write_address()
 		_redraw()
 
 
-## A slip of paper beside the button that leaves: where the others find this
-## room, or whose rules these are.
-func _build_address(parent: Control, rect: Rect2) -> void:
-	var slip: Desk = Desk.make(Desk.Kind.SHEET, rect)
-	slip.rotation = -0.012
-	slip.dog_ear = false
-	slip.tone = Desk.DIM_PAPER
-	parent.add_child(slip)
-	var line: Label = Desk.written("Only the host changes the table. You may change your name.", 14, Desk.INK_FADED)
-	# Wrapping first: until then the label is as wide as its text.
-	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	line.position = Vector2(10, 2)
-	line.size = slip.size - Vector2(20, 4)
-	line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	line.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	slip.add_child(line)
-	_address_line = line
-	if not _hosting:
-		return
+## The chat of the room: a slip of paper beside the button that leaves, with
+## the line to write on. Opened by its arrow, it grows upwards over what is
+## behind it and shows what was said in the room (Room.lobby_talk). Each line
+## also shows for a moment beside the name of who said it, on the clipboard.
+func _build_chat(parent: Control, rect: Rect2) -> void:
+	_on_paper = true
+	_chat_rect = rect
+	_chat = Desk.make(Desk.Kind.SHEET, rect)
+	_chat.rotation = -0.012
+	_chat.dog_ear = false
+	_chat.tone = Desk.DIM_PAPER
+	# The paper takes the mouse: open over the case, the item under it must
+	# not light up through the gaps between the lines.
+	_chat.mouse_filter = Control.MOUSE_FILTER_STOP
+	parent.add_child(_chat)
+	_chat_log = RichTextLabel.new()
+	_chat_log.bbcode_enabled = true
+	_chat_log.scroll_following = true
+	_chat_log.visible = false
+	_chat_log.add_theme_color_override("default_color", Desk.INK)
+	_chat_log.add_theme_font_size_override("normal_font_size", UI.px(14))
+	_chat_log.add_theme_font_size_override("bold_font_size", UI.px(14))
+	_chat_log.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	# A thin rule of ink to scroll by, not the grey bar of the theme: a faint
+	# groove, and a darker stroke in it that reddens under the mouse.
+	var bar := _chat_log.get_v_scroll_bar()
+	for state: String in ["scroll", "scroll_focus"]:
+		var groove := StyleBoxFlat.new()
+		groove.bg_color = Color(Desk.INK_FADED, 0.12)
+		groove.content_margin_left = 1
+		groove.content_margin_right = 1
+		bar.add_theme_stylebox_override(state, groove)
+	for state: String in ["grabber", "grabber_highlight", "grabber_pressed"]:
+		var grip := StyleBoxFlat.new()
+		grip.bg_color = Color(Desk.INK_FADED, 0.45) if state == "grabber" else Color(Desk.INK_RED, 0.6)
+		grip.content_margin_left = 1
+		grip.content_margin_right = 1
+		bar.add_theme_stylebox_override(state, grip)
+	var nothing := ImageTexture.create_from_image(Image.create(1, 1, false, Image.FORMAT_RGBA8))
+	for icon: String in ["increment", "increment_highlight", "increment_pressed", "decrement", "decrement_highlight", "decrement_pressed"]:
+		bar.add_theme_icon_override(icon, nothing)
+	_chat_log.add_theme_constant_override("h_separation", 0)
+	_chat.add_child(_chat_log)
+	_chat_line = LineEdit.new()
+	_chat_line.max_length = Room.SAY_LENGTH
+	_chat_line.placeholder_text = "Say something to the room..."
+	_chat_line.context_menu_enabled = false
+	_chat_line.add_theme_font_size_override("font_size", UI.px(15))
+	Desk.line(_chat_line, Desk.INK)
+	# Enter sends and the pen stays on the line, for the next one.
+	_chat_line.keep_editing_on_text_submit = true
+	_chat_line.text_submitted.connect(_on_chat_submitted)
+	_chat.add_child(_chat_line)
+	_chat_arrow = Button.new()
+	_chat_arrow.flat = true
+	_chat_arrow.focus_mode = Control.FOCUS_NONE
+	_chat_arrow.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		_chat_arrow.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	_chat_arrow.draw.connect(func() -> void:
+		var lit := _chat_arrow.is_hovered() or _chat_unread
+		_draw_bits(_chat_arrow, OPEN_ICON if _chat_open else RISE_ICON, Desk.INK_RED if lit else Desk.INK_FADED))
+	_chat_arrow.mouse_entered.connect(_chat_arrow.queue_redraw)
+	_chat_arrow.mouse_exited.connect(_chat_arrow.queue_redraw)
+	_chat_arrow.pressed.connect(func() -> void: _open_chat(not _chat_open))
+	TipLayer.attach(_chat_arrow, func() -> String:
+		return Loc.t("Hide the chat." if _chat_open else "Show what was said in the room."))
+	_chat.add_child(_chat_arrow)
+	_chat.resized.connect(_place_chat)
+	_place_chat()
+	for said: Dictionary in _room.lobby_talk:
+		_write_chat(said.name, said.text)
+	# The address is found in Radmin, but not the port of a second room on
+	# the same computer: the host is told it.
 	var addresses: Array = Room.addresses()
-	Desk.ink(line, Desk.INK)
-	line.add_theme_font_size_override("font_size", UI.px(16))
-	line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-	_write_address()
-	if addresses.is_empty():
+	if _hosting and not _rated and _room.port != Room.PORT and not addresses.is_empty():
+		_write_chat("", Loc.t("ROOM ADDRESS:  %s") % _room.address_at(addresses[0]), Desk.INK_FADED)
+	_on_paper = false
+
+
+## The line to write on and the arrow stay at the foot of the slip; what was
+## said fills the rest of it.
+func _place_chat() -> void:
+	var line_height := 30.0 if UI.touch else 26.0
+	var arrow := Vector2(30, line_height)
+	var foot := roundf((_chat_rect.size.y - line_height) / 2.0)
+	var under := _chat.size.y - foot - line_height
+	_chat_line.position = Vector2(10, under)
+	_chat_line.size = Vector2(_chat.size.x - 20.0 - arrow.x - 4.0, line_height)
+	_chat_arrow.position = Vector2(_chat.size.x - 10.0 - arrow.x, under)
+	_chat_arrow.size = arrow
+	_chat_log.visible = _chat.size.y > _chat_rect.size.y + 24.0
+	_settle_chat_log()
+
+
+## What was said sits on the line to write on, as in any chat: the text is
+## only as tall as it needs, until it fills the slip and scrolls.
+func _settle_chat_log() -> void:
+	var room := maxf(0.0, _chat_line.position.y - 16.0)
+	_chat_log.size = Vector2(_chat.size.x - 24.0, room)
+	var tall := minf(room, float(_chat_log.get_content_height()))
+	_chat_log.size.y = tall
+	_chat_log.position = Vector2(12, 10.0 + room - tall)
+
+
+## Opens the slip upwards, or folds it back to the line to write on.
+func _open_chat(open: bool) -> void:
+	_chat_open = open
+	if open:
+		_chat_unread = false
+	_chat_arrow.queue_redraw()
+	var tall := _chat_rect.size.y
+	if open:
+		tall = TOUCH_CHAT_OPEN if UI.touch else CHAT_OPEN
+	if _chat_tween != null:
+		_chat_tween.kill()
+	_chat_tween = create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_chat_tween.tween_property(_chat, "position:y", _chat_rect.end.y - tall, CHAT_TIME)
+	_chat_tween.tween_property(_chat, "size:y", tall, CHAT_TIME)
+
+
+func _on_chat_submitted(text: String) -> void:
+	_chat_line.text = ""
+	_room.lobby_say(text)
+
+
+func _on_lobby_said(peer: int, who: String, text: String) -> void:
+	_write_chat(who, text)
+	if not _chat_open:
+		_chat_unread = true
+		_chat_arrow.queue_redraw()
+	_say_beside(peer, text)
+
+
+## A line of the chat: the name in the blue of the clipboard, then what was
+## said. Nothing anyone types is read as BBCode.
+func _write_chat(who: String, text: String, color: Color = Desk.INK) -> void:
+	var line := "[color=%s]%s[/color]" % [color.to_html(false), text.replace("[", "[lb]")]
+	if who != "":
+		line = "[color=%s][b]%s:[/b][/color] %s" % [Desk.INK_BLUE.to_html(false), who.replace("[", "[lb]"), line]
+	if _chat_log.get_parsed_text() != "":
+		line = "\n" + line
+	_chat_log.append_text(line)
+	_settle_chat_log()
+
+
+## A speech balloon in ink on the clipboard, in blocks of 2 px: a light
+## paper body with its corners cut, and a short tail on the left pointing
+## at the name.
+func _draw_balloon(said: Control) -> void:
+	var c := 2.0
+	var top := 2.0
+	var foot := floorf(said.size.y / c) * c - 2.0
+	var left := BALLOON_TAIL
+	var right := floorf(said.size.x / c) * c
+	var middle := roundf((top + foot) / 2.0 / c) * c  # the tail is the two rows around it
+	var fill := Desk.PAPER_LIGHT
+	var ink := Color(Desk.INK, 0.85)
+	var width := right - left
+	var height := foot - top
+	said.draw_rect(Rect2(left + c, top + c, width - c * 2.0, height - c * 2.0), fill)
+	# The outline, without the four corner blocks, open where the tail joins.
+	said.draw_rect(Rect2(left + c, top, width - c * 2.0, c), ink)
+	said.draw_rect(Rect2(left + c, foot - c, width - c * 2.0, c), ink)
+	said.draw_rect(Rect2(right - c, top + c, c, height - c * 2.0), ink)
+	said.draw_rect(Rect2(left, top + c, c, middle - c - top - c), ink)
+	said.draw_rect(Rect2(left, middle + c, c, foot - c - middle - c), ink)
+	said.draw_rect(Rect2(left, middle - c, c, c * 2.0), fill)
+	# The tail: one column of paper rimmed above and below, then the point.
+	said.draw_rect(Rect2(left - c, middle - c * 2.0, c, c), ink)
+	said.draw_rect(Rect2(left - c, middle - c, c, c * 2.0), fill)
+	said.draw_rect(Rect2(left - c, middle + c, c, c), ink)
+	said.draw_rect(Rect2(left - c * 2.0, middle - c, c, c * 2.0), ink)
+
+
+## What `peer` said shows for a moment on the clipboard, after the name.
+func _say_beside(peer: int, text: String) -> void:
+	var seat := -1
+	for i in _room.seats.size():
+		if _room.seats[i].peer == peer:
+			seat = i
+	if seat < 0 or seat >= _seat_rows.size():
 		return
-	line.mouse_filter = Control.MOUSE_FILTER_PASS
-	TipLayer.attach(line, func() -> String:
-		var tip := Loc.t("What your friends type to join. With Radmin VPN it is the address that starts with 26.")
-		if addresses.size() > 1:
-			tip += "\n" + Loc.t("This computer also answers at: %s") % ", ".join(addresses.slice(1).map(func(ip: String) -> String: return _room.address_at(ip)))
-		return tip + "\n" + Loc.t("If nobody gets in, allow the game through the firewall (UDP port %d).") % _room.port)
+	var row: Dictionary = _seat_rows[seat]
+	var edit: LineEdit = row.name
+	var said: Control = row.said
+	var words: Label = row.said_words
+	var name_width := edit.get_theme_font(&"font").get_string_size(edit.text, HORIZONTAL_ALIGNMENT_LEFT, -1, edit.get_theme_font_size(&"font_size")).x
+	var words_width := words.get_theme_font(&"font").get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, words.get_theme_font_size(&"font_size")).x
+	words.text = text
+	said.position = Vector2(roundf(name_width / 2.0) * 2.0 + 10.0, 0)
+	var room := maxf(0.0, edit.size.x - said.position.x)
+	said.size = Vector2(minf(room, roundf((words_width + BALLOON_TAIL + BALLOON_PAD * 2.0 + 4.0) / 2.0) * 2.0), edit.size.y)
+	words.position = Vector2(BALLOON_TAIL + BALLOON_PAD, 0)
+	words.size = Vector2(maxf(0.0, said.size.x - BALLOON_TAIL - BALLOON_PAD * 2.0), said.size.y)
+	said.queue_redraw()
+	# A new line takes the place of the last one at once.
+	var tween: Tween = row.get("said_tween")
+	if tween != null:
+		tween.kill()
+	said.modulate.a = 1.0
+	tween = said.create_tween()
+	tween.tween_interval(CHAT_SAID)
+	tween.tween_property(said, "modulate:a", 0.0, 0.5)
+	row.said_tween = tween
 
 
 ## The house's little card, by the address: the host's switch that makes the
@@ -860,33 +1059,15 @@ func _on_rated_note(text: String) -> void:
 
 
 ## Whether the room could pass to this machine if the host left (see
-## Room.reachable): a guest's slip says so when it could not.
+## Room.reachable): a guest is told so in the chat when it could not.
 func _on_reach_checked(ok: bool) -> void:
-	if _hosting or _address_line == null:
+	if _hosting or ok or _chat == null or _chat.has_meta("warned"):
 		return
-	if ok:
-		_address_line.text = "Only the host changes the table. You may change your name."
-		Desk.ink(_address_line, Desk.INK_FADED)
-		return
-	_address_line.text = "If the host leaves, the room cannot pass to you: let the game through the firewall."
-	Desk.ink(_address_line, Desk.INK_RED)
-	if not _address_line.has_meta("warned"):
-		_address_line.set_meta("warned", true)
-		_address_line.mouse_filter = Control.MOUSE_FILTER_PASS
-		TipLayer.attach(_address_line, func() -> String:
-			return Loc.t("The others could not get through to this computer. If the host leaves, the room passes to someone else, or closes.") \
-					+ "\n" + Loc.t("In the Windows firewall, allow the game on private and public networks (with Radmin VPN, the network is often public)."))
-
-
-## The host's line is formatted here, so it does not translate itself.
-func _write_address() -> void:
-	if not _hosting:
-		return
-	var addresses: Array = Room.addresses()
-	if addresses.is_empty():
-		_address_line.text = Loc.t("This computer has no network address to share.")
-	else:
-		_address_line.text = Loc.t("ROOM ADDRESS:  %s") % _room.address_at(addresses[0])
+	_chat.set_meta("warned", true)
+	_write_chat("", Loc.t("If the host leaves, the room cannot pass to you: let the game through the firewall.") + " " \
+			+ Loc.t("In the Windows firewall, allow the game on private and public networks (with Radmin VPN, the network is often public)."), Desk.INK_RED)
+	_chat_unread = not _chat_open
+	_chat_arrow.queue_redraw()
 
 
 ## The players sign in on the sheet of a clipboard, one to a line.
@@ -940,6 +1121,20 @@ func _build_players(parent: Control, rect: Rect2) -> void:
 		name_edit.text_submitted.connect(func(_text: String): _leave_name(name_edit, i))
 		name_edit.focus_exited.connect(_on_name_left.bind(name_edit, i))
 		row.add_child(name_edit)
+		# What this player last said in the chat, for a moment, in a speech
+		# balloon whose tail points at the name (_say_beside).
+		var said := Control.new()
+		said.modulate.a = 0.0
+		said.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		said.draw.connect(_draw_balloon.bind(said))
+		name_edit.add_child(said)
+		var words := Desk.written("", 14, Desk.INK)
+		words.clip_text = true
+		words.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		words.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		words.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		said.add_child(words)
 		var tag := Desk.written("", 14, Desk.INK_FADED, true)
 		tag.custom_minimum_size = Vector2(58, 0)
 		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -953,7 +1148,7 @@ func _build_players(parent: Control, rect: Rect2) -> void:
 			return Loc.t("Take this bot out of the room." if bot else "Take this player out of the room."))
 		row.add_child(remove)
 		list.add_child(row)
-		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove})
+		_seat_rows.append({"row": row, "name": name_edit, "tag": tag, "remove": remove, "said": said, "said_words": words})
 	_on_paper = false
 
 
@@ -2100,6 +2295,12 @@ func _redraw_seats() -> void:
 			_seats_moving = true
 			edit.release_focus()
 			_seats_moving = false
+		if moved:
+			# A line said by whoever had this row is not theirs.
+			var said: Control = row.said
+			if row.get("said_tween") != null:
+				row.said_tween.kill()
+			said.modulate.a = 0.0
 		# The name being typed is ahead of what the room has heard of it.
 		if not edit.has_focus() and edit.text != seat.name:
 			edit.text = seat.name
@@ -2304,6 +2505,8 @@ func _input(event: InputEvent) -> void:
 	var clicked: bool = event is InputEventMouseButton and event.pressed
 	if not clicked and not event.is_action_pressed(&"ui_cancel"):
 		return
+	if _chat_line != null and _chat_line.has_focus() and not (clicked and _chat_line.get_global_rect().has_point(event.global_position)):
+		_chat_line.release_focus()
 	for i: int in _seat_rows.size():
 		var edit: LineEdit = _seat_rows[i].name
 		if edit.has_focus() and not (clicked and edit.get_global_rect().has_point(event.global_position)):

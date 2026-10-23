@@ -33,6 +33,9 @@ const COLUMN_X := -4.0  # the faces are wider than the button: centred on it
 ## is typed on, to the right of the button.
 const SAY_LENGTH := 60
 const SAY_LINE := Vector2(204, 24)
+## The line to type on fades in sliding this far from the left, in this long.
+const LINE_SLIDE := 8.0
+const LINE_TIME := 0.12
 ## Touch mode: the buttons and the faces are made bigger whole, and the line
 ## to type on opens high on the screen, where the phone's keyboard, which
 ## comes up from below, leaves it in sight.
@@ -169,6 +172,10 @@ var _options: Array = []
 var _open := false
 var _amount := 0.0  # 0 = shut, 1 = the column fully out
 var _tween: Tween
+var _typing := false
+var _line_in := 0.0  # 0 = put away, 1 = fully in
+var _line_tween: Tween
+var _stack := 0.0  # 0 = side by side, 1 = the chat button under the other
 var _s := 1.0  # how much bigger the buttons are drawn (TOUCH_SCALE in touch mode)
 
 
@@ -188,7 +195,6 @@ func _init() -> void:
 	TipLayer.attach(_say, "[b]Say something[/b] (T)\nType a line for the whole table to see.")
 	add_child(_say)
 	_line = LineEdit.new()
-	_line.position = Vector2(BUTTON.x * 2.0 + 8.0, 0)
 	_line.size = SAY_LINE
 	_line.max_length = SAY_LENGTH
 	_line.placeholder_text = "Say something..."
@@ -205,6 +211,7 @@ func _init() -> void:
 		box.content_margin_bottom = 0
 		_line.add_theme_stylebox_override(state, box)
 	_line.visible = false
+	_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_line.text_submitted.connect(_on_line_submitted)
 	_line.focus_exited.connect(func() -> void: open_line(false))
 	add_child(_line)
@@ -232,9 +239,24 @@ func _bare_button(extent: Vector2) -> Button:
 	return b
 
 
-## How tall the buttons are on screen.
-func height() -> float:
-	return BUTTON.y * _s
+## How tall the buttons are on screen, side by side (`stacked` 0) or one
+## over the other (1).
+func height(stacked := _stack) -> float:
+	return BUTTON.y * _s * (1.0 + stacked) + 4.0 * stacked
+
+
+## How wide the buttons and the line typed next to them are on screen.
+func width(stacked := _stack) -> float:
+	return BUTTON.x * _s * (2.0 - stacked) + 4.0 * (1.0 - stacked) + 4.0 + SAY_LINE.x
+
+
+## Puts the chat button beside the emote one (`stacked` 0) or under it (1),
+## or somewhere on the way.
+func stack(stacked: float) -> void:
+	_stack = stacked
+	_say.position = Vector2(BUTTON.x * _s + 4.0, 0).lerp(Vector2(0, BUTTON.y * _s + 4.0), stacked).round()
+	size = Vector2(BUTTON.x * _s, height())
+	_show_line(_line_in)
 
 
 ## Sends `kind`. Nothing holds it back: as many, and as fast, as the player
@@ -246,28 +268,47 @@ func pick(kind: int) -> void:
 
 ## True while the player is typing a line: the keys are theirs, not the table's.
 func typing() -> bool:
-	return _line.visible
+	return _typing
 
 
-## Opens the line to type on, or puts it away with whatever was on it.
+## Opens the line to type on, or puts it away with whatever was on it: it
+## fades in sliding from the left, and back out the same way.
 func open_line(open: bool) -> void:
-	if open == _line.visible:
+	if open == _typing:
 		return
-	_line.visible = open
-	_line.text = ""
+	_typing = open
+	_line.mouse_filter = Control.MOUSE_FILTER_STOP if open else Control.MOUSE_FILTER_IGNORE
 	if open:
-		# The line is as tall as its font needs, which is more than the
-		# button: it is centred on it, not hung from its top.
-		_line.size = SAY_LINE
-		_line.position.y = roundf((BUTTON.y - _line.size.y) / 2.0)
-		if UI.touch:
-			_line.position = TOUCH_LINE.position
-			_line.size = TOUCH_LINE.size
+		_line.text = ""
+		_line.size = TOUCH_LINE.size if UI.touch else SAY_LINE
+		_show_line(_line_in)
 		_line.grab_focus()
 		_line.edit()
 	elif _line.has_focus():
 		_line.release_focus()
+	if _line_tween != null:
+		_line_tween.kill()
+	_line_tween = create_tween()
+	_line_tween.tween_method(_show_line, _line_in, 1.0 if open else 0.0, LINE_TIME) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	_say.queue_redraw()
+
+
+## Where the line lies when fully in. It is as tall as its font needs, which
+## is more than the button: it is centred on it, not hung from its top.
+func _line_home() -> Vector2:
+	if UI.touch:
+		return TOUCH_LINE.position
+	return (_say.position + Vector2(BUTTON.x * _s + 4.0, (BUTTON.y * _s - _line.size.y) / 2.0)).round()
+
+
+func _show_line(amount: float) -> void:
+	_line_in = amount
+	_line.visible = amount > 0.0
+	_line.modulate.a = amount
+	_line.position = _line_home() - Vector2(roundf(LINE_SLIDE * (1.0 - amount)), 0)
+	if amount <= 0.0:
+		_line.text = ""
 
 
 func _on_line_submitted(text: String) -> void:

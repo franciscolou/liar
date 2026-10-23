@@ -1071,18 +1071,21 @@ func _place_log(fold: float) -> void:
 ## table puts a box at each side): then they go to the right of the log,
 ## level with its top. In touch mode the log opens big and the line opens
 ## high on the screen: they always sit to its right, level with its foot.
-## Either way they are drawn over the boxes.
+## Either way they are drawn over the boxes. Over an open log the two are
+## stacked, the chat one under the other, and they come side by side as it
+## folds.
 func _place_emotes() -> void:
 	if _emotes == null:
 		return
+	_emotes.stack(1.0 - _log_fold)
 	var tall: float = _emotes.height()
 	var beside := Vector2(_log_panel.position.x + _log_panel.size.x + 6.0, _log_panel.position.y)
 	if UI.touch:
 		_emotes.position = Vector2(beside.x, _log_bottom - tall)
 		return
 	# Judged with the log open, so that they do not jump as it folds.
-	var above := Vector2(_log_panel.position.x, _log_bottom - _log_size().y - tall - 4.0)
-	var reach := Vector2(Emotes.BUTTON.x * 2.0 + 8.0 + Emotes.SAY_LINE.x, tall)
+	var above := Vector2(_log_panel.position.x, _log_bottom - _log_size().y - _emotes.height(1.0) - 4.0)
+	var reach := Vector2(_emotes.width(1.0), _emotes.height(1.0))
 	if _in_the_way(Rect2(above, reach)):
 		_emotes.position = beside
 	else:

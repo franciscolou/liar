@@ -1773,8 +1773,9 @@ func _prompt_doubt(d: Decision) -> void:
 			if warning != "":
 				text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), Loc.t(warning)]
 	var buttons := _doubt_buttons(d)
+	var early := GameEvent.new(&"claim_resolving", {"play": play})
 	for option: Dictionary in d.context.get("reactions", []):
-		buttons.append(_reaction_button(option))
+		buttons.append(_reaction_button(option, d.player, early))
 	buttons.append({"text": "Let it pass", "action": _answer.bind(false)})
 	_show_prompt(text, buttons)
 
@@ -1832,16 +1833,18 @@ func _doubt_buttons(d: Decision) -> Array:
 
 
 ## The button that answers a decision with reaction `option`.
-func _reaction_button(option: Dictionary) -> Dictionary:
+## `who` plays it in answer to `event`: what it would throw away of theirs
+## shows on their box while the button is pointed at (see _forfeits).
+func _reaction_button(option: Dictionary, who: PlayerState = null, event: GameEvent = null) -> Dictionary:
 	if option.kind != &"ability":
 		var item: ItemDef = option.item.def
 		var item_tip := UI.item_tip(item)
 		if option.get("caution", "") != "":
 			item_tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
-		return {
+		return _forfeits({
 			"text": Loc.t("Use %s") % item.display_name, "tip": item_tip,
 			"accent": UI.BLUE, "action": _answer.bind(option),
-		}
+		}, item, who, event)
 	var ability: Ability = option.ability
 	var def := Content.character(ability.character_id)
 	var price: int = option.get("cost", ability.cost)
@@ -1853,10 +1856,24 @@ func _reaction_button(option: Dictionary) -> Dictionary:
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.BLUE), Loc.t("You can't afford it: you will also claim Vagabond.")]
 	if option.get("caution", "") != "":
 		tip += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
-	return {
+	return _forfeits({
 		"text": "%s: %s%s" % [def.display_name, ability.display_name, cost], "tip": tip,
 		"accent": accent, "action": _answer.bind(option),
-	}
+	}, ability, who, event)
+
+
+## Button `spec` plays `playable` for `who` in answer to `event`: if that is
+## not looking after themselves, the statuses it would throw away (those with
+## a `react_warning`, the chains of an Entropy) are threatened on their box
+## while it is pointed at, as with the LIAR! button (spec.dooms).
+func _forfeits(spec: Dictionary, playable: Playable, who: PlayerState, event: GameEvent) -> Dictionary:
+	if who == null or playable.for_oneself(event, who):
+		return spec
+	var dooms: Array = who.statuses.keys().filter(func(status_id: StringName) -> bool:
+		return Content.statuses.get(status_id, {}).has("react_warning"))
+	if not dooms.is_empty():
+		spec["dooms"] = {"player": who, "statuses": dooms}
+	return spec
 
 
 func _prompt_react(d: Decision) -> void:
@@ -1874,7 +1891,7 @@ func _prompt_react(d: Decision) -> void:
 			if not warned.has(line):
 				warned.append(line)
 				cautions += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), line]
-		buttons.append(_reaction_button(option))
+		buttons.append(_reaction_button(option, d.player, d.context.get("event")))
 	buttons.append({"text": "Pass", "action": _answer.bind(null)})
 	var why := ". ".join(triggers)
 	var event: GameEvent = d.context.get("event")
@@ -1905,10 +1922,10 @@ func _prompt_bet(d: Decision) -> void:
 		if option.get("caution", "") != "":
 			text += "\n[color=%s]%s[/color]" % [UI.hex(UI.RED), option.caution]
 		for i: int in d.options.size():
-			buttons.append({
+			buttons.append(_forfeits({
 				"text": d.options[i].label, "tip": UI.ability_tip(ability),
 				"accent": UI.GREEN if legit else UI.RED, "action": _answer.bind(i),
-			})
+			}, ability, d.player, null))
 	buttons.append({"text": "No bet", "action": _answer.bind(-1)})
 	_show_prompt(text, buttons)
 

@@ -125,22 +125,22 @@ const PARTS := [
 ## The same table as laid out in touch mode (see table.gd, TOUCH_*), with three
 ## opponents, and what each part says to a finger.
 const TOUCH_PARTS := [
-	["TURN", Rect2(8, 6, 250, 34), "Shows whose turn it is.", &""],
+	["TURN", Rect2(8, 4, 300, 46), "Shows whose turn it is.", &""],
 	["MENU", Rect2(1032, 8, 112, 46), "Pause, settings, this guide and the way out.", &""],
 	["SUSPICION BOOK", Rect2(978, 8, 48, 46), "Your notes on who holds each card. The notebook fills in automatically, but there is also a manual version. It only becomes active if the owner allows it before the match begins.", &"book"],
 	["OPPONENT", Rect2(193, 58, 229, 164), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["OPPONENT", Rect2(462, 58, 229, 164), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
 	["OPPONENT", Rect2(731, 58, 229, 164), "An opponent: name, Morale, coins, statuses, items and the backs of their cards.", &"seat"],
-	["THE MIDDLE", Rect2(326, 232, 500, 130), "Every claim is shown here, with a mark that also shows where it comes from and its target. The questions the game asks you show up here too.", &""],
-	["EMOTES", Rect2(8, 382, 40, 40), "Show the table how you feel! Tap to pick a face.", &"emotes"],
-	["CHAT", Rect2(52, 382, 40, 40), "Type a line for the whole table to see.", &"chat"],
+	["THE MIDDLE", Rect2(326, 232, 500, 130), "Every claim is shown here, with a mark that also shows where it comes from and its target. Tap it to read the ability.", &""],
+	["EMOTES", Rect2(98, 430, 40, 40), "Show the table how you feel! Tap to pick a face.", &"emotes"],
+	["CHAT", Rect2(142, 430, 40, 40), "Type a line for the whole table to see.", &"chat"],
 	["LOG", Rect2(8, 426, 84, 44), "Everything that happened in the match, in case you really need to look it up. Tap to open it.", &"log"],
 	["SHOP", Rect2(919, 322, 139, 148), "The shop, folded: tap it to see the items and their prices.", &"shop"],
 	["DECK", Rect2(1057, 322, 87, 148), "The characters nobody holds. A card that proved a claim goes back here.", &"deck"],
 	["YOU", Rect2(0, 478, 228, 62), "Your name, Morale and coins, and the statuses on you.", &"stats"],
 	["YOUR ITEMS", Rect2(0, 542, 228, 106), "Your inventory. On your turn, tap an item to use it.", &"items"],
 	["YOUR HAND", Rect2(232, 478, 196, 170), "Your cards. Tap one to claim an ability of it: that play is legitimate.", &"hand"],
-	["THE OTHER CHARACTERS", Rect2(432, 478, 586, 170), "Every other character of the match. Tap one to claim an ability of it: but mind the risk of being caught lying.", &"rack"],
+	["THE OTHER CHARACTERS", Rect2(432, 478, 586, 170), "Every other character of the match. Tap here to see all of them and claim any one: but mind the risk of being caught lying. The questions the game asks you show up here too.", &"rack"],
 	["END TURN", Rect2(1022, 478, 130, 170), "Passes the turn without claiming anything. Extra options of the turn show up under it.", &"end"],
 ]
 

@@ -126,9 +126,11 @@ const KNOB: Array[String] = [
 const FILE_SIDES := Vector2(36, 400)
 const FILE_FOOT := 580.0
 const FILE_TOP := 352.0
-## How high and how low the top of the open sheet may be dragged, and how far
+## How high and how low the top of the sheet may be dragged, and how far
 ## the mouse has to go before a press on its title is a drag and not a click.
 const FILE_REACH := Vector2(60, 540)
+## The highest the folded sheet climbs to fit the whole of a character's file.
+const FILE_CEILING := 8.0
 const FILE_GRIP := 4.0
 ## How much of the top of the sheet it is held by: the strip and the title.
 const FILE_BAND := 38.0
@@ -227,9 +229,15 @@ var _case: Desk
 var _item_places: Array[Rect2] = []
 var _file_tween: Tween
 var _file_rest := Vector2(-1, -1)  # where its top was last put, and how tall
-## How far the player has dragged the open sheet from where it lies by
-## itself. Only this screen knows: the room never hears of it.
-var _file_pull := 0.0
+## How far the player has dragged the sheet from where it lies by itself,
+## folded and open (each keeps its own). Only this screen knows: the room
+## never hears of it.
+var _file_pulls: Array[float] = [0.0, 0.0]
+var _file_pull: float:
+	get:
+		return _file_pulls[int(_rules_open)]
+	set(value):
+		_file_pulls[int(_rules_open)] = value
 var _file_grip: Control  # the strip above the title, to hold it by
 var _file_hint := 0.0  # how much of the grip marks shows: 0 = none, 1 = all
 var _file_hint_tween: Tween
@@ -983,6 +991,9 @@ func _build_rules() -> void:
 	box.add_child(_rules)
 	_add_rules(_rules)
 	_reader = _new_reader()
+	# The sheet grows to the whole of the text instead of scrolling it.
+	_reader.fit_content = true
+	_reader.minimum_size_changed.connect(_place_file)
 	box.add_child(_reader)
 	_file.resized.connect(_place_ghost)
 	_place_ghost()
@@ -1378,13 +1389,17 @@ func _place_ghost() -> void:
 
 ## Open, the rules lie under the clipboard, and the player may drag the sheet
 ## up and down by its top (_file_pull). Folded away, the sheet is pulled up
-## over the lines nobody signed, so there is more of it to read.
+## over the lines nobody signed, and further, over the signed ones, if the
+## file being read needs it; from there it may only be dragged down.
 func _place_file(at_once := false) -> void:
 	var top := _file_home()
 	var rest := Vector2(top, FILE_FOOT - top)
 	if _rules_open:
 		# The whole sheet goes with the hand: it keeps its height.
 		_file_pull = clampf(top + _file_pull, FILE_REACH.x, maxf(FILE_REACH.y, top)) - top
+		rest.x = top + _file_pull
+	else:
+		_file_pull = clampf(_file_pull, 0.0, maxf(0.0, FILE_REACH.y - top))
 		rest.x = top + _file_pull
 	if rest == _file_rest:
 		return
@@ -1407,7 +1422,11 @@ func _file_home() -> float:
 		# As far up as the rules need, and no further: the sheet lies over
 		# the foot of the clipboard.
 		return minf(FILE_TOP, FILE_FOOT - _file_box.get_combined_minimum_size().y - 20.0)
-	return minf(FILE_TOP, CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * _seat_step + 8.0)
+	# Over the lines nobody signed, and higher if the file needs it to be
+	# read without scrolling.
+	var unsigned: float = CLIPBOARD.position.y + SEAT_LINES + _room.seats.size() * _seat_step + 8.0
+	var fits: float = FILE_FOOT - _file_box.get_combined_minimum_size().y - 20.0
+	return maxf(FILE_CEILING, minf(FILE_TOP, minf(unsigned, fits)))
 
 
 ## The mouse is on the top of the open sheet, or has left it: a few grip
@@ -1447,10 +1466,10 @@ func _on_file_held(event: InputEvent, folds: bool) -> void:
 		elif _file_held:
 			_file_held = false
 			var at: Vector2 = _file.get_local_mouse_position()
-			_hint_file(_rules_open and Rect2(0, 0, _file.size.x, FILE_BAND).has_point(at))
+			_hint_file(Rect2(0, 0, _file.size.x, FILE_BAND).has_point(at))
 			if folds and not _file_dragged:
 				_set_rules_open(not _rules_open)
-	elif event is InputEventMouseMotion and _file_held and _rules_open:
+	elif event is InputEventMouseMotion and _file_held:
 		var pull: float = event.global_position.y - _file_grab
 		if not _file_dragged and absf(pull - _file_pull) < FILE_GRIP:
 			return
@@ -1550,10 +1569,8 @@ func _redraw_reader() -> void:
 	if not UI.touch:
 		_rules.visible = _rules_open
 		_rules_arrow.queue_redraw()
-		_file_grip.visible = _rules_open
 		_reader.visible = not _rules_open
 		_ghosts.visible = not _rules_open
-		_place_file()
 	var def := Content.character(_read) if _read != &"" else null
 	var text := "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Tap a character to read its abilities here." if UI.touch else "Hover a character to read its abilities here.")]
 	if def != null:
@@ -1562,6 +1579,9 @@ func _redraw_reader() -> void:
 	# Left alone when nothing changed, so a long text stays where it was scrolled to.
 	if _reader.text != text:
 		_reader.text = text
+	if not UI.touch:
+		# The sheet fits the text just written.
+		_place_file()
 	var art := UI.card_art(def.texture_path) if def != null else null
 	if _ghost.texture != art:
 		# One ink soaks in while the other fades: the ghost that was there

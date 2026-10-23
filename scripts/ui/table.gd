@@ -30,6 +30,7 @@ const DilemmaPick := preload("res://scripts/ui/dilemma_pick.gd")
 const GuardPick := preload("res://scripts/ui/guard_pick.gd")
 const PalettePick := preload("res://scripts/ui/palette_pick.gd")
 const Emotes := preload("res://scripts/ui/emotes.gd")
+const CastSheet := preload("res://scripts/ui/cast_sheet.gd")
 const TurnClock := preload("res://scripts/ui/turn_clock.gd")
 const CoinPile := preload("res://scripts/ui/coin_pile.gd")
 const SuspectBook := preload("res://scripts/ui/suspect_book.gd")
@@ -151,6 +152,22 @@ const RESERVE_SWEEP := 0.5
 const TOUCH_SEAT_TOP := 58.0
 const TOUCH_SEAT_SCALES := [1.3, 1.3, 1.3, 1.2, 1.1]
 const TOUCH_SEAT_GAP := 40.0
+## Six or seven opponents do not fit in a row big enough for a thumb: they
+## keep the desktop size, in the shape of CROWDED_SEATS (one at each side,
+## the others in a row along the top), but under the bar along the top of
+## the screen and clear of the shop. The top left corner of each box.
+const TOUCH_CROWDED_SEATS := {
+	6: [Vector2(12, 190), Vector2(164, 60), Vector2(380, 60), Vector2(596, 60), Vector2(812, 60), Vector2(964, 190)],
+	7: [Vector2(12, 190), Vector2(88, 60), Vector2(288, 60), Vector2(488, 60), Vector2(688, 60), Vector2(888, 60), Vector2(964, 190)],
+}
+## The bar along the top of the screen: the turn on the left, the buttons
+## on the right. Nothing of the table goes under it.
+const TOUCH_BAR := 54.0
+## The prompt, docked over the shelf of the other characters and END TURN
+## (its foot stays put; a long one grows up over the table), and the least
+## an answer in it takes: a thumb's height.
+const TOUCH_DOCK := Rect2(436, 482, 710, 160)
+const TOUCH_ANSWER := Vector2(110, 52)
 ## The stage hangs from here, under the row.
 const TOUCH_STAGE_TOP := 230.0
 ## Touch mode: how dark the table goes around a description the player opened,
@@ -161,6 +178,9 @@ const TOUCH_READ_FADE := 0.15
 const TOUCH_READ_GUARD := 250
 ## The shop, made bigger whole, and the emote buttons.
 const TOUCH_SHOP_SCALE := 1.4
+## With the boxes of TOUCH_CROWDED_SEATS at the sides it is a little smaller,
+## for its sign to clear the box over it.
+const TOUCH_SHOP_CROWDED := 1.2
 ## The top right buttons: the menu's plate, and the square ones beside it.
 const TOUCH_MENU := Vector2(112, 46)
 const TOUCH_SQUARE := 1.6
@@ -228,6 +248,7 @@ var _log_fold := 0.0  # 0 = open, 1 = folded; tweened in between
 var _log_tween: Tween
 var _log_bottom := 470.0  # the log hangs from here, folded or not
 var _emotes: Control  # the emote button above the log (emotes.gd); null while spectating
+var _cast_sheet: Control  # touch mode: every character on a board of its own (cast_sheet.gd)
 var _emote_bubbles: Dictionary = {}  # player id -> the last balloon they put up
 var _turn_label: Label
 var _sfx: Dictionary = {}
@@ -588,6 +609,9 @@ func _back_out() -> bool:
 	if _popup.get_child_count() > 0:
 		_close_popup()
 		return true
+	if is_instance_valid(_cast_sheet):
+		_close_cast()
+		return true
 	# The phone's back button folds a description that holds the table.
 	if _read_veil != null and _read_veil.get_meta(&"on", false):
 		_fold_reading()
@@ -639,10 +663,27 @@ func _build() -> void:
 	_hero.end_turn_pressed.connect(func(): _answer_turn({"kind": &"end"}))
 	_hero.extra_pressed.connect(_answer_turn)
 	_hero.refused.connect(_deny)
+	_hero.cast_pressed.connect(_open_cast)
 	add_child(_hero)
 
+	if UI.touch:
+		# A bar along the top for the turn and the buttons: nothing of the
+		# table goes under them.
+		var bar := Panel.new()
+		var look := StyleBoxFlat.new()
+		look.bg_color = Color(UI.INK, 0.78)
+		look.border_color = Color(UI.BORDER, 0.55)
+		look.border_width_bottom = 2
+		bar.add_theme_stylebox_override("panel", look)
+		bar.size = Vector2(1152, TOUCH_BAR)
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(bar)
 	_turn_label = UI.label("", 16, UI.GOLD, true)
 	_turn_label.position = Vector2(12, 8)
+	if UI.touch:
+		_turn_label.position = Vector2(14, 0)
+		_turn_label.size = Vector2(560, TOUCH_BAR)
+		_turn_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	add_child(_turn_label)
 	# No tooltip: the word on it says it all.
 	var menu := UI.button("MENU", UI.BORDER, 13)
@@ -1022,8 +1063,38 @@ func _place_log(fold: float) -> void:
 		_log_toggle.text = "LOG" if fold >= 1.0 else "×"
 		_log_toggle.size = box if fold >= 1.0 else Vector2(40, _log_header())
 		_log_toggle.position = Vector2.ZERO if fold >= 1.0 else Vector2(box.x - 42, 0)
-	if _emotes != null:
-		_emotes.position = _log_panel.position - Vector2(0, _emotes.height() + 4.0)
+	_place_emotes()
+
+
+## The emote and chat buttons sit on top of the log, unless a box of the
+## table would be in the way there or of the line typed next to them (a full
+## table puts a box at each side): then they go to the right of the log,
+## level with its top. In touch mode the log opens big and the line opens
+## high on the screen: they always sit to its right, level with its foot.
+## Either way they are drawn over the boxes.
+func _place_emotes() -> void:
+	if _emotes == null:
+		return
+	var tall: float = _emotes.height()
+	var beside := Vector2(_log_panel.position.x + _log_panel.size.x + 6.0, _log_panel.position.y)
+	if UI.touch:
+		_emotes.position = Vector2(beside.x, _log_bottom - tall)
+		return
+	# Judged with the log open, so that they do not jump as it folds.
+	var above := Vector2(_log_panel.position.x, _log_bottom - _log_size().y - tall - 4.0)
+	var reach := Vector2(Emotes.BUTTON.x * 2.0 + 8.0 + Emotes.SAY_LINE.x, tall)
+	if _in_the_way(Rect2(above, reach)):
+		_emotes.position = beside
+	else:
+		_emotes.position = Vector2(_log_panel.position.x, _log_panel.position.y - tall - 4.0)
+
+
+## True if a box of the table lies over `rect`.
+func _in_the_way(rect: Rect2) -> bool:
+	for seat: SeatView in _seats.values():
+		if seat.visible and _seat_rect(seat).intersects(rect):
+			return true
+	return false
 
 
 func _log_size() -> Vector2:
@@ -1044,6 +1115,8 @@ func _build_emotes() -> void:
 	_emotes = Emotes.new()
 	_emotes.picked.connect(_send_emote)
 	_emotes.said.connect(_send_line)
+	# Over the boxes: the line typed to the table opens across the table.
+	_emotes.z_index = 1
 	_table.add_child(_emotes)
 	_place_log(_log_fold)
 	if _room != null:
@@ -1121,6 +1194,31 @@ func _show_line(seat: int, text: String) -> void:
 	_play_sfx("ui_key")
 
 
+# === the cast (touch mode) ====================================================
+
+## Every character of the match on a board over the table: what the shelf of
+## the counter shows on a desktop. A card tapped there opens its menu, as on
+## the shelf; whatever is played from it puts the board away.
+func _open_cast() -> void:
+	_close_cast()
+	_close_popup()
+	var held: Array = viewer.cards if viewer != null and viewer.alive else []
+	var hint := "Tap a card to read what it does."
+	if _turn_options() != null:
+		hint = "Tap a card to claim it: the ones framed in green are in your hand."
+	_cast_sheet = CastSheet.new()
+	_overlay.add_child(_cast_sheet)
+	_cast_sheet.setup(engine.characters, held, hint)
+	_cast_sheet.picked.connect(_on_character_clicked)
+	_play_sfx("card_draw")
+
+
+func _close_cast() -> void:
+	if is_instance_valid(_cast_sheet):
+		_cast_sheet.close()
+	_cast_sheet = null
+
+
 # === book of suspicions =======================================================
 
 ## The viewer's notes on who holds what (see suspect_book.gd): a button next
@@ -1189,6 +1287,8 @@ func _layout_seats() -> void:
 	_log_bottom = 642.0 if full_circle else 470.0
 	_place_log(_log_fold)
 	var grow := TOUCH_SHOP_SCALE if UI.touch else 1.0
+	if UI.touch and not full_circle and TOUCH_CROWDED_SEATS.has(others.size()):
+		grow = TOUCH_SHOP_CROWDED
 	_shop.scale = Vector2.ONE * grow
 	_shop.position = Vector2(1144 - _shop_width * grow, (642 if full_circle else 470) - SHOP_HEIGHT * grow)
 	for i in others.size():
@@ -1218,6 +1318,9 @@ func _layout_seats() -> void:
 		seat.position = at - SeatView.SIZE / 2.0
 		if UI.touch and not full_circle and others.size() <= TOUCH_SEAT_SCALES.size():
 			_touch_seat(seat, i, others.size())
+		elif UI.touch and not full_circle and TOUCH_CROWDED_SEATS.has(others.size()):
+			seat.position = TOUCH_CROWDED_SEATS[others.size()][i]
+	_place_emotes()
 	_set_active(engine.current)
 
 
@@ -1251,6 +1354,9 @@ func request(d: Decision) -> Variant:
 	var lingering := _lingering()
 	if lingering != null and not (d.kind == Decision.Kind.PICK and d.context.get("look") == &"palette"):
 		_let_go_lingering()
+	# The board of the characters is only looked at: a question takes its place.
+	if d.kind != Decision.Kind.TURN:
+		_close_cast()
 	match d.kind:
 		Decision.Kind.TURN:
 			# A new turn: the keyboard starts from the hand again.
@@ -1286,6 +1392,7 @@ func _answer(value: Variant) -> void:
 	if _pending == null:
 		return
 	_close_popup()
+	_close_cast()
 	_hide_prompt()
 	_clear_modal(value)
 	if TipLayer.current != null:
@@ -1527,6 +1634,34 @@ func _on_seat_clicked(p: PlayerState) -> void:
 		seat.set_revealed(not seat.is_revealed())
 		_play_sfx("card_draw")
 		_sync_peek()
+	elif UI.touch and p.alive and (_pending == null or _pending.kind == Decision.Kind.TURN):
+		_inspect_seat(p)
+
+
+## Touch mode: what a box holds, written out, for a tap on it. Its items and
+## statuses are small marks there, hard to read and to hit with a finger.
+func _inspect_seat(p: PlayerState) -> void:
+	var rows := []
+	var stats := Loc.t("Morale %d/%d  ·  %d coins  ·  %d cards in hand") % [p.morale, engine.config.start_morale, p.coins, p.cards.size()]
+	rows.append({"info": "[color=%s]%s[/color]" % [UI.hex(UI.CREAM), stats]})
+	for instance: ItemInstance in p.items:
+		if instance.hidden:
+			rows.append({"info": "[b][color=%s]%s[/color][/b]" % [UI.hex(UI.MUTED), Loc.t("A HIDDEN ITEM")]})
+		else:
+			rows.append({"info": UI.item_tip(instance.def)})
+	for status_id: StringName in p.statuses:
+		var def: Dictionary = Content.statuses.get(status_id, {})
+		var line := "[b][color=%s]%s[/color][/b]\n%s" % [UI.hex(UI.status_color(p, status_id)),
+				Loc.t(def.get("name", String(status_id))).to_upper(), Loc.fill(def.get("description", ""), def.get("args", []))]
+		var by := engine.player_by_id(p.statuses[status_id].get("by", -1))
+		if by != null:
+			line += "\n[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("Placed by %s.") % by.name]
+		rows.append({"info": line})
+	if p.items.is_empty() and p.statuses.is_empty():
+		rows.append({"info": "[color=%s]%s[/color]" % [UI.hex(UI.MUTED), Loc.t("No items, no statuses.")]})
+	var seat: SeatView = _seats[p.id]
+	_open_popup(_seat_rect(seat), p.name.to_upper(), "", UI.MUTED, rows)
+	_play_sfx("ui_key")
 
 
 ## A Monochrome's two (painter.gd), chosen on the table itself: the boxes of
@@ -1640,6 +1775,17 @@ func _clear_hud() -> void:
 		card.set_card(left[i], true)
 		_onlooker.add_child(card)
 
+	if UI.touch:
+		# A row of the whole cast cannot be read on a phone: a button opens
+		# it on a board of its own.
+		var look := UI.button("CHARACTERS IN THIS MATCH", UI.GOLD, 16)
+		Board.plank(look, UI.GOLD)
+		look.custom_minimum_size = TOUCH_ANSWER * Vector2(3.4, 1.15)
+		look.size = look.custom_minimum_size
+		look.position = Vector2(roundf((1152 - look.size.x) / 2.0), roundf((170 - look.size.y) / 2.0))
+		look.pressed.connect(_open_cast)
+		_onlooker.add_child(look)
+		return
 	var cast := engine.characters
 	var card_size := CardView.BASE * ONLOOKER_SCALE
 	var step := 44.0
@@ -2388,23 +2534,41 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 		_set_shop_open(false)
 		_restyle_shop()
 	UI.clear(_prompt)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
+	# Touch mode: the prompt is a dock at the foot of the screen, over the
+	# shelf of the other characters, where the thumbs are: the words across
+	# the top of it and the answers under them, as many rows as they need.
+	var row: BoxContainer = HBoxContainer.new()
+	var answers: Container = row
+	if UI.touch:
+		row = VBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		var flow := HFlowContainer.new()
+		flow.alignment = FlowContainer.ALIGNMENT_END
+		flow.add_theme_constant_override("h_separation", 10)
+		flow.add_theme_constant_override("v_separation", 8)
+		answers = flow
+	row.add_theme_constant_override("separation", 8 if UI.touch else 12)
 	_prompt.add_child(row)
+	# Docked, it always covers the whole shelf it lies over.
+	_prompt.custom_minimum_size = TOUCH_DOCK.size if _docked() else Vector2.ZERO
 	var text := RichTextLabel.new()
 	text.bbcode_enabled = true
 	text.fit_content = true
 	text.scroll_active = false
 	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	# Wider in touch mode: more lines would climb into the stage.
-	text.custom_minimum_size = Vector2(500, 0) if UI.touch else Vector2(360, 0)
+	text.custom_minimum_size = Vector2(TOUCH_DOCK.size.x - 20.0, 0) if UI.touch else Vector2(360, 0)
+	if UI.touch:
+		for font: String in ["normal_font_size", "bold_font_size"]:
+			text.add_theme_font_size_override(font, UI.px(14))
 	text.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	text.text = bbcode
 	row.add_child(text)
+	if answers != row:
+		row.add_child(answers)
 	for spec: Dictionary in buttons:
 		var b := UI.button(spec.text, spec.get("accent", UI.BORDER), 16)
-		b.custom_minimum_size = UI.grown(Vector2(96, 44)) if UI.touch else Vector2(96, 40)
+		b.custom_minimum_size = TOUCH_ANSWER if UI.touch else Vector2(96, 40)
 		if spec.get("shady", false):
 			_make_shady(b)
 		if spec.has("price"):
@@ -2420,7 +2584,7 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 		elif spec.has("dooms"):
 			b.mouse_entered.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, true))
 			b.mouse_exited.connect(_threaten.bind(spec.dooms.player, spec.dooms.statuses, false))
-		row.add_child(b)
+		answers.add_child(b)
 	_prompt.visible = true
 	if UI.touch:
 		_shield_prompt()
@@ -2428,7 +2592,16 @@ func _show_prompt(bbcode: String, buttons: Array) -> void:
 	await get_tree().process_frame
 	_prompt.reset_size()
 	_prompt.position = Vector2(_prompt_middle() - _prompt.size.x / 2.0, 474 - _prompt.size.y)
+	if _docked():
+		_prompt.position = Vector2(TOUCH_DOCK.position.x, TOUCH_DOCK.end.y - _prompt.size.y)
+		_hero.set_cast_shown(false)
 	UI.pop(_prompt, 1.08, 0.18)
+
+
+## True if the prompt lies in its dock at the foot of the screen (touch
+## mode, with the viewer's counter on it).
+func _docked() -> bool:
+	return UI.touch and viewer != null and _hero.visible
 
 
 ## Where the prompt is centred. In touch mode, between the buttons of the log
@@ -2515,6 +2688,7 @@ func _hide_prompt() -> void:
 		_threaten(_threat_on[0], _threat_on[1], false)
 	_prompt.visible = false
 	UI.clear(_prompt)
+	_hero.set_cast_shown(true)
 
 
 ## A small menu anchored to something on screen. rows: {info} for a text

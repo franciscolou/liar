@@ -741,5 +741,6 @@ func _hover(inside: bool) -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
-	if (_targetable or _peekable) and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	# In touch mode a tap on a box also opens what it holds, written out.
+	if (_targetable or _peekable or (UI.touch and not _gone)) and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		clicked.emit(player)

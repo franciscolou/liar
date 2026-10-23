@@ -13,6 +13,8 @@ signal end_turn_pressed
 ## that is off, an item with nothing to do. The table decides what to make of it.
 signal refused(control: Control)
 signal extra_pressed(option: Dictionary)
+## Touch mode: the button in place of the shelf was pressed (see _cast).
+signal cast_pressed
 
 const StatusFx := preload("res://scripts/ui/status_fx.gd")
 const Desk := preload("res://scripts/ui/hero_desk.gd")
@@ -33,6 +35,10 @@ const HAND_FITS := 2
 ## Room for the strip, from its left edge to the END TURN button.
 const STRIP_WIDTH := 572.0
 const BRASS := Color("b98a2e")
+## Touch mode: how many of the other characters peek out of the button that
+## stands in for the shelf, and how big.
+const CAST_PEEK := 5
+const CAST_SCALE := 0.9
 
 var player: PlayerState
 var engine: GameEngine
@@ -50,6 +56,13 @@ var _strip: Control
 var _strip_cards: Dictionary = {}  # character id -> CardView
 var _strip_shown: Variant  # character ids in the strip, null before it is built
 var _strip_hint: Label
+## Touch mode: a phone cannot show a shelf of a big cast legibly. In its place
+## a button with a few of them fanned out opens all of them on a board of
+## their own (cast_sheet.gd, opened by the table).
+var _cast: Button
+var _cast_fan: Control
+var _cast_title: Label
+var _cast_line: Label
 var _end_turn: Button
 var _extras: VBoxContainer
 var _options: Variant  # turn options while it is this player's move
@@ -100,6 +113,8 @@ func _init() -> void:
 	_strip.position = Vector2(441, Desk.RACK.position.y + Desk.SHELF - CardView.BASE.y * STRIP_SCALE)
 	_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_strip)
+	if UI.touch:
+		_build_cast()
 
 	_end_turn = UI.button("END TURN", UI.GOLD, 16)
 	_end_turn.position = Vector2(1028, 28)
@@ -135,6 +150,68 @@ func _init() -> void:
 	_clock.box = CLOCK_BOX
 	add_child(_clock)
 	_restyle()
+
+
+func _build_cast() -> void:
+	_strip.visible = false
+	_strip_hint.visible = false
+	_cast = Button.new()
+	_cast.position = Desk.RACK.position + Vector2(6, 4)
+	_cast.size = Desk.RACK.size - Vector2(12, 8)
+	_cast.focus_mode = Control.FOCUS_NONE
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		_cast.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	_cast.pressed.connect(func() -> void: cast_pressed.emit())
+	add_child(_cast)
+	_cast_fan = Control.new()
+	_cast_fan.position = Vector2(14, _cast.size.y - CardView.BASE.y * CAST_SCALE - 8.0)
+	_cast_fan.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cast.add_child(_cast_fan)
+	var words := VBoxContainer.new()
+	words.position = Vector2(210, 14)
+	words.size = Vector2(_cast.size.x - 220, _cast.size.y - 28)
+	words.alignment = BoxContainer.ALIGNMENT_CENTER
+	words.add_theme_constant_override("separation", 4)
+	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cast.add_child(words)
+	_cast_title = UI.label("", 18, UI.GOLD, true)
+	_cast_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_child(_cast_title)
+	_cast_line = UI.label("", 13, UI.CREAM)
+	_cast_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_cast_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_child(_cast_line)
+
+
+## Touch mode: the prompt docks over the button (see table._docked): it is
+## hidden under it, not to show through.
+func set_cast_shown(shown: bool) -> void:
+	if _cast != null:
+		_cast.visible = shown
+
+
+## The few cards fanned out on the button, and what it says (whose move it is).
+func _sync_cast(defs: Array, my_turn: bool) -> void:
+	if _cast == null:
+		return
+	if _cast_fan.get_child_count() != mini(defs.size(), CAST_PEEK) or _cast_fan.get_meta(&"ids", []) != _strip_shown:
+		_cast_fan.set_meta(&"ids", _strip_shown)
+		UI.clear(_cast_fan)
+		for i in mini(defs.size(), CAST_PEEK):
+			var card := CardView.new(CAST_SCALE)
+			card.interactive = false
+			card.tips = false
+			card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			card.set_card(defs[i].id, true)
+			card.position = Vector2(i * 30.0, 0)
+			card.pivot_offset = Vector2(card.size.x / 2.0, card.size.y)
+			card.rotation = (i - (mini(defs.size(), CAST_PEEK) - 1) / 2.0) * 0.07
+			_cast_fan.add_child(card)
+	_cast_title.text = Loc.t("BLUFF WITH %d MORE") % defs.size() if my_turn else Loc.t("%d OTHER CHARACTERS") % defs.size()
+	_cast_title.add_theme_color_override("font_color", UI.GOLD if my_turn else UI.CREAM)
+	_cast_line.text = Loc.t("Your hand is the truth. Tap here to see every character and claim any of them.") if my_turn \
+			else Loc.t("Tap to see every character of the match and what it does.")
+	_cast_fan.modulate = Color.WHITE if my_turn else Color(0.72, 0.68, 0.66)
 
 
 func setup(game_engine: GameEngine) -> void:
@@ -224,6 +301,7 @@ func sync() -> void:
 	for character_id: StringName in _strip_cards:
 		var card: CardView = _strip_cards[character_id]
 		card.modulate = Color.WHITE if my_turn else Color(0.72, 0.68, 0.66)
+	_sync_cast(engine.characters.filter(func(def: CharacterDef): return not player.has_character(def.id)), my_turn)
 
 	UI.clear(_extras)
 	if my_turn:
@@ -408,8 +486,10 @@ func key_stops() -> Array:
 				stops.append(view)
 	stops.append_array(_hand_cards)
 	for child: Node in _strip.get_children():
-		if child is CardView:
+		if child is CardView and _strip.visible:
 			stops.append(child)
+	if _cast != null:
+		stops.append(_cast)
 	if not _end_turn.disabled:
 		stops.append(_end_turn)
 	for child: Node in _extras.get_children():

@@ -172,6 +172,7 @@ func _setup(engine: GameEngine, viewer: PlayerState) -> void:
 	_book.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_book.draw.connect(_draw_book)
 	_book.gui_input.connect(_on_book_input)
+	_book.mouse_default_cursor_shape = Control.CURSOR_CAN_DROP
 	if UI.touch:
 		_book.scale = Vector2.ONE * TOUCH_SCALE
 	add_child(_book)
@@ -264,6 +265,7 @@ func shut() -> void:
 		return
 	visible = false
 	_dragging = false
+	_book.mouse_default_cursor_shape = Control.CURSOR_CAN_DROP
 	if TipLayer.current != null:
 		TipLayer.current.hide_all()
 	closed.emit()
@@ -680,6 +682,8 @@ func _draw_book() -> void:
 func _on_book_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_dragging = event.pressed
+		# The open glove closes on the book while it is held.
+		_book.mouse_default_cursor_shape = Control.CURSOR_DRAG if _dragging else Control.CURSOR_CAN_DROP
 	elif event is InputEventMouseMotion and _dragging:
 		_book.position = _on_screen(_book.position + event.relative * _book.scale)
 

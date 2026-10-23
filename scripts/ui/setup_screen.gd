@@ -468,7 +468,7 @@ func _build_touch() -> void:
 
 
 ## A tab of the case: a flap of the lining rimmed in gold thread. The open
-## one is lit and runs down over the ridge into its page.
+## one is lit, and all of them tuck in behind the ridge of their page.
 func _tab_button(text: String, index: int) -> Button:
 	var tab := Button.new()
 	tab.text = text
@@ -496,19 +496,19 @@ func _tab_button(text: String, index: int) -> Button:
 func _draw_tab(back: Control, index: int) -> void:
 	var on := index == _page
 	var w := back.size.x
-	# The open one hangs down over the ridge, into the page.
-	var h := back.size.y + (8.0 if on else 0.0)
+	# Every tab ends at the ridge, which runs in front of it.
+	var h := back.size.y
 	var rim := UI.GOLD if on else Desk.BRASS_DARK
 	var fill := Desk.VELVET_LIGHT if on else Desk.VELVET_DEEP
 	back.draw_rect(Rect2(4, 0, w - 8.0, 2), rim)
 	back.draw_rect(Rect2(2, 2, w - 4.0, 2), rim)
 	back.draw_rect(Rect2(0, 4, w, h - 4.0), rim)
 	back.draw_rect(Rect2(4, 2, w - 8.0, 2), fill)
-	back.draw_rect(Rect2(2, 4, w - 4.0, h - (4.0 if on else 6.0)), fill)
-	# The lamp catches the top of the pile, and the shut ones sit in shade.
+	back.draw_rect(Rect2(2, 4, w - 4.0, h - 4.0), fill)
+	# The lamp catches the top of the pile, and the foot of each tab sits in
+	# the shade of the ridge it goes behind.
 	back.draw_rect(Rect2(4, 4, w - 8.0, 2), Desk.VELVET_SHEEN if on else Desk.VELVET)
-	if not on:
-		back.draw_rect(Rect2(2, h - 8.0, w - 4.0, 6), Color(0, 0, 0, 0.3))
+	back.draw_rect(Rect2(2, h - 8.0, w - 4.0, 8), Color(0, 0, 0, 0.2 if on else 0.3))
 
 
 func _show_page(index: int) -> void:

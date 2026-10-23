@@ -649,7 +649,11 @@ func card(index: int) -> CardView:
 
 
 func _set_cursor() -> void:
-	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _targetable or _peekable else Control.CURSOR_ARROW
+	# A target is aimed at (the gunsight); a hand to look at is just clicked.
+	if _targetable:
+		mouse_default_cursor_shape = Control.CURSOR_CROSS
+	else:
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _peekable else Control.CURSOR_ARROW
 
 
 func _restyle() -> void:

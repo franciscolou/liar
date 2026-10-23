@@ -6,6 +6,7 @@ extends RefCounted
 ## the game starts on.
 
 const TouchMode := preload("res://scripts/ui/touch_mode.gd")
+const Cursors := preload("res://scripts/ui/cursors.gd")
 
 const PATH := "user://settings.cfg"
 const MUSIC_BUS := &"Music"
@@ -37,6 +38,7 @@ static func ensure_loaded() -> void:
 		return
 	_loaded = true
 	TouchMode.decide()
+	Cursors.install()
 	var file := ConfigFile.new()
 	if file.load(PATH) == OK:
 		music = clampf(float(file.get_value("audio", "music", music)), 0.0, 1.0)
